@@ -1,0 +1,131 @@
+name: firestar-service
+# ========== 代码源（sources）==========
+# 写法依据：type:codeup 私有源需 endpoint + branch + certificate.serviceConnection
+# 注意：repo / version / serviceConnection 是「ArtifactUpload 步骤」的字段，不是 sources 的！
+sources:
+  my_repo:
+    type: codeup
+    name: firestar-service
+    endpoint: https://codeup.aliyun.com/6923140d3b25a962b43a7ff4/firestar-service.git
+    branch: main
+    triggerEvents:
+      - push
+    # ⚠️ 触发分支过滤（PaC 模式下这是 YAML 字段，不是「触发设置」UI 开关）
+    #    不写此字段 = 任意分支 push 都触发。支持正则：^main$ | ^main$|^release/.*
+    branchesFilter: ^main$
+    certificate:
+      type: serviceConnection
+      # ⚠️ 复用 be-media-man-system 同账号的 Codeup 代码源连接；若云效校验报"连接无效"再新建
+      serviceConnection: uhru5q7p3w6ougai
+
+stages:
+  build_stage:
+    name: 测试与构建
+    jobs:
+      test_job:
+        name: 代码扫描与单元测试
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        condition: |
+          "${ACTION}" == "deploy"
+        steps:
+          setup_java_step:
+            step: SetupJava
+            name: 安装 JDK17 + Maven
+            with:
+              jdkVersion: '17'
+              mavenVersion: '3.5.2'
+          p3c_step:
+            step: JavaP3CScan
+            name: Java 代码规约扫描
+            with:
+              jdkVersion: '17'
+              mavenVersion: '3.5.2'
+          unit_test_step:
+            step: Command
+            name: Maven 单元测试
+            with:
+              run: |
+                mvn -B test -Dmaven.test.failure.ignore=true
+                mvn surefire-report:report-only
+                mvn site -DgenerateReports=false
+      build_job:
+        name: Java 构建
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        needs:
+          - test_job
+        condition: |
+          "${ACTION}" == "deploy"
+        steps:
+          setup_java_step:
+            step: SetupJava
+            name: 安装 JDK17 + Maven
+            with:
+              jdkVersion: '17'
+              mavenVersion: '3.5.2'
+          build_step:
+            step: Command
+            name: Java 构建并打包
+            with:
+              run: |
+                mvn -B clean package -DskipTests
+                cp -r bin target/bin
+                rm -rf target/classes target/generated-sources target/maven-archiver target/maven-status target/test-classes
+          upload_step:
+            step: ArtifactUpload
+            name: 构建物上传
+            with:
+              uploadType: packages
+              # ⚠️ 必须是「制品仓库(packages)连接」，不是 Codeup 代码源连接！
+              serviceConnection: gup34idmcpxurce6
+              repo: flow_generic_repo
+              artifact: default
+              filePath:
+                - target/
+              version: "${BUILD_NUMBER}"
+
+  deploy_stage:
+    name: 部署
+    jobs:
+      deploy_job:
+        name: 主机组部署
+        component: VMDeploy
+        condition: |
+          "${ACTION}" == "deploy"
+        with:
+          artifact: $[stages.build_stage.build_job.upload_step.artifacts.default]
+          # 机器组：与 be-media-man-system 同台 ECS（复用）；若换服务器需新建机器组并替换 UUID
+          machineGroup: "VviPbuOfBVj3wWdY"
+          artifactDownloadPath: /home/admin/firestar/package.tgz
+          executeUser: root
+          run: |
+            mkdir -p /usr/local/server/java/firestar
+            tar zxvf /home/admin/firestar/package.tgz -C /usr/local/server/java/firestar --strip-components=1
+            bash /usr/local/server/java/firestar/bin/deploy.sh
+
+  ops_stage:
+    name: 运维
+    jobs:
+      ops_job:
+        name: 启停控制
+        component: VMDeploy
+        condition: |
+          "${ACTION}" != "deploy"
+        with:
+          machineGroup: "VviPbuOfBVj3wWdY"
+          downloadArtifact: false
+          executeUser: root
+          run: |
+            set -e
+            ACTION="${ACTION:-restart}"
+            PORT="${DEPLOY_PORT:-2025}"
+            HEALTH_PATH="${HEALTH_PATH:-/actuator/health}"
+            cd /usr/local/server/java/firestar
+            case "$ACTION" in
+              stop)    bash bin/stop.sh ;;
+              start)   bash bin/start.sh "$PORT" "$HEALTH_PATH" ;;
+              restart) bash bin/stop.sh && bash bin/start.sh "$PORT" "$HEALTH_PATH" ;;
+            esac
