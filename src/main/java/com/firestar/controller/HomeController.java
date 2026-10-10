@@ -36,12 +36,17 @@ public class HomeController {
         m.put("timestamp", System.currentTimeMillis());
         Map<String, String> endpoints = new LinkedHashMap<>();
         endpoints.put("ping", "/ping");
-        endpoints.put("health", "/actuator/health");
-        endpoints.put("info", "/actuator/info");
         // 注意：这里列的是**后端实际路径（不含 /api）**。
         // 前端经 vite 代理访问时要拼上 /api 前缀，代理会剥掉它再转发过来。
+        //
+        //【为什么这里只有两个】原先还列了 actuator/health、actuator/info、
+        //   db-check/summary，现已全部移除 —— 前端健康检测统一走 dbCheck 一个入口：
+        //   - /actuator/health 只报连接池/磁盘等粗粒度状态，看不出「连的是不是对的库」，
+        //     前端拿它做检测等于检测了个寂寞
+        //   - /actuator/info 是 Spring Boot 自动端点，本项目没有额外信息，纯噪音
+        //   - summary 是 dbCheck 的子集，字段全在 dbCheck 里，两个入口只会让人
+        //     犯"到底该调哪个"的疑惑
         endpoints.put("dbCheck", "/system/db-check");
-        endpoints.put("dbCheckSummary", "/system/db-check/summary");
         m.put("endpoints", endpoints);
         return m;
     }

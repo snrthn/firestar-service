@@ -38,3 +38,11 @@ target/
 
 ### Maven ###
 .mvn/timing.properties
+
+### 构建过程临时产物 ###
+# 实测踩过的坑：build_result.txt / build_sandbox.log 是本地手工验证时
+# 留下的构建记录，*.log 那条能命中，但 *.txt 两条 ignore 规则都不匹配，
+# 于是被误提交进初始提交（a8f9ea1）。它们是**某一次**构建的快照，
+# 不是任何有意义的产物，换台机器就完全对不上，没有任何版本价值。
+build_result.txt
+build_sandbox.log
