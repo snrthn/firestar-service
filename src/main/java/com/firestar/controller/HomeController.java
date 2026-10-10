@@ -38,6 +38,10 @@ public class HomeController {
         endpoints.put("ping", "/ping");
         endpoints.put("health", "/actuator/health");
         endpoints.put("info", "/actuator/info");
+        // 注意：这里列的是**后端实际路径（不含 /api）**。
+        // 前端经 vite 代理访问时要拼上 /api 前缀，代理会剥掉它再转发过来。
+        endpoints.put("dbCheck", "/system/db-check");
+        endpoints.put("dbCheckSummary", "/system/db-check/summary");
         m.put("endpoints", endpoints);
         return m;
     }

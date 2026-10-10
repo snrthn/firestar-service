@@ -35,18 +35,28 @@ stages:
             name: 安装 JDK17 + Maven
             with:
               jdkVersion: '17'
-              mavenVersion: '3.5.2'
+              # ⚠️ 版本不能随便填：云效 SetupJava 的 mavenVersion 是白名单，只接受
+              #    2.2.1 | 3.2.5 | 3.5.2 | 3.6.1 | 3.6.3 | 3.8.4 | 3.9.3
+              #    （填 3.9.9 会被云效直接校验拒绝，yaml-schema 报错）
+              # 下限原因：Spring Boot 3.3.4 parent 锁定 maven-compiler-plugin 3.13.0，
+              #    它硬性要求 Maven ≥ 3.6.3 —— 3.5.2 会在编译阶段报
+              #    "maven-compiler-plugin 3.13.0 requires Maven version 3.6.3"
+              mavenVersion: '3.9.3'
           p3c_step:
             step: JavaP3CScan
             name: Java 代码规约扫描
             with:
               jdkVersion: '17'
-              mavenVersion: '3.5.2'
+              mavenVersion: '3.9.3'
           unit_test_step:
             step: Command
             name: Maven 单元测试
             with:
               run: |
+                # ⚠️ 当前这些测试需要真实 dev 库（@SpringBootTest 会连库），
+                #    构建机上没有 DB_PASSWORD → 上下文起不来 → 全部 Error。
+                #    流水线没配库，所以「失败不阻塞」；等有测试库后应改为
+                #    -Dmaven.test.failure.ignore=false 让它真正兜底。
                 mvn -B test -Dmaven.test.failure.ignore=true
                 mvn surefire-report:report-only
                 mvn site -DgenerateReports=false
@@ -65,7 +75,8 @@ stages:
             name: 安装 JDK17 + Maven
             with:
               jdkVersion: '17'
-              mavenVersion: '3.5.2'
+              # 同上：白名单 + 必须 ≥3.6.3，理由见 test_job 的注释
+              mavenVersion: '3.9.3'
           build_step:
             step: Command
             name: Java 构建并打包
