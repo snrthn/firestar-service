@@ -16,7 +16,7 @@ sources:
     certificate:
       type: serviceConnection
       # ⚠️ 复用 be-media-man-system 同账号的 Codeup 代码源连接；若云效校验报"连接无效"再新建
-      serviceConnection: uhru5q7p3w6ougai
+      serviceConnection: bii4ow7cqitmb438
 
 stages:
   build_stage:
@@ -80,7 +80,7 @@ stages:
             with:
               uploadType: packages
               # ⚠️ 必须是「制品仓库(packages)连接」，不是 Codeup 代码源连接！
-              serviceConnection: gup34idmcpxurce6
+              serviceConnection: ystkn5uj361puwbk
               repo: flow_generic_repo
               artifact: default
               filePath:
@@ -98,12 +98,12 @@ stages:
         with:
           artifact: $[stages.build_stage.build_job.upload_step.artifacts.default]
           # 机器组：与 be-media-man-system 同台 ECS（复用）；若换服务器需新建机器组并替换 UUID
-          machineGroup: "VviPbuOfBVj3wWdY"
-          artifactDownloadPath: /home/admin/firestar/package.tgz
+          machineGroup: "qTjw4VWk6jWcfPpO"
+          artifactDownloadPath: /home/admin/be-firestar/package.tgz
           executeUser: root
           run: |
             mkdir -p /usr/local/server/java/firestar
-            tar zxvf /home/admin/firestar/package.tgz -C /usr/local/server/java/firestar --strip-components=1
+            tar zxvf /home/admin/be-firestar/package.tgz -C /usr/local/server/java/firestar --strip-components=1
             bash /usr/local/server/java/firestar/bin/deploy.sh
 
   ops_stage:
@@ -115,7 +115,7 @@ stages:
         condition: |
           "${ACTION}" != "deploy"
         with:
-          machineGroup: "VviPbuOfBVj3wWdY"
+          machineGroup: "qTjw4VWk6jWcfPpO"
           downloadArtifact: false
           executeUser: root
           run: |
