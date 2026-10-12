@@ -19,21 +19,45 @@
 
 > 参考项目 be-media-man-system 实际跑的是 Spring Boot 2.7.18；本仓库按技术栈文档升级到 3.3.x。
 
-## 工程结构
+## 工程结构（截至 2026-10-12 实际状态）
+
+> ⚠️ 历史 README 此处只画了 2 个文件（HomeController + SecurityConfig），与代码严重不符；以下为重新盘点后的真实结构。
 
 ```
 src/main/java/com/firestar/
-  FirestarApplication.java     # 主启动类
-  config/SecurityConfig.java   # 占位安全配置（放行所有，待接入 JWT+RBAC）
-  controller/HomeController.java  # 冒烟接口 /ping
+  FirestarApplication.java            # 主启动类
+  config/                             # 5 个配置类
+    SecurityConfig.java               # 占位安全配置（当前 permitAll 全放行，待接入 JWT+RBAC）
+    MybatisPlusConfig.java            # MyBatis-Plus 分页 / 插件
+    FlywayBeforeFlowableConfig.java   # Flyway 先于 Flowable 执行（规避启动竞态）
+    AuditMetaObjectHandler.java       # 审计字段自动填充（create/update 时间、操作人）
+    DatabaseTableHealthIndicator.java # 自定义健康指标（库表级）
+  controller/                         # 2 个控制器
+    HomeController.java               # 冒烟接口 /ping
+    DatabaseCheckController.java      # 运维自检 /system/db-check（返回库名 / 表名 / 行数）
+  service/                            # 业务 Service（当前 1 个，均为非业务运维类）
+    DatabaseCheckService.java
+  mapper/                             # 25 个 MyBatis-Plus Mapper 接口（零手写 SQL）
+  entity/                             # 28 个实体（由 DDL 脚本生成，字段与库严格对齐）
 src/main/resources/
+  db/migration/                       # 3 个 Flyway 迁移
+    V1__baseline.sql                  # 25 张业务表 DDL（含红线 / 金额公式注释）
+    V2__init_dict_data.sql            # 22 类字典种子数据
+    V3__flowable_schema.sql           # Flowable 审批引擎表
   application.properties              # 基础（端口 2025 / 应用名 / actuator）
   application-{dev,test,pre,prod}.properties
-.env/example.env               # 本地凭据模板（真实 .env/<profile>.env 不入库）
-bin/start.sh stop.sh deploy.sh # 跨平台运维脚本（复用参考项目实现）
-docs/云效率流水线配置.yaml       # 阿里云效 Flow CI/CD（PaC）
-docs/git-workflow.md           # 分支同步 SOP
+src/test/java/com/firestar/          # 5 个测试类（冒烟 / 自检 / 实体映射一致性等）
+.env/example.env                     # 本地凭据模板（真实 .env/<profile>.env 不入库）
+bin/start.sh stop.sh deploy.sh       # 跨平台运维脚本（复用参考项目实现）
+docs/云效率流水线配置.yaml            # 阿里云效 Flow CI/CD（PaC）
+docs/git-workflow.md                 # 分支同步 SOP
 ```
+
+## 当前进度（截至 2026-10-12）
+
+- **数据层 / 基础设施：已就绪** —— 25 张表 DDL 全落地、28 实体、25 Mapper、3 个 Flyway 迁移（含字典种子）、5 个配置类、自定义健康指标、1 个真实可用的 DB 自检端点 + 5 个测试类。
+- **业务功能：尚未开始** —— 业务 Controller / Service 为零（仅 `/ping` 冒烟与 `/system/db-check` 运维自检）；接口文档规划的 ~100 个 API / 15 模块均未实现；JWT + RBAC 未接入；Flowable 仅建表、流程定义 / 任务处理未动。
+- **⚠️ 已知安全项**：`SecurityConfig` 当前 `permitAll()` 全放行，任何人可访问 `/system/db-check` 拿到库名 / 表名。属占位阶段，接 JWT+RBAC 后需将 `/system/**` 收进鉴权（类注释已 TODO）。
 
 ## 本地运行
 
@@ -45,7 +69,8 @@ cp .env/example.env .env/dev.env   # 填入 DB_PASSWORD
 bash bin/start.sh 2025 /actuator/health
 
 # 健康: curl http://localhost:2025/actuator/health
-# 冒烟: curl http://localhost:2025/ping
+# 冒烟:        curl http://localhost:2025/ping
+# 运维自检:    curl http://localhost:2025/system/db-check
 ```
 
 也可直接用 Maven：`mvn spring-boot:run`（需先 export DB_PASSWORD）。
