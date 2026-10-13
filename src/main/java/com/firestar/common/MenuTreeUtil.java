@@ -32,6 +32,8 @@ public final class MenuTreeUtil {
             vo.setPermCode(m.getPermCode());
             vo.setMenuType(m.getMenuType());
             vo.setSortNo(m.getSortNo());
+            vo.setVisible(m.getVisible());
+            vo.setStatus(m.getStatus());
             voMap.put(m.getId(), vo);
         }
         List<MenuVO> roots = new ArrayList<>();

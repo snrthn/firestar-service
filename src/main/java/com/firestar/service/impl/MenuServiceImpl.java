@@ -126,6 +126,10 @@ public class MenuServiceImpl implements MenuService {
         if (!"CATALOG".equals(menuType) && !"MENU".equals(menuType)) {
             throw new BizException("菜单类型仅支持 CATALOG / MENU");
         }
+        String status = req.getStatus() == null || req.getStatus().isBlank() ? "ENABLED" : req.getStatus();
+        if (!"ENABLED".equals(status) && !"DISABLED".equals(status)) {
+            throw new BizException("菜单状态仅支持 ENABLED / DISABLED");
+        }
         if ("MENU".equals(menuType) && (req.getRoutePath() == null || req.getRoutePath().isBlank())) {
             throw new BizException("菜单类型为「菜单」时，路由地址必填");
         }
@@ -143,7 +147,7 @@ public class MenuServiceImpl implements MenuService {
         menu.setMenuType(menuType);
         menu.setSortNo(req.getSortNo() == null ? 0 : req.getSortNo());
         menu.setVisible(req.getVisible() == null ? 1 : req.getVisible());
-        menu.setStatus(req.getStatus() == null || req.getStatus().isBlank() ? "ENABLED" : req.getStatus());
+        menu.setStatus(status);
     }
 
     /**

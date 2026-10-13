@@ -17,5 +17,9 @@ public class MenuVO {
     private String permCode;
     private String menuType;
     private Integer sortNo;
+    /** 是否可见：0 隐藏 1 可见（管理页展示用；侧栏渲染忽略） */
+    private Integer visible;
+    /** 状态：ENABLED / DISABLED（管理页展示用；侧栏渲染忽略） */
+    private String status;
     private List<MenuVO> children;
 }
