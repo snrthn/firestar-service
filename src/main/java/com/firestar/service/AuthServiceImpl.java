@@ -34,7 +34,10 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -66,8 +69,8 @@ public class AuthServiceImpl implements AuthService {
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
         this.rolePermissionMapper = rolePermissionMapper;
-        this.permissionMapper = permissionMapper;
         this.roleMenuMapper = roleMenuMapper;
+        this.permissionMapper = permissionMapper;
         this.menuMapper = menuMapper;
         this.blacklistService = blacklistService;
         this.jwtUtil = jwtUtil;
@@ -170,7 +173,39 @@ public class AuthServiceImpl implements AuthService {
                 .eq(Menu::getVisible, 1)
                 .eq(Menu::getStatus, "ENABLED")
                 .orderByAsc(Menu::getSortNo));
-        return MenuTreeUtil.build(menus);
+        // 父链断裂剪枝：祖先被停用/隐藏的子菜单整棵剔除。
+        // 不剪的话 MenuTreeUtil 会把孤儿（父不在集合内）提到根级——
+        // 停用目录后它的子项以顶级菜单裸奔（虎哥 2026-10-13 实测）。
+        // 注意只剪侧栏这份数据；菜单管理页走 MenuService 全量不过滤，
+        // 那里需要看到停用项与父子关系，行为不同。
+        Set<Long> aliveIds = new HashSet<>();
+        Map<Long, Long> parentOf = new HashMap<>();
+        for (Menu m : menus) {
+            aliveIds.add(m.getId());
+            if (m.getParentId() != null) {
+                parentOf.put(m.getId(), m.getParentId());
+            }
+        }
+        List<Menu> pruned = menus.stream()
+                .filter(m -> ancestorChainAlive(m, aliveIds, parentOf))
+                .collect(Collectors.toList());
+        return MenuTreeUtil.build(pruned);
+    }
+
+    /**
+     * 沿 parentId 链上溯，每个祖先都必须仍在存活集合（visible=1 且 status=ENABLED）内。
+     * seen 防 parentId 成环时死循环（脏数据兜底，正常数据由 MenuServiceImpl.validateNoCycle 保证）。
+     */
+    private boolean ancestorChainAlive(Menu node, Set<Long> aliveIds, Map<Long, Long> parentOf) {
+        Long cur = node.getParentId();
+        Set<Long> seen = new HashSet<>();
+        while (cur != null && cur != 0) {
+            if (!seen.add(cur) || !aliveIds.contains(cur)) {
+                return false;
+            }
+            cur = parentOf.get(cur);
+        }
+        return true;
     }
 
     // ===== 私有辅助 =====
@@ -187,7 +222,7 @@ public class AuthServiceImpl implements AuthService {
     private List<Long> loadRoleIds(Long userId) {
         List<UserRole> userRoles = userRoleMapper.selectList(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, userId));
-        return userRoles.stream().map(UserRole::getRoleId).toList();
+        return userRoles.stream().map(UserRole::getRoleId).collect(Collectors.toList());
     }
 
     private List<RoleVO> loadRoles(Long userId) {
@@ -201,7 +236,7 @@ public class AuthServiceImpl implements AuthService {
             vo.setRoleCode(r.getRoleCode());
             vo.setRoleName(r.getRoleName());
             return vo;
-        }).toList();
+        }).collect(Collectors.toList());
     }
 
     private List<String> loadPermissions(List<String> roleCodes) {
@@ -218,6 +253,6 @@ public class AuthServiceImpl implements AuthService {
         Set<Long> permIds = rps.stream().map(RolePermission::getPermissionId).collect(Collectors.toSet());
         List<Permission> perms = permissionMapper.selectList(new LambdaQueryWrapper<Permission>()
                 .in(Permission::getId, permIds));
-        return perms.stream().map(Permission::getPermCode).toList();
+        return perms.stream().map(Permission::getPermCode).collect(Collectors.toList());
     }
 }
