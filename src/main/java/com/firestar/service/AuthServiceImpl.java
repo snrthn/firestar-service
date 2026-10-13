@@ -3,6 +3,7 @@ package com.firestar.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.common.JwtUtil;
+import com.firestar.common.MenuTreeUtil;
 import com.firestar.config.JwtProperties;
 import com.firestar.dto.ChangePasswordRequest;
 import com.firestar.dto.LoginRequest;
@@ -32,12 +33,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.Date;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -173,7 +170,7 @@ public class AuthServiceImpl implements AuthService {
                 .eq(Menu::getVisible, 1)
                 .eq(Menu::getStatus, "ENABLED")
                 .orderByAsc(Menu::getSortNo));
-        return buildMenuTree(menus);
+        return MenuTreeUtil.build(menus);
     }
 
     // ===== 私有辅助 =====
@@ -219,41 +216,8 @@ public class AuthServiceImpl implements AuthService {
         List<RolePermission> rps = rolePermissionMapper.selectList(
                 new LambdaQueryWrapper<RolePermission>().in(RolePermission::getRoleId, roleIds));
         Set<Long> permIds = rps.stream().map(RolePermission::getPermissionId).collect(Collectors.toSet());
-        if (permIds.isEmpty()) {
-            return List.of();
-        }
-        List<Permission> perms = permissionMapper.selectList(
-                new LambdaQueryWrapper<Permission>().in(Permission::getId, permIds));
+        List<Permission> perms = permissionMapper.selectList(new LambdaQueryWrapper<Permission>()
+                .in(Permission::getId, permIds));
         return perms.stream().map(Permission::getPermCode).toList();
-    }
-
-    private List<MenuVO> buildMenuTree(List<Menu> menus) {
-        Map<Long, MenuVO> voMap = new LinkedHashMap<>();
-        for (Menu m : menus) {
-            MenuVO vo = new MenuVO();
-            vo.setId(m.getId());
-            vo.setParentId(m.getParentId());
-            vo.setMenuName(m.getMenuName());
-            vo.setRoutePath(m.getRoutePath());
-            vo.setComponent(m.getComponent());
-            vo.setPermCode(m.getPermCode());
-            vo.setMenuType(m.getMenuType());
-            vo.setSortNo(m.getSortNo());
-            voMap.put(m.getId(), vo);
-        }
-        List<MenuVO> roots = new ArrayList<>();
-        for (MenuVO vo : voMap.values()) {
-            if (vo.getParentId() != null && vo.getParentId() != 0 && voMap.containsKey(vo.getParentId())) {
-                MenuVO parent = voMap.get(vo.getParentId());
-                if (parent.getChildren() == null) {
-                    parent.setChildren(new ArrayList<>());
-                }
-                parent.getChildren().add(vo);
-            } else {
-                roots.add(vo);
-            }
-        }
-        roots.sort(Comparator.comparingInt(v -> v.getSortNo() == null ? 0 : v.getSortNo()));
-        return roots;
     }
 }
