@@ -45,7 +45,8 @@ public class PermissionInterceptor implements HandlerInterceptor {
     private static final Set<String> PREFIX_WHITELIST = Set.of(
             "/swagger-ui/",
             "/v3/api-docs/",
-            "/design-audit/"
+            "/design-audit/",
+            "/actuator/health/"
     );
 
     @Override

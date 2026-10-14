@@ -45,6 +45,7 @@ public class SecurityConfig {
                                 "/ping",
                                 "/system/db-check",
                                 "/actuator/health",
+                                "/actuator/health/**",
                                 "/doc.html",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
