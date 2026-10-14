@@ -35,4 +35,7 @@ public class UserRequest {
 
     /** 手机号（可空） */
     private String phone;
+
+    /** 邮箱（可空；格式由前端校验，后端不强制——与 phone 口径一致） */
+    private String email;
 }

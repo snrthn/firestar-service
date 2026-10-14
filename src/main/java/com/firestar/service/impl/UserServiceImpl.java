@@ -166,6 +166,7 @@ public class UserServiceImpl implements UserService {
             vo.setPostId(u.getPostId());
             vo.setPostName(postNames.get(u.getPostId()));
             vo.setPhone(u.getPhone());
+            vo.setEmail(u.getEmail());
             vos.add(vo);
         }
         voPage.setRecords(vos);
@@ -214,6 +215,7 @@ public class UserServiceImpl implements UserService {
         user.setDeptId(deptId);
         user.setPostId(req.getPostId());
         user.setPhone(req.getPhone());
+        user.setEmail(req.getEmail());
         user.setStatus(status);
         userMapper.insert(user);
         replaceUserRoles(user.getId(), roleIds);
@@ -250,6 +252,7 @@ public class UserServiceImpl implements UserService {
         user.setDeptId(deptId);
         user.setPostId(req.getPostId());
         user.setPhone(req.getPhone());
+        user.setEmail(req.getEmail());
         user.setStatus(status);
         userMapper.updateById(user);
         replaceUserRoles(id, roleIds);

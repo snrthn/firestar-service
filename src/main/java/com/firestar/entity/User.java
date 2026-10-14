@@ -46,6 +46,9 @@ public class User extends AuditedEntity {
     /** 手机号 */
     private String phone;
 
+    /** 邮箱（V14 新增，可空，不唯一） */
+    private String email;
+
     /** 岗位 ID → sys_post.id（单岗，非必填） */
     private Long postId;
 }
