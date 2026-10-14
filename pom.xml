@@ -152,6 +152,21 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <!-- 显式声明 Lombok 注解处理器路径：保证 mvn compile 时 @Getter/@Setter/@Slf4j 等
+                 注解处理器一定生效（部分 maven-compiler-plugin 版本在 Lombok 为 optional 依赖时，
+                 不会自动把其纳入注解处理路径，导致全项目 lombok 生成方法缺失而编译失败）。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

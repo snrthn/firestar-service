@@ -9,10 +9,13 @@ import com.firestar.dto.ChangePasswordRequest;
 import com.firestar.dto.LoginRequest;
 import com.firestar.dto.LoginResponse;
 import com.firestar.dto.MenuVO;
+import com.firestar.dto.ProfileUpdateRequest;
 import com.firestar.dto.ProfileVO;
 import com.firestar.dto.RoleVO;
 import com.firestar.entity.Menu;
+import com.firestar.entity.Org;
 import com.firestar.entity.Permission;
+import com.firestar.entity.Post;
 import com.firestar.entity.Role;
 import com.firestar.entity.RoleMenu;
 import com.firestar.entity.RolePermission;
@@ -20,7 +23,9 @@ import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.MenuMapper;
+import com.firestar.mapper.OrgMapper;
 import com.firestar.mapper.PermissionMapper;
+import com.firestar.mapper.PostMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.RoleMenuMapper;
 import com.firestar.mapper.RolePermissionMapper;
@@ -55,6 +60,8 @@ public class AuthServiceImpl implements AuthService {
     private final PermissionMapper permissionMapper;
     private final RoleMenuMapper roleMenuMapper;
     private final MenuMapper menuMapper;
+    private final OrgMapper orgMapper;
+    private final PostMapper postMapper;
     private final TokenBlacklistService blacklistService;
     private final JwtUtil jwtUtil;
     private final JwtProperties jwtProperties;
@@ -63,15 +70,18 @@ public class AuthServiceImpl implements AuthService {
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
                            RoleMapper roleMapper, RolePermissionMapper rolePermissionMapper,
                            PermissionMapper permissionMapper, RoleMenuMapper roleMenuMapper,
-                           MenuMapper menuMapper, TokenBlacklistService blacklistService,
+                           MenuMapper menuMapper, OrgMapper orgMapper, PostMapper postMapper,
+                           TokenBlacklistService blacklistService,
                            JwtUtil jwtUtil, JwtProperties jwtProperties) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
         this.rolePermissionMapper = rolePermissionMapper;
-        this.roleMenuMapper = roleMenuMapper;
         this.permissionMapper = permissionMapper;
+        this.roleMenuMapper = roleMenuMapper;
         this.menuMapper = menuMapper;
+        this.orgMapper = orgMapper;
+        this.postMapper = postMapper;
         this.blacklistService = blacklistService;
         this.jwtUtil = jwtUtil;
         this.jwtProperties = jwtProperties;
@@ -135,6 +145,24 @@ public class AuthServiceImpl implements AuthService {
         vo.setForceChangePassword(user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
         vo.setRoles(roles);
         vo.setPermissions(permissions);
+        // 个人中心卡片展示用的本人可见字段（V 新增）
+        vo.setPhone(user.getPhone());
+        vo.setEmail(user.getEmail());
+        if (user.getDeptId() != null) {
+            Org org = orgMapper.selectById(user.getDeptId());
+            if (org != null) vo.setDeptName(org.getOrgName());
+        }
+        if (user.getPostId() != null) {
+            Post post = postMapper.selectById(user.getPostId());
+            if (post != null) vo.setPostName(post.getPostName());
+        }
+        if (user.getParentId() != null) {
+            User leader = userMapper.selectById(user.getParentId());
+            if (leader != null) vo.setParentName(leader.getNickname());
+        }
+        vo.setLastLoginAt(user.getLastLoginAt());
+        vo.setLastLoginIp(user.getLastLoginIp());
+        vo.setCreatedAt(user.getCreatedAt());
         return vo;
     }
 
@@ -153,6 +181,27 @@ public class AuthServiceImpl implements AuthService {
         user.setPassword(passwordEncoder.encode(req.getNewPassword()));
         user.setForceChangePassword(0);
         userMapper.updateById(user);
+    }
+
+    @Override
+    public void updateProfile(ProfileUpdateRequest req) {
+        User user = currentUser();
+        if (req.getNickname() == null || req.getNickname().trim().isEmpty()) {
+            throw new BizException("昵称不能为空");
+        }
+        if (req.getPhone() != null && !req.getPhone().isEmpty()
+                && !req.getPhone().matches("^1[3-9]\\d{9}$")) {
+            throw new BizException("手机号格式不正确");
+        }
+        if (req.getEmail() != null && !req.getEmail().isEmpty()
+                && !req.getEmail().matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$")) {
+            throw new BizException("邮箱格式不正确");
+        }
+        userMapper.update(null, new LambdaUpdateWrapper<User>()
+                .eq(User::getId, user.getId())
+                .set(User::getNickname, req.getNickname().trim())
+                .set(User::getPhone, req.getPhone() == null ? null : req.getPhone())
+                .set(User::getEmail, req.getEmail() == null ? null : req.getEmail()));
     }
 
     @Override

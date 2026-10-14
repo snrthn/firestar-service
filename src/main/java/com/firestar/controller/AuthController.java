@@ -6,6 +6,7 @@ import com.firestar.dto.ChangePasswordRequest;
 import com.firestar.dto.LoginRequest;
 import com.firestar.dto.LoginResponse;
 import com.firestar.dto.MenuVO;
+import com.firestar.dto.ProfileUpdateRequest;
 import com.firestar.dto.ProfileVO;
 import com.firestar.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -53,6 +54,12 @@ public class AuthController {
     @PutMapping("/password")
     public Result<Void> changePassword(@RequestBody ChangePasswordRequest req) {
         authService.changePassword(req);
+        return Result.success();
+    }
+
+    @PutMapping("/profile")
+    public Result<Void> updateProfile(@RequestBody ProfileUpdateRequest req) {
+        authService.updateProfile(req);
         return Result.success();
     }
 

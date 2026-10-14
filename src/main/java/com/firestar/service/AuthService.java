@@ -4,6 +4,7 @@ import com.firestar.dto.ChangePasswordRequest;
 import com.firestar.dto.LoginRequest;
 import com.firestar.dto.LoginResponse;
 import com.firestar.dto.MenuVO;
+import com.firestar.dto.ProfileUpdateRequest;
 import com.firestar.dto.ProfileVO;
 
 import java.util.List;
@@ -20,6 +21,9 @@ public interface AuthService {
     ProfileVO profile();
 
     void changePassword(ChangePasswordRequest req);
+
+    /** 更新当前登录用户本人可自助维护的资料（昵称 / 手机号 / 邮箱） */
+    void updateProfile(ProfileUpdateRequest req);
 
     List<MenuVO> menus();
 }
