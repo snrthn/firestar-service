@@ -17,10 +17,11 @@ public interface DictService {
     // ===== 字典类型 =====
 
     /**
-     * 分页查字典类型列表（不过滤 status，管理页要能看到停用项），按 id 升序。
+     * 分页查字典类型列表。typeName/typeCode 模糊、status 精确，三者均可选（为空则不参与过滤，
+     * 默认仍能看到停用项，符合管理页要能查到停用项的需求）；按 id 升序。
      * pageNum/pageSize 为空或非法时按默认值 1 / 10 兜底；size 上限 500。
      */
-    IPage<DictTypeVO> listTypes(Integer pageNum, Integer pageSize);
+    IPage<DictTypeVO> listTypes(Integer pageNum, Integer pageSize, String typeName, String typeCode, String status);
 
     /**
      * 全量类型列表（不分页）。供隐藏二级页 dict-data.vue 反查类型名称用——

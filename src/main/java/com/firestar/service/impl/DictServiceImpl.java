@@ -51,11 +51,23 @@ public class DictServiceImpl implements DictService {
     // ===== 字典类型 =====
 
     @Override
-    public IPage<DictTypeVO> listTypes(Integer pageNum, Integer pageSize) {
+    public IPage<DictTypeVO> listTypes(Integer pageNum, Integer pageSize, String typeName, String typeCode, String status) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(pageSize, MAX_PAGE_SIZE);
-        Page<DictType> page = dictTypeMapper.selectPage(new Page<>(current, size),
-                new LambdaQueryWrapper<DictType>().orderByAsc(DictType::getId));
+        // 可选查询条件：typeName/typeCode 模糊，status 精确；为空则不拼接（默认不过滤，管理页仍能看到停用项）。
+        // 注意先判 blank 再 trim 传参——MP wrapper 渴求求值，把 trim() 直接塞进 like/eq 的第三个参数，
+        // 当 cond=false 仍会执行，blank 字符串 trim 无碍，但若字段为 null 会 NPE，故这里显式判空。
+        LambdaQueryWrapper<DictType> qw = new LambdaQueryWrapper<DictType>().orderByAsc(DictType::getId);
+        if (typeName != null && !typeName.isBlank()) {
+            qw.like(DictType::getTypeName, typeName.trim());
+        }
+        if (typeCode != null && !typeCode.isBlank()) {
+            qw.like(DictType::getTypeCode, typeCode.trim());
+        }
+        if (status != null && !status.isBlank()) {
+            qw.eq(DictType::getStatus, status.trim());
+        }
+        Page<DictType> page = dictTypeMapper.selectPage(new Page<>(current, size), qw);
         Page<DictTypeVO> voPage = new Page<>(current, size);
         voPage.setTotal(page.getTotal());
         List<DictTypeVO> vos = new ArrayList<>(page.getRecords().size());

@@ -51,8 +51,11 @@ public class DictController {
     @GetMapping("/type/list")
     public Result<IPage<DictTypeVO>> listTypes(
             @RequestParam(defaultValue = "1") Integer pageNum,
-            @RequestParam(defaultValue = "10") Integer pageSize) {
-        return Result.success(dictService.listTypes(pageNum, pageSize));
+            @RequestParam(defaultValue = "10") Integer pageSize,
+            @RequestParam(required = false) String typeName,
+            @RequestParam(required = false) String typeCode,
+            @RequestParam(required = false) String status) {
+        return Result.success(dictService.listTypes(pageNum, pageSize, typeName, typeCode, status));
     }
 
     /**
