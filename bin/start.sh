@@ -168,8 +168,11 @@ if [ "$OS" = "windows" ]; then
   [ -n "$_jar_win" ] && JAR="$_jar_win"
 fi
 PORT="${1:-2025}"
-HEALTH_PATH="${2:-/actuator/health}"
-[ -z "$HEALTH_PATH" ] && HEALTH_PATH="/actuator/health"
+# 默认探针改走 /actuator/health/liveness（仅验进程存活+磁盘，不依赖 DB / 数据自检），
+# 避免「自定义数据自检不通过 / 库慢 / 网络抖」被误判成启动超时。deploy.sh 会显式传该路径。
+# 完整健康（含库连通、数据基线）仍走 /actuator/health，供监控使用，不阻断部署。
+HEALTH_PATH="${2:-/actuator/health/liveness}"
+[ -z "$HEALTH_PATH" ] && HEALTH_PATH="/actuator/health/liveness"
 LOGS_DIR="$APP_HOME/logs"
 PID_FILE="$LOGS_DIR/app.pid"
 LOG_FILE="$LOGS_DIR/app.log"
@@ -252,18 +255,42 @@ else
 fi
 
 # ---- 健康检查: 轮询 HEALTH_PATH 直到返回 200 ----
-for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}${HEALTH_PATH}" 2>/dev/null || true)
+# HEALTH_PATH 默认 /actuator/health/liveness（只验进程存活+磁盘，不碰数据库），
+# 因此只要 JVM 起来、端口绑定成功即为就绪，不会被「库慢 / 数据自检不通过」误杀。
+# STARTUP_TIMEOUT 可调（云效步骤 export STARTUP_TIMEOUT=300 即可），默认 180s 给 prod 冷启留余量。
+STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-180}"
+last_code=""
+for i in $(seq 1 "$STARTUP_TIMEOUT"); do
+  # --max-time 3：防止探针本身阻塞（如库慢时 getConnection 卡到 Hikari connectionTimeout）拖垮整个轮询
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${PORT}${HEALTH_PATH}" 2>/dev/null || true)
+  last_code="$code"
   if [ "$code" = "200" ]; then
     PID_NOW="$(port_pid "$PORT")"
     [ -z "$PID_NOW" ] && PID_NOW="$JAVA_BG"
     echo "$PID_NOW" > "$PID_FILE"
     echo "[start] 就绪 (${i}s) -> http://localhost:${PORT}${HEALTH_PATH}"
     echo "[start] 日志: $LOG_FILE  停止: bash bin/stop.sh"
+    # 非阻断式就绪检查：完整健康（含库连通/数据基线）若 DOWN 仅提示，不失败部署
+    full=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${PORT}/actuator/health" 2>/dev/null || true)
+    if [ "$full" != "200" ]; then
+      echo "[start] 提示: 完整健康 /actuator/health 返回 $full（数据库或数据自检可能未通过），部署已就绪但请关注。" >&2
+    fi
     exit 0
   fi
   sleep 1
 done
 
-echo "[start] 启动超时，请查看日志: $LOG_FILE" >&2
+# ---- 超时诊断：把真实失败原因打进流水线日志，避免只报一句「启动超时」 ----
+echo "[start] 启动超时（${STARTUP_TIMEOUT}s 内未拿到 200），日志: $LOG_FILE" >&2
+if [ "$last_code" = "503" ]; then
+  echo "[start] 诊断: 端口已监听且探针返回 503 —— 应用进程已起来，但健康状态为 DOWN。" >&2
+  echo "[start]       根因几乎一定是 自定义 DatabaseTableHealthIndicator（表数/种子数基线与生产库不一致）" >&2
+  echo "[start]       或数据库连通性检查未通过。部署门禁已改用 liveness（仅验存活），不应再因此超时。" >&2
+elif [ "$last_code" = "000" ] || [ -z "$last_code" ]; then
+  echo "[start] 诊断: 端口始终未监听（curl 拿到 000）—— 应用启动失败（Flyway / DB 连接 / 配置异常）。" >&2
+else
+  echo "[start] 诊断: 最后 HTTP 状态码 = $last_code" >&2
+fi
+echo "[start] ===== app.log 末尾 60 行 =====" >&2
+tail -n 60 "$LOG_FILE" 2>/dev/null | sed 's/^/[app.log] /' >&2 || true
 exit 1

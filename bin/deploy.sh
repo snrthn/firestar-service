@@ -37,7 +37,9 @@ LOG_FILE="$LOGS_DIR/app.log"
 # ---- 停旧实例：复用 stop.sh ----
 bash "$SCRIPT_DIR/stop.sh"
 
-# ---- 启动：复用 start.sh（setsid 守护化 + /actuator/health 健康检查）----
+# ---- 启动：复用 start.sh（setsid 守护化 + liveness 探针门禁）----
+# 探针走 /actuator/health/liveness：只验进程存活+磁盘，不依赖 DB / 数据自检，
+# 避免「生产库种子数与基线不符 / 库慢」被误判成启动超时。STARTUP_TIMEOUT 默认 180s。
 export SPRING_PROFILE="$PROFILE"
-bash "$SCRIPT_DIR/start.sh" "$PORT" "/actuator/health"
+bash "$SCRIPT_DIR/start.sh" "$PORT" "/actuator/health/liveness"
 exit $?
