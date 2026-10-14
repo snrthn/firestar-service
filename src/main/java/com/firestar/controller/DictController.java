@@ -1,6 +1,7 @@
 package com.firestar.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.dto.DictDataRequest;
 import com.firestar.dto.DictDataVO;
@@ -31,6 +32,7 @@ import java.util.List;
  * 该页在菜单表中 visible=0，侧栏不渲染但路由可访问。
  */
 @RestController
+@RequirePerm("dict:manage")
 @RequestMapping("/system/dict")
 public class DictController {
 

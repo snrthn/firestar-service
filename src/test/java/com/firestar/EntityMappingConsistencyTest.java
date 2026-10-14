@@ -89,12 +89,12 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("1. 25 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
+    @DisplayName("1. 27 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
     void everyColumnHasEntityProperty() throws Exception {
         Map<String, Set<String>> schema = readSchemaColumns();
 
-        assertEquals(25, schema.size(),
-                "业务表数量应为 25，实际 " + schema.size() + " -> " + schema.keySet());
+        assertEquals(27, schema.size(),
+                "业务表数量应为 27，实际 " + schema.size() + " -> " + schema.keySet());
 
         List<String> problems = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {

@@ -21,5 +21,7 @@ public class MenuVO {
     private Integer visible;
     /** 状态：ENABLED / DISABLED（管理页展示用；侧栏渲染忽略） */
     private String status;
+    /** 菜单图标：Element Plus 图标组件名（PascalCase），空则前端兜底默认图标 */
+    private String icon;
     private List<MenuVO> children;
 }

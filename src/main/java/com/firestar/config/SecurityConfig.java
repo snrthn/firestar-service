@@ -29,8 +29,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     @Bean
-    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtUtil jwtUtil, TokenBlacklistService blacklistService) {
-        return new JwtAuthenticationFilter(jwtUtil, blacklistService);
+    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtUtil jwtUtil, TokenBlacklistService blacklistService,
+                                                          com.firestar.service.PermissionResolver permissionResolver) {
+        return new JwtAuthenticationFilter(jwtUtil, blacklistService, permissionResolver);
     }
 
     @Bean

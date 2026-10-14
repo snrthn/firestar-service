@@ -35,4 +35,7 @@ public class MenuRequest {
 
     /** 状态：ENABLED / DISABLED */
     private String status;
+
+    /** 菜单图标：Element Plus 图标组件名（PascalCase）；可空，空则用默认图标兜底 */
+    private String icon;
 }

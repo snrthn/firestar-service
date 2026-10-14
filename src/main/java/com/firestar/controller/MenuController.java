@@ -1,5 +1,6 @@
 package com.firestar.controller;
 
+import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.dto.MenuRequest;
 import com.firestar.dto.MenuVO;
@@ -26,6 +27,7 @@ import java.util.List;
  * 供侧栏渲染；本接口返回全量菜单树（含隐藏 / 停用）供菜单管理页维护。
  */
 @RestController
+@RequirePerm("rbac:menu")
 @RequestMapping("/system/menu")
 public class MenuController {
 

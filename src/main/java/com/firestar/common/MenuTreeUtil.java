@@ -34,6 +34,7 @@ public final class MenuTreeUtil {
             vo.setSortNo(m.getSortNo());
             vo.setVisible(m.getVisible());
             vo.setStatus(m.getStatus());
+            vo.setIcon(m.getIcon());
             voMap.put(m.getId(), vo);
         }
         List<MenuVO> roots = new ArrayList<>();

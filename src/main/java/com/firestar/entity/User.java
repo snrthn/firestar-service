@@ -42,4 +42,10 @@ public class User extends AuditedEntity {
 
     /** 最后登录 IP */
     private String lastLoginIp;
+
+    /** 手机号 */
+    private String phone;
+
+    /** 岗位 ID → sys_post.id（单岗，非必填） */
+    private Long postId;
 }

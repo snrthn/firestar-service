@@ -44,15 +44,15 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("1. dev 库自检通过：25 张业务表、Flyway 3 个版本、种子数据齐全")
+    @DisplayName("1. dev 库自检通过：27 张业务表、Flyway 3 个版本、种子数据齐全")
     void devDatabaseIsHealthy() {
         Map<String, Object> r = check();
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
                 "dev 库应健康，实际错误：" + r.get("errors"));
 
         Map<String, Object> tables = (Map<String, Object>) r.get("tables");
-        assertEquals(25, tables.get("businessTableCount"), "业务表应为 25 张");
-        assertEquals(25, tables.get("expected"));
+        assertEquals(27, tables.get("businessTableCount"), "业务表应为 27 张");
+        assertEquals(27, tables.get("expected"));
         assertEquals(Boolean.TRUE, tables.get("matched"));
         assertEquals(0, tables.get("otherTableCount"), "不应存在非业务非引擎的表");
 

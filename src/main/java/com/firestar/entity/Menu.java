@@ -42,4 +42,7 @@ public class Menu extends AuditedEntity {
 
     /** 状态（字典 common_status） */
     private String status;
+
+    /** 菜单图标：Element Plus 图标组件名（PascalCase，如 User/Setting）；空则用默认图标兜底 */
+    private String icon;
 }

@@ -148,6 +148,9 @@ public class MenuServiceImpl implements MenuService {
         menu.setSortNo(req.getSortNo() == null ? 0 : req.getSortNo());
         menu.setVisible(req.getVisible() == null ? 1 : req.getVisible());
         menu.setStatus(status);
+        // 图标：直接透传（可空）。空字符串统一归一为 null，避免库里残留 '' 导致侧栏不兜底。
+        String icon = req.getIcon();
+        menu.setIcon(icon == null || icon.isBlank() ? null : icon.trim());
     }
 
     /**
