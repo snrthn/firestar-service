@@ -275,21 +275,24 @@ public class AuthServiceImpl implements AuthService {
         if (menuIds.isEmpty()) {
             return List.of();
         }
+        // 授权查询只筛 ENABLED，不筛 visible——本方法响应语义是「该角色可访问的
+        // 路由集」（访问控制 = 授权 ∧ 启用）。visible 只是展示属性：隐藏菜单 URL
+        // 仍可达，侧栏的 visible 过滤在前端做（stores/user.ts visibleMenus）。
+        // （2026-10-15 虎哥语义定稿：隐藏 = 侧栏不展示但可路由跳入；禁用 ≈ 权限移除。）
         List<Menu> menus = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
                 .in(Menu::getId, menuIds)
-                .eq(Menu::getVisible, 1)
                 .eq(Menu::getStatus, "ENABLED")
                 .orderByAsc(Menu::getSortNo));
-        // 父链处理（两遍，口径 = 全表可见且启用，与授权无关）：
+        // 父链处理（两遍，口径 = 全表启用，与授权/可见性均无关）：
         // 目录是容器、授权粒度在叶子。授权结果集可能缺父组 id——el-tree 父子联动下
         // 取消个别子项会让父组呈半选，旧版前端不提交半选父 id，授权集合里就没有父组
         // （虎哥 2026-10-15 实测：只移除菜单组中的一项，整个组都不返回了）。
-        //   第一遍：祖先链断裂（停用/隐藏）的授权项整棵剔除——否则 MenuTreeUtil
-        //           会把孤儿提到根级、停用目录的子项顶级裸奔（虎哥 2026-10-13 实测）；
-        //   第二遍：可见且启用但未授权的祖先前补为容器，组照常返回、只少被移除的那一项。
-        // 注意只处理侧栏这份数据；菜单管理页走 MenuService 全量不过滤，行为不同。
+        //   第一遍：祖先链被停用断裂的授权项整棵剔除——否则 MenuTreeUtil 会把孤儿
+        //           提到根级、停用目录的子项顶级裸奔（虎哥 2026-10-13 实测）；
+        //   第二遍：启用但未授权的祖先前补为容器，组照常返回、只少被移除的那一项。
+        // 注意本方法返回「可访问路由集」而非「侧栏菜单集」；侧栏展示过滤在前端。
+        // 菜单管理页走 MenuService 全量不过滤，与此无关。
         List<Menu> aliveMenus = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
-                .eq(Menu::getVisible, 1)
                 .eq(Menu::getStatus, "ENABLED"));
         Map<Long, Menu> aliveById = new HashMap<>();
         for (Menu m : aliveMenus) {
@@ -316,9 +319,10 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 沿 parentId 链上溯，每个祖先都必须仍存活（visible=1 且 status=ENABLED，取自全表）。
-     * 存活口径与授权无关：父组未被授权（如半选未提交）不算断链，调用方会把它补成容器；
-     * 父组被停用/隐藏才算断链，对应子项整棵剔除（防顶级裸奔）。
+     * 沿 parentId 链上溯，每个祖先都必须仍启用（status=ENABLED，取自全表）。
+     * 口径与授权/可见性无关：父组未被授权（如半选未提交）不算断链，调用方会把它补成容器；
+     * 父组仅被停用才算断链，对应子项整棵剔除（防顶级裸奔）。父组被隐藏不影响子项可达
+     * ——visible 是展示属性不是访问控制属性（2026-10-15 语义修正）。
      * seen 防 parentId 成环时死循环（脏数据兜底，正常数据由 MenuServiceImpl.validateNoCycle 保证）。
      */
     private boolean ancestorChainAlive(Menu node, Map<Long, Menu> aliveById) {

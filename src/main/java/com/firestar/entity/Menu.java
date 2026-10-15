@@ -25,13 +25,16 @@ public class Menu extends AuditedEntity {
     /** 路由路径 */
     private String routePath;
 
+    /** 外链跳转地址（menu_type=LINK 时必填，须以 http(s):// 开头；其它类型为空） */
+    private String linkUrl;
+
     /** 前端组件 */
     private String component;
 
     /** 所需权限编码 → sys_permission.perm_code */
     private String permCode;
 
-    /** 菜单类型（字典 menu_type：目录/菜单/按钮） */
+    /** 菜单类型（字典 menu_type）：CATALOG 目录 / MENU 菜单 / BUTTON 按钮 / LINK 外链 */
     private String menuType;
 
     /** 排序 */
@@ -39,6 +42,9 @@ public class Menu extends AuditedEntity {
 
     /** 是否可见：0隐藏 1可见 */
     private Integer visible;
+
+    /** 是否缓存页面（keep-alive）：0 不缓存 1 缓存；仅 MENU 型有意义 */
+    private Integer isCache;
 
     /** 状态（字典 common_status） */
     private String status;

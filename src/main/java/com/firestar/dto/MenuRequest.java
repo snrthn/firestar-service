@@ -15,16 +15,19 @@ public class MenuRequest {
     /** 菜单名称 */
     private String menuName;
 
-    /** 路由路径（CATALOG 允许为空） */
+    /** 路由路径（CATALOG/BUTTON/LINK 允许为空） */
     private String routePath;
 
-    /** 前端组件路径（CATALOG 允许为空） */
+    /** 外链跳转地址（LINK 必填，须以 http(s):// 开头；其它类型忽略） */
+    private String linkUrl;
+
+    /** 前端组件路径（仅 MENU 使用） */
     private String component;
 
-    /** 所需权限编码 → sys_permission.perm_code */
+    /** 所需权限编码 → sys_permission.perm_code（BUTTON 必填） */
     private String permCode;
 
-    /** 菜单类型：CATALOG 目录 / MENU 菜单 */
+    /** 菜单类型：CATALOG 目录 / MENU 菜单 / BUTTON 按钮 / LINK 外链 */
     private String menuType;
 
     /** 排序（同级升序，小的靠前） */
@@ -32,6 +35,9 @@ public class MenuRequest {
 
     /** 是否可见：0 隐藏 1 可见 */
     private Integer visible;
+
+    /** 是否缓存页面（keep-alive）：0 不缓存 1 缓存；仅 MENU 型有意义 */
+    private Integer isCache;
 
     /** 状态：ENABLED / DISABLED */
     private String status;

@@ -115,7 +115,7 @@ public class MenuServiceImpl implements MenuService {
 
     // ===== 私有辅助 =====
 
-    /** 表单字段 → 实体（null 走 DDL 默认值：menuType=MENU / visible=1 / status=ENABLED / sortNo=0） */
+    /** 表单字段 → 实体（null 走 DDL 默认值：menuType=MENU / visible=1 / status=ENABLED / sortNo=0 / isCache=0） */
     private void applyForm(Menu menu, MenuRequest req) {
         Long parentId = req.getParentId() == null ? 0L : req.getParentId();
         String menuName = req.getMenuName() == null ? "" : req.getMenuName().trim();
@@ -123,15 +123,56 @@ public class MenuServiceImpl implements MenuService {
         if (menuName.isEmpty()) {
             throw new BizException("菜单名称不能为空");
         }
-        if (!"CATALOG".equals(menuType) && !"MENU".equals(menuType)) {
-            throw new BizException("菜单类型仅支持 CATALOG / MENU");
+        if (!"CATALOG".equals(menuType) && !"MENU".equals(menuType)
+                && !"BUTTON".equals(menuType) && !"LINK".equals(menuType)) {
+            throw new BizException("菜单类型仅支持 CATALOG / MENU / BUTTON / LINK");
         }
         String status = req.getStatus() == null || req.getStatus().isBlank() ? "ENABLED" : req.getStatus();
         if (!"ENABLED".equals(status) && !"DISABLED".equals(status)) {
             throw new BizException("菜单状态仅支持 ENABLED / DISABLED");
         }
+        // 路由地址：MENU 必填；CATALOG/BUTTON/LINK 不参与 SPA 路由，拒绝误填
+        // （外链地址走 linkUrl 单独校验，防 http:// 混进 routePath 被 router.push 当相对路径）
         if ("MENU".equals(menuType) && (req.getRoutePath() == null || req.getRoutePath().isBlank())) {
             throw new BizException("菜单类型为「菜单」时，路由地址必填");
+        }
+        if (!"MENU".equals(menuType) && req.getRoutePath() != null && !req.getRoutePath().isBlank()) {
+            throw new BizException("仅「菜单」类型可填路由地址（外链请填链接地址）");
+        }
+        if ("MENU".equals(menuType) && req.getRoutePath() != null
+                && req.getRoutePath().trim().toLowerCase().startsWith("http")) {
+            throw new BizException("路由地址请填站内相对路径；外部链接请选择「外链」类型填链接地址");
+        }
+        // 权限编码：BUTTON 必填（按钮型菜单的唯一存在意义就是权限节点）；
+        // 其它类型可空（接口级权限由 @RequirePerm 兜底，见方案 B）
+        String permCode = req.getPermCode() == null ? null : req.getPermCode().trim();
+        if ("BUTTON".equals(menuType) && (permCode == null || permCode.isEmpty())) {
+            throw new BizException("菜单类型为「按钮」时，权限编码必填");
+        }
+        // 外链地址：LINK 必填 + 协议白名单（只放行 http/https，天然拦截
+        // javascript:/data: 等危险协议）+ 长度兜底（列宽 500）。
+        // 前端 menu.vue 有同款正则 rule，此处是后端强校验——绕过前端直发也要挡住。
+        String linkUrl = req.getLinkUrl() == null ? null : req.getLinkUrl().trim();
+        if ("LINK".equals(menuType)) {
+            if (linkUrl == null || linkUrl.isEmpty()) {
+                throw new BizException("菜单类型为「外链」时，链接地址必填");
+            }
+            if (linkUrl.length() > 500) {
+                throw new BizException("链接地址长度不能超过 500 个字符");
+            }
+            if (!linkUrl.matches("(?i)^https?://\\S+$")) {
+                throw new BizException("链接地址须以 http:// 或 https:// 开头");
+            }
+        } else if (linkUrl != null && !linkUrl.isEmpty()) {
+            throw new BizException("仅「外链」类型可填链接地址");
+        }
+        // 缓存开关：仅 MENU 有意义，归一为 0/1（null→0；目录/按钮/外链不缓存）
+        int isCache = req.getIsCache() == null ? 0 : req.getIsCache();
+        if (isCache != 0 && isCache != 1) {
+            throw new BizException("是否缓存仅支持 0 / 1");
+        }
+        if (!"MENU".equals(menuType) && isCache == 1) {
+            isCache = 0;
         }
         if (parentId != 0) {
             Menu parent = menuMapper.selectById(parentId);
@@ -141,13 +182,15 @@ public class MenuServiceImpl implements MenuService {
         }
         menu.setParentId(parentId);
         menu.setMenuName(menuName);
-        menu.setRoutePath(req.getRoutePath());
-        menu.setComponent(req.getComponent());
-        menu.setPermCode(req.getPermCode());
+        menu.setRoutePath(req.getRoutePath() == null || req.getRoutePath().isBlank() ? null : req.getRoutePath().trim());
+        menu.setLinkUrl(linkUrl == null || linkUrl.isEmpty() ? null : linkUrl);
+        menu.setComponent(req.getComponent() == null || req.getComponent().isBlank() ? null : req.getComponent().trim());
+        menu.setPermCode(permCode == null || permCode.isEmpty() ? null : permCode);
         menu.setMenuType(menuType);
         menu.setSortNo(req.getSortNo() == null ? 0 : req.getSortNo());
         menu.setVisible(req.getVisible() == null ? 1 : req.getVisible());
         menu.setStatus(status);
+        menu.setIsCache(isCache);
         // 图标：直接透传（可空）。空字符串统一归一为 null，避免库里残留 '' 导致侧栏不兜底。
         String icon = req.getIcon();
         menu.setIcon(icon == null || icon.isBlank() ? null : icon.trim());

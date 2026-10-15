@@ -28,6 +28,7 @@ public final class MenuTreeUtil {
             vo.setParentId(m.getParentId());
             vo.setMenuName(m.getMenuName());
             vo.setRoutePath(m.getRoutePath());
+            vo.setLinkUrl(m.getLinkUrl());
             vo.setComponent(m.getComponent());
             vo.setPermCode(m.getPermCode());
             vo.setMenuType(m.getMenuType());
@@ -35,6 +36,7 @@ public final class MenuTreeUtil {
             vo.setVisible(m.getVisible());
             vo.setStatus(m.getStatus());
             vo.setIcon(m.getIcon());
+            vo.setIsCache(m.getIsCache());
             voMap.put(m.getId(), vo);
         }
         List<MenuVO> roots = new ArrayList<>();
