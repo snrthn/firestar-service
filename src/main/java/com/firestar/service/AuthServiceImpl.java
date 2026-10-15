@@ -265,15 +265,28 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public List<MenuVO> menus() {
         User user = currentUser();
-        List<Long> roleIds = loadRoleIds(user.getId());
-        if (roleIds.isEmpty()) {
-            return List.of();
-        }
-        List<RoleMenu> roleMenus = roleMenuMapper.selectList(
-                new LambdaQueryWrapper<RoleMenu>().in(RoleMenu::getRoleId, roleIds));
-        Set<Long> menuIds = roleMenus.stream().map(RoleMenu::getMenuId).collect(Collectors.toSet());
-        if (menuIds.isEmpty()) {
-            return List.of();
+
+        // 超级管理员（ROLE_ADMIN）无条件放行：绕过 sys_role_menu 过滤，返回全部启用菜单。
+        // 与 PermissionInterceptor 对 ROLE_ADMIN 的 API 层放行对称，信号沿用同一 role_code
+        // （sys_role.role_code='ROLE_ADMIN'），零迁移。作用：admin 即便把自己角色下的菜单
+        // 移除，下次登录仍见全量菜单 → 可进菜单管理页自行改回（自愈），避免「移除系统管理后
+        // 锁死」的超级管理员自锁问题（2026-10-15 虎哥定稿方案 A）。
+        Set<Long> menuIds;
+        if (isRoleAdmin(user.getId())) {
+            menuIds = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
+                            .eq(Menu::getStatus, "ENABLED"))
+                    .stream().map(Menu::getId).collect(Collectors.toSet());
+        } else {
+            List<Long> roleIds = loadRoleIds(user.getId());
+            if (roleIds.isEmpty()) {
+                return List.of();
+            }
+            List<RoleMenu> roleMenus = roleMenuMapper.selectList(
+                    new LambdaQueryWrapper<RoleMenu>().in(RoleMenu::getRoleId, roleIds));
+            menuIds = roleMenus.stream().map(RoleMenu::getMenuId).collect(Collectors.toSet());
+            if (menuIds.isEmpty()) {
+                return List.of();
+            }
         }
         // 授权查询只筛 ENABLED，不筛 visible——本方法响应语义是「该角色可访问的
         // 路由集」（访问控制 = 授权 ∧ 启用）。visible 只是展示属性：隐藏菜单 URL
@@ -366,6 +379,15 @@ public class AuthServiceImpl implements AuthService {
             vo.setRoleName(r.getRoleName());
             return vo;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 是否超级管理员：与 PermissionInterceptor 判定信号一致，role_code='ROLE_ADMIN' 即超级管理员。
+     * 复用 loadRoles 拿 roleCode，不再额外查库。
+     */
+    private boolean isRoleAdmin(Long userId) {
+        return loadRoles(userId).stream()
+                .anyMatch(r -> "ROLE_ADMIN".equals(r.getRoleCode()));
     }
 
     private List<String> loadPermissions(List<String> roleCodes) {
