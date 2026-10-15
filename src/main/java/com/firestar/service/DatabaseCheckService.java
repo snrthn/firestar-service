@@ -216,11 +216,15 @@ public class DatabaseCheckService {
      * V2 脚本用 INSERT ... ON DUPLICATE KEY UPDATE 保证幂等，
      * 所以只要 appliedCount >= 2，这些数字就该在。
      * 对不上说明 V2 被手工绕过或执行中断。
+     *
+     * ⚠️ 这些预期值同表数量常量一样需要维护：新增 Flyway 迁移若改动种子数据，
+     * 必须同步更新（V16 补 menu_type「外链」字典项 → dictDataCount 82→83，
+     * 2026-10-15 探针误报「V2 未完整执行」实为常量未跟上）。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 23, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 82, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 83, errors));
         result.put("configCount", countOf(conn, "sys_config", 5, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
