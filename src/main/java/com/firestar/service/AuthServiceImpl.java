@@ -41,9 +41,11 @@ import com.firestar.realtime.RealtimeEventType;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -278,37 +280,55 @@ public class AuthServiceImpl implements AuthService {
                 .eq(Menu::getVisible, 1)
                 .eq(Menu::getStatus, "ENABLED")
                 .orderByAsc(Menu::getSortNo));
-        // 父链断裂剪枝：祖先被停用/隐藏的子菜单整棵剔除。
-        // 不剪的话 MenuTreeUtil 会把孤儿（父不在集合内）提到根级——
-        // 停用目录后它的子项以顶级菜单裸奔（虎哥 2026-10-13 实测）。
-        // 注意只剪侧栏这份数据；菜单管理页走 MenuService 全量不过滤，
-        // 那里需要看到停用项与父子关系，行为不同。
-        Set<Long> aliveIds = new HashSet<>();
-        Map<Long, Long> parentOf = new HashMap<>();
+        // 父链处理（两遍，口径 = 全表可见且启用，与授权无关）：
+        // 目录是容器、授权粒度在叶子。授权结果集可能缺父组 id——el-tree 父子联动下
+        // 取消个别子项会让父组呈半选，旧版前端不提交半选父 id，授权集合里就没有父组
+        // （虎哥 2026-10-15 实测：只移除菜单组中的一项，整个组都不返回了）。
+        //   第一遍：祖先链断裂（停用/隐藏）的授权项整棵剔除——否则 MenuTreeUtil
+        //           会把孤儿提到根级、停用目录的子项顶级裸奔（虎哥 2026-10-13 实测）；
+        //   第二遍：可见且启用但未授权的祖先前补为容器，组照常返回、只少被移除的那一项。
+        // 注意只处理侧栏这份数据；菜单管理页走 MenuService 全量不过滤，行为不同。
+        List<Menu> aliveMenus = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
+                .eq(Menu::getVisible, 1)
+                .eq(Menu::getStatus, "ENABLED"));
+        Map<Long, Menu> aliveById = new HashMap<>();
+        for (Menu m : aliveMenus) {
+            aliveById.put(m.getId(), m);
+        }
+        Map<Long, Menu> treeNodes = new LinkedHashMap<>();
         for (Menu m : menus) {
-            aliveIds.add(m.getId());
-            if (m.getParentId() != null) {
-                parentOf.put(m.getId(), m.getParentId());
+            if (ancestorChainAlive(m, aliveById)) {
+                treeNodes.put(m.getId(), m);
             }
         }
-        List<Menu> pruned = menus.stream()
-                .filter(m -> ancestorChainAlive(m, aliveIds, parentOf))
-                .collect(Collectors.toList());
-        return MenuTreeUtil.build(pruned);
+        for (Menu m : new ArrayList<>(treeNodes.values())) {
+            Long cur = m.getParentId();
+            while (cur != null && cur != 0 && !treeNodes.containsKey(cur)) {
+                Menu ancestor = aliveById.get(cur);
+                if (ancestor == null) {
+                    break; // 理论不可达：第一遍已保证存活项的祖先全部在 aliveById 内
+                }
+                treeNodes.put(cur, ancestor);
+                cur = ancestor.getParentId();
+            }
+        }
+        return MenuTreeUtil.build(new ArrayList<>(treeNodes.values()));
     }
 
     /**
-     * 沿 parentId 链上溯，每个祖先都必须仍在存活集合（visible=1 且 status=ENABLED）内。
+     * 沿 parentId 链上溯，每个祖先都必须仍存活（visible=1 且 status=ENABLED，取自全表）。
+     * 存活口径与授权无关：父组未被授权（如半选未提交）不算断链，调用方会把它补成容器；
+     * 父组被停用/隐藏才算断链，对应子项整棵剔除（防顶级裸奔）。
      * seen 防 parentId 成环时死循环（脏数据兜底，正常数据由 MenuServiceImpl.validateNoCycle 保证）。
      */
-    private boolean ancestorChainAlive(Menu node, Set<Long> aliveIds, Map<Long, Long> parentOf) {
+    private boolean ancestorChainAlive(Menu node, Map<Long, Menu> aliveById) {
         Long cur = node.getParentId();
         Set<Long> seen = new HashSet<>();
         while (cur != null && cur != 0) {
-            if (!seen.add(cur) || !aliveIds.contains(cur)) {
+            if (!seen.add(cur) || !aliveById.containsKey(cur)) {
                 return false;
             }
-            cur = parentOf.get(cur);
+            cur = aliveById.get(cur).getParentId();
         }
         return true;
     }

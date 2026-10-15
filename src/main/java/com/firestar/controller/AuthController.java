@@ -106,7 +106,7 @@ public class AuthController {
     public SseEmitter stream(HttpServletRequest request) {
         String token = extractToken(request);
         if (token == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "缺少凭证");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
         }
         String username;
         String jti;
@@ -114,11 +114,16 @@ public class AuthController {
             username = jwtUtil.getUsername(token);
             jti = jwtUtil.getJti(token);
         } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "凭证无效");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
         }
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null || !jti.equals(user.getCurrentJti())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "会话已失效");
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
+        }
+        // jti 不匹配 = 该 token 已被同账号更新登录顶替（与 filter 的判定一致）。
+        // 文案与 FORCE_LOGOUT 推送保持同一套语义，前端两条路径展示一致。
+        if (user.getCurrentJti() == null || !jti.equals(user.getCurrentJti())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "您的账号已在其他设备登录，原会话已失效，请重新登录");
         }
         return realtimeGateway.connect(username, jti);
     }

@@ -53,6 +53,16 @@ public class SseRealtimeGateway implements RealtimeGateway {
         emitter.onTimeout(() -> remove(username, emitter));
         emitter.onError(e -> remove(username, emitter));
         connections.computeIfAbsent(username, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        // 握手即发初始帧：SseEmitter 的响应头随首个 send 才 flush 到 socket，
+        // 不发初始帧时客户端（fetch/EventSource）要等到首个业务事件或 25s 心跳
+        // 才认为连接建立——这期间连接虽已在服务端注册，但浏览器侧不可用，
+        // 且经 vite/nginx 代理时叠加转发延迟可达十几秒，踢人事件恰好落窗即丢。
+        // 发 CONNECTED 帧让握手毫秒级完成，注册即可用。
+        try {
+            emitter.send(SseEmitter.event().name("CONNECTED").data("{}"));
+        } catch (IOException | IllegalStateException e) {
+            remove(username, emitter);
+        }
         return emitter;
     }
 
