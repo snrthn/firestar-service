@@ -1,6 +1,7 @@
 package com.firestar.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.common.OrgTreeUtil;
 import com.firestar.dto.OrgRequest;
 import com.firestar.dto.OrgVO;
@@ -75,6 +76,13 @@ public class OrgServiceImpl implements OrgService {
         // 防死循环：上级部门不能是自己，也不能是自己的子孙
         validateNoCycle(id, org.getParentId());
         orgMapper.updateById(org);
+        // MP updateById 默认忽略 null 字段：清空负责人时 leader_id 不会被写进 UPDATE，
+        // 必须用 wrapper 显式置空，否则「清除负责人」永远存不上
+        if (org.getLeaderId() == null) {
+            orgMapper.update(null, new LambdaUpdateWrapper<Org>()
+                    .eq(Org::getId, id)
+                    .set(Org::getLeaderId, null));
+        }
     }
 
     @Override

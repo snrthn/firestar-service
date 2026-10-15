@@ -14,7 +14,11 @@ import java.util.List;
  */
 public interface AuthService {
 
-    LoginResponse login(LoginRequest req);
+    /**
+     * 登录。clientIp 为客户端真实 IP（由 Controller 从 HttpServletRequest 提取，
+     * 可为 null），登录成功时一并写入 sys_user.last_login_ip 作审计留痕。
+     */
+    LoginResponse login(LoginRequest req, String clientIp);
 
     void logout(String token);
 

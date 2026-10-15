@@ -43,6 +43,9 @@ public class User extends AuditedEntity {
     /** 最后登录 IP */
     private String lastLoginIp;
 
+    /** 当前有效会话 JTI（单点登录：登录即轮换，旧 token 因不匹配即时失效） */
+    private String currentJti;
+
     /** 手机号 */
     private String phone;
 

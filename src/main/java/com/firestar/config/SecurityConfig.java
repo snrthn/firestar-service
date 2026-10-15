@@ -30,8 +30,9 @@ public class SecurityConfig {
 
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter(JwtUtil jwtUtil, TokenBlacklistService blacklistService,
-                                                          com.firestar.service.PermissionResolver permissionResolver) {
-        return new JwtAuthenticationFilter(jwtUtil, blacklistService, permissionResolver);
+                                                          com.firestar.service.PermissionResolver permissionResolver,
+                                                          com.firestar.mapper.UserMapper userMapper) {
+        return new JwtAuthenticationFilter(jwtUtil, blacklistService, permissionResolver, userMapper);
     }
 
     @Bean

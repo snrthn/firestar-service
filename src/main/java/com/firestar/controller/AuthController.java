@@ -1,5 +1,6 @@
 package com.firestar.controller;
 
+import com.firestar.common.IpUtil;
 import com.firestar.common.JwtUtil;
 import com.firestar.common.Result;
 import com.firestar.dto.ChangePasswordRequest;
@@ -8,14 +9,22 @@ import com.firestar.dto.LoginResponse;
 import com.firestar.dto.MenuVO;
 import com.firestar.dto.ProfileUpdateRequest;
 import com.firestar.dto.ProfileVO;
+import com.firestar.entity.User;
+import com.firestar.mapper.UserMapper;
+import com.firestar.realtime.RealtimeGateway;
 import com.firestar.service.AuthService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -30,14 +39,22 @@ import java.util.List;
 public class AuthController {
 
     private final AuthService authService;
+    private final JwtUtil jwtUtil;
+    private final UserMapper userMapper;
+    private final RealtimeGateway realtimeGateway;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, JwtUtil jwtUtil, UserMapper userMapper,
+                          RealtimeGateway realtimeGateway) {
         this.authService = authService;
+        this.jwtUtil = jwtUtil;
+        this.userMapper = userMapper;
+        this.realtimeGateway = realtimeGateway;
     }
 
     @PostMapping("/login")
-    public Result<LoginResponse> login(@RequestBody LoginRequest req) {
-        return Result.success(authService.login(req));
+    public Result<LoginResponse> login(@RequestBody LoginRequest req, HttpServletRequest request) {
+        // 真实 IP 由反代头推导（直连时退化为 remoteAddr），登录成功写入 last_login_ip
+        return Result.success(authService.login(req, IpUtil.getClientIp(request)));
     }
 
     @PostMapping("/logout")
@@ -66,6 +83,44 @@ public class AuthController {
     @GetMapping("/menus")
     public Result<List<MenuVO>> menus() {
         return Result.success(authService.menus());
+    }
+
+    /**
+     * 会话探活（前端心跳每 5s 调一次）：本身不做任何事，能穿过
+     * JwtAuthenticationFilter 到这里即代表会话有效；被顶号（jti 不匹配）/
+     * 黑名单/过期时 filter 直接 401，前端据此弹「重新登录」模态框。
+     * 与 profile 等同属 auth 自服务，只验 JWT、不需要 @RequirePerm。
+     */
+    @GetMapping("/session-check")
+    public Result<Void> sessionCheck() {
+        return Result.success();
+    }
+
+    /**
+     * SSE 实时推送流端点。握手时校验 JWT + 比对 current_jti（被顶号后旧会话持有的
+     * token jti 不再匹配 → 401，拒绝建立连接）。通过后把 SseEmitter 交给推送网关注册，
+     * 后续业务事件（如 FORCE_LOGOUT）由网关即时推到前端。
+     * 与 profile 等同属 auth 自服务，只验 JWT、不需要 @RequirePerm。
+     */
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(HttpServletRequest request) {
+        String token = extractToken(request);
+        if (token == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "缺少凭证");
+        }
+        String username;
+        String jti;
+        try {
+            username = jwtUtil.getUsername(token);
+            jti = jwtUtil.getJti(token);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "凭证无效");
+        }
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null || !jti.equals(user.getCurrentJti())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "会话已失效");
+        }
+        return realtimeGateway.connect(username, jti);
     }
 
     private String extractToken(HttpServletRequest request) {

@@ -35,6 +35,9 @@ import com.firestar.service.TokenBlacklistService;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import com.firestar.realtime.RealtimeEvent;
+import com.firestar.realtime.RealtimeEventType;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -65,6 +68,7 @@ public class AuthServiceImpl implements AuthService {
     private final TokenBlacklistService blacklistService;
     private final JwtUtil jwtUtil;
     private final JwtProperties jwtProperties;
+    private final ApplicationEventPublisher eventPublisher;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
@@ -72,7 +76,8 @@ public class AuthServiceImpl implements AuthService {
                            PermissionMapper permissionMapper, RoleMenuMapper roleMenuMapper,
                            MenuMapper menuMapper, OrgMapper orgMapper, PostMapper postMapper,
                            TokenBlacklistService blacklistService,
-                           JwtUtil jwtUtil, JwtProperties jwtProperties) {
+                           JwtUtil jwtUtil, JwtProperties jwtProperties,
+                           ApplicationEventPublisher eventPublisher) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
@@ -85,10 +90,11 @@ public class AuthServiceImpl implements AuthService {
         this.blacklistService = blacklistService;
         this.jwtUtil = jwtUtil;
         this.jwtProperties = jwtProperties;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
-    public LoginResponse login(LoginRequest req) {
+    public LoginResponse login(LoginRequest req, String clientIp) {
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, req.getUsername()));
         if (user == null) {
             throw new BizException("用户名或密码错误");
@@ -102,12 +108,25 @@ public class AuthServiceImpl implements AuthService {
         List<RoleVO> roles = loadRoles(user.getId());
         List<String> roleCodes = roles.stream().map(RoleVO::getRoleCode).toList();
 
-        // 仅更新最后登录时间，不触碰密码等其它列
-        userMapper.update(null, new LambdaUpdateWrapper<User>()
-                .eq(User::getId, user.getId())
-                .set(User::getLastLoginAt, LocalDateTime.now()));
-
+        // 生成 token（含唯一 jti），登录即轮换「当前有效会话」
         String token = jwtUtil.generateToken(user.getUsername(), roleCodes);
+
+        // 最后登录时间 / IP / current_jti 一并写入。current_jti 覆盖旧值即单点登录核心：
+        // 该账号其它已登录设备的 token 因 jti 不再匹配，下次请求即被 filter 拒绝。
+        // clientIp 为 null（取不到时）不写该列，保留历史值而不是覆盖成空
+        LambdaUpdateWrapper<User> upd = new LambdaUpdateWrapper<User>()
+                .eq(User::getId, user.getId())
+                .set(User::getLastLoginAt, LocalDateTime.now())
+                .set(User::getCurrentJti, jwtUtil.getJti(token));
+        if (clientIp != null) {
+            upd.set(User::getLastLoginIp, clientIp);
+        }
+        userMapper.update(null, upd);
+
+        // 单点登录：登录即轮换 current_jti，旧设备 token 的 jti 不再匹配。
+        // 发布 FORCE_LOGOUT 事件，推送网关找到该用户旧 SSE 连接即时通知其失效（毫秒级），
+        // 不再依赖 5s 心跳轮询。新设备 SSE 尚未建立，不受影响。
+        eventPublisher.publishEvent(new RealtimeEvent(this, RealtimeEventType.FORCE_LOGOUT, user.getUsername(), null));
 
         LoginResponse resp = new LoginResponse();
         resp.setToken(token);
@@ -129,6 +148,12 @@ public class AuthServiceImpl implements AuthService {
         Date exp = jwtUtil.getExpiration(token);
         LocalDateTime expireAt = exp.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
         blacklistService.blacklist(jti, username, expireAt);
+        // 单点登录：登出时清掉当前会话标识（仅清匹配 jti 的那条，已被踢的旧会话无影响），
+        // 双保险确保该 token 即便未过期也无法再匹配 current_jti
+        userMapper.update(null, new LambdaUpdateWrapper<User>()
+                .eq(User::getUsername, username)
+                .eq(User::getCurrentJti, jti)
+                .set(User::getCurrentJti, null));
     }
 
     @Override
@@ -156,14 +181,45 @@ public class AuthServiceImpl implements AuthService {
             Post post = postMapper.selectById(user.getPostId());
             if (post != null) vo.setPostName(post.getPostName());
         }
-        if (user.getParentId() != null) {
-            User leader = userMapper.selectById(user.getParentId());
-            if (leader != null) vo.setParentName(leader.getNickname());
-        }
+        // 直属上级（方案 C）：parentId 显式覆盖优先；否则回落所属部门负责人，
+        // 沿部门树向上找最近的「有负责人且非本人」的上级部门。都找不到则留 null（页面显示 —）。
+        vo.setParentName(resolveParentName(user));
         vo.setLastLoginAt(user.getLastLoginAt());
         vo.setLastLoginIp(user.getLastLoginIp());
         vo.setCreatedAt(user.getCreatedAt());
         return vo;
+    }
+
+    /**
+     * 推算个人中心「直属上级」昵称：
+     * 1) user.parentId 有值 → 该用户昵称（显式覆盖，最高优先）
+     * 2) 否则从 user.deptId 所属部门起，取本部门 leaderId；
+     *    若本部门无负责人或本人即负责人，则沿 org.parentId 向上找最近一个
+     *    「有负责人且非本人」的上级部门
+     * 3) 都找不到 → null（前端显示 —）
+     * 防御：org 自引用树可能的环用 guard 次数 + parentId==0(根) 双重截断。
+     */
+    private String resolveParentName(User user) {
+        if (user == null) return null;
+        // 1. 显式覆盖
+        if (user.getParentId() != null) {
+            User p = userMapper.selectById(user.getParentId());
+            return p != null ? p.getNickname() : null;
+        }
+        // 2. 部门链推断
+        Long deptId = user.getDeptId();
+        int guard = 0;
+        while (deptId != null && deptId != 0 && guard++ < 20) {
+            Org org = orgMapper.selectById(deptId);
+            if (org == null) break;
+            Long leaderId = org.getLeaderId();
+            if (leaderId != null && !leaderId.equals(user.getId())) {
+                User leader = userMapper.selectById(leaderId);
+                if (leader != null) return leader.getNickname();
+            }
+            deptId = org.getParentId(); // 向上一级
+        }
+        return null;
     }
 
     @Override

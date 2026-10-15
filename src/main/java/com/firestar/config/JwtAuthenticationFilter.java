@@ -1,8 +1,11 @@
 package com.firestar.config;
 
 import com.firestar.common.JwtUtil;
+import com.firestar.entity.User;
+import com.firestar.mapper.UserMapper;
 import com.firestar.service.PermissionResolver;
 import com.firestar.service.TokenBlacklistService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
@@ -39,12 +42,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     private final TokenBlacklistService blacklistService;
     private final PermissionResolver permissionResolver;
+    private final UserMapper userMapper;
 
     public JwtAuthenticationFilter(JwtUtil jwtUtil, TokenBlacklistService blacklistService,
-                                   PermissionResolver permissionResolver) {
+                                   PermissionResolver permissionResolver, UserMapper userMapper) {
         this.jwtUtil = jwtUtil;
         this.blacklistService = blacklistService;
         this.permissionResolver = permissionResolver;
+        this.userMapper = userMapper;
     }
 
     @Override
@@ -60,6 +65,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
                 Claims claims = jwtUtil.parse(token);
                 String username = claims.getSubject();
+                // 单点登录：校验 token 的 jti 是否仍是该用户「当前有效会话」。
+                // current_jti 为 null 视为尚未纳入管控（迁移前已登录的旧会话），放行；
+                // 一旦该用户重新登录写入 current_jti，旧会话即因 jti 不匹配被踢。
+                String jti = claims.getId();
+                User sessionUser = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                        .eq(User::getUsername, username)
+                        .select(User::getCurrentJti));
+                if (sessionUser != null && sessionUser.getCurrentJti() != null
+                        && !sessionUser.getCurrentJti().equals(jti)) {
+                    writeUnauthorized(response, "您的账号已在其他设备登录，原会话已失效，请重新登录");
+                    return;
+                }
                 List<String> roles = jwtUtil.getRoles(token);
                 List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                 if (roles != null) {
