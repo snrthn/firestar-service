@@ -32,13 +32,14 @@ public class DatabaseCheckService {
     /**
      * V1 基线应该存在的业务表总数（与 docs/建表方案.md 附录 A 一致）。
      *
-     * 27 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
-     *      + V10 的 sys_post（岗位管理）。
+     * 28 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
+     *      + V10 的 sys_post（岗位管理）
+     *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）。
      * 后续每次 Flyway 新增业务表，此常量必须同步 +1，否则自检误报
-     * "业务表数量应为 26，实际 27" 导致 /system/db-check 返回 503、
+     * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 27;
+    private static final int EXPECTED_TABLE_COUNT = 28;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");
@@ -220,11 +221,15 @@ public class DatabaseCheckService {
      * ⚠️ 这些预期值同表数量常量一样需要维护：新增 Flyway 迁移若改动种子数据，
      * 必须同步更新（V16 补 menu_type「外链」字典项 → dictDataCount 82→83，
      * 2026-10-15 探针误报「V2 未完整执行」实为常量未跟上）。
+     *
+     * V19（文件/日志模块）新增 3 个字典类型（login_status / file_status / storage_type）
+     * 与 8 个字典项，故 dictTypeCount 23→26、dictDataCount 83→91。
+     * 2026-10-16 同样因常量未跟上导致 /actuator/health 完整检查 503。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 23, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 83, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 26, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 91, errors));
         result.put("configCount", countOf(conn, "sys_config", 5, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
