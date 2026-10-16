@@ -22,6 +22,9 @@ public class FileStorage extends AuditedEntity {
     /** 原始文件名（仅用于展示与命名规范溯源，绝不拼进 objectKey —— 防路径穿越与编码坑） */
     private String originalName;
 
+    /** 文件别名（V23；文件管理处维护：上传填写 / 列表编辑，仅展示与审计用，为空回退 originalName） */
+    private String alias;
+
     /** 存储路径（磁盘绝对路径 或 OSS objectKey） */
     private String storagePath;
 

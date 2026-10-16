@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -47,8 +48,9 @@ public class FileController {
     public Result<FileVO> upload(@RequestParam("file") MultipartFile file,
                                  @RequestParam(required = false) String bizType,
                                  @RequestParam(required = false) Long bizId,
-                                 @RequestParam(required = false) String fileType) {
-        return Result.success(fileService.upload(file, bizType, bizId, fileType));
+                                 @RequestParam(required = false) String fileType,
+                                 @RequestParam(required = false) String alias) {
+        return Result.success(fileService.upload(file, bizType, bizId, fileType, alias));
     }
 
     /** 文件分页列表（默认每页 10 条，与前端 el-pagination 默认规格一致）。 */
@@ -95,19 +97,28 @@ public class FileController {
         return Result.success();
     }
 
+    /** 更新文件别名（V23；文件管理处维护，仅展示/审计用；传空串清空回退 originalName）。 */
+    @PutMapping("/{id}/alias")
+    @RequirePerm("file:manage")
+    public Result<FileVO> updateAlias(@PathVariable Long id, @RequestParam String alias) {
+        return Result.success(fileService.updateAlias(id, alias));
+    }
+
     /** 文件下载记录列表。 */
     @GetMapping("/{id}/download-logs")
     public Result<IPage<FileDownloadLogVO>> downloadLogs(@PathVariable Long id,
                                                          @RequestParam(defaultValue = "1") Integer pageNum,
-                                                         @RequestParam(defaultValue = "10") Integer pageSize) {
-        return Result.success(fileService.downloadLogs(id, pageNum, pageSize));
+                                                         @RequestParam(defaultValue = "10") Integer pageSize,
+                                                         @RequestParam(required = false) String keyword) {
+        return Result.success(fileService.downloadLogs(id, pageNum, pageSize, keyword));
     }
 
     /** 下载记录全量分页（供「下载记录」菜单独立查询，不按文件过滤）。 */
     @GetMapping("/download-logs")
     public Result<IPage<FileDownloadLogVO>> allDownloadLogs(@RequestParam(defaultValue = "1") Integer pageNum,
-                                                            @RequestParam(defaultValue = "10") Integer pageSize) {
-        return Result.success(fileService.downloadLogs(null, pageNum, pageSize));
+                                                            @RequestParam(defaultValue = "10") Integer pageSize,
+                                                            @RequestParam(required = false) String keyword) {
+        return Result.success(fileService.downloadLogs(null, pageNum, pageSize, keyword));
     }
 
     /** 本地存储模式下的文件内容输出（OSS 模式不会走到这里）。 */

@@ -79,8 +79,14 @@ public class AliyunOssStorageServiceImpl implements FileStorageService {
         ClientBuilderConfiguration conf = new ClientBuilderConfiguration();
         conf.setSupportCname(!isStandardEndpoint(accessEndpoint));
 
+        // ⚠️ trim 防御（2026-10-16 生产 InvalidAccessKeyId 排查）：AK/SK 若来源被
+        // 尾随空格或 CR 污染（.env 被 Windows 编辑器动过、Secret 粘贴带空格），
+        // SDK 会把脏值原样发给阿里云 →「AKID 不存在」。trim 掉这一类低级污染。
+        String accessKeyId = cfg.getAccessKeyId().trim();
+        String accessKeySecret = cfg.getAccessKeySecret().trim();
+
         this.ossClient = new OSSClientBuilder().build(
-                accessEndpoint, cfg.getAccessKeyId(), cfg.getAccessKeySecret(), conf);
+                accessEndpoint, accessKeyId, accessKeySecret, conf);
     }
 
     /**

@@ -58,10 +58,12 @@ import java.util.stream.Collectors;
 @Service
 public class FileServiceImpl implements FileService {
 
-    /** 扩展名白名单（红线 4：上传要校验格式，防恶意文件） */
+    /** 扩展名白名单（红线 4：上传要校验格式，防恶意文件）
+     *  V24 新增 mp3/mp4（媒体文件，配套前端音视频预览，2026-10-16） */
     private static final Set<String> ALLOWED_EXT = Set.of(
             "pdf", "jpg", "jpeg", "png", "gif", "webp", "bmp",
-            "doc", "docx", "xls", "xlsx", "txt", "csv", "zip", "ofd");
+            "doc", "docx", "xls", "xlsx", "txt", "csv", "zip", "ofd",
+            "mp3", "mp4");
 
     /** 与 application.properties 的 spring.servlet.multipart.max-file-size 保持一致，此处为二次兜底 */
     private static final long MAX_SIZE = 20L * 1024 * 1024;
@@ -83,8 +85,8 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
-    @Auditable(operationType = "UPLOAD", targetType = "FILE", targetIdSpEl = "#result.id", entityClass = FileStorage.class, fields = {"originalName", "fileType", "bizType", "fileSize", "storageType", "status"})
-    public FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType) {
+    @Auditable(operationType = "UPLOAD", targetType = "FILE", targetIdSpEl = "#result.id", entityClass = FileStorage.class, fields = {"originalName", "alias", "fileType", "bizType", "fileSize", "storageType", "status"})
+    public FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType, String alias) {
         if (file == null || file.isEmpty()) {
             throw new BizException("请选择要上传的文件");
         }
@@ -117,6 +119,7 @@ public class FileServiceImpl implements FileService {
             FileStorage entity = new FileStorage();
             entity.setFileName(objectKey.substring(objectKey.lastIndexOf('/') + 1));
             entity.setOriginalName(original);
+            entity.setAlias(normalizeAlias(alias));
             entity.setStoragePath(objectKey);
             entity.setStorageType(storage.type());
             entity.setBucketName(bucket);
@@ -172,21 +175,37 @@ public class FileServiceImpl implements FileService {
         FileStorage file = load(id);
         String url = storage.accessUrl(file.getId(), file.getStoragePath(), file.getOriginalName(), preview);
 
-        // 计数用 SQL 自增而不是「查出来 +1 再 update」，避免并发下互相覆盖
-        fileMapper.update(null, new LambdaUpdateWrapper<FileStorage>()
-                .eq(FileStorage::getId, id)
-                .setSql("download_count = download_count + 1"));
+        // ⚠️ 只有真实下载才计数 + 落下载记录：预览是在线查看、不是下载行为。
+        // 此前这里无条件 +1 并写记录，预览全被计成下载，审计口径直接失真（2026-10-16 修）。
+        if (!preview) {
+            // 计数用 SQL 自增而不是「查出来 +1 再 update」，避免并发下互相覆盖
+            fileMapper.update(null, new LambdaUpdateWrapper<FileStorage>()
+                    .eq(FileStorage::getId, id)
+                    .setSql("download_count = download_count + 1"));
 
-        FileDownloadLog log = new FileDownloadLog();
-        log.setFileId(id);
-        log.setBizType(file.getBizType());
-        log.setBizId(file.getBizId());
-        log.setDownloaderId(currentUserId());
-        log.setDownloadedAt(LocalDateTime.now());
-        log.setDownloadIp(IpUtil.getClientIp(request));
-        downloadLogMapper.insert(log);
+            FileDownloadLog log = new FileDownloadLog();
+            log.setFileId(id);
+            log.setBizType(file.getBizType());
+            log.setBizId(file.getBizId());
+            log.setDownloaderId(currentUserId());
+            log.setDownloadedAt(LocalDateTime.now());
+            log.setDownloadIp(IpUtil.getClientIp(request));
+            downloadLogMapper.insert(log);
+        }
 
         return url;
+    }
+
+    @Override
+    @Auditable(operationType = "UPDATE", targetType = "FILE", targetIdSpEl = "#id", entityClass = FileStorage.class, fields = {"alias"})
+    public FileVO updateAlias(Long id, String alias) {
+        load(id);
+        String normalized = normalizeAlias(alias);
+        // 单列更新（不整行回写）；MP 的 UpdateWrapper.set 对 null 是显式 SET alias=null，清空可用
+        fileMapper.update(null, new LambdaUpdateWrapper<FileStorage>()
+                .eq(FileStorage::getId, id)
+                .set(FileStorage::getAlias, normalized));
+        return toVO(load(id), null);
     }
 
     @Override
@@ -201,16 +220,37 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
-    public IPage<FileDownloadLogVO> downloadLogs(Long fileId, Integer pageNum, Integer pageSize) {
+    public IPage<FileDownloadLogVO> downloadLogs(Long fileId, Integer pageNum, Integer pageSize, String keyword) {
+        // 方案A：下载记录表只存 fileId，文件名/别名按 fileId 批量回查 sys_file_storage
+        // （软删行仍在 —— 文件删了也要能看出当年下载过什么，审计口径）。
+        // 关键字搜索同理：先反查文件 id 再过滤记录。两段式参数化查询，不拼 SQL，无注入。
+        List<Long> keywordFileIds = null;
+        if (StringUtils.hasText(keyword)) {
+            LambdaQueryWrapper<FileStorage> fw = new LambdaQueryWrapper<>();
+            fw.select(FileStorage::getId);
+            fw.and(w -> w.like(FileStorage::getOriginalName, keyword)
+                    .or().like(FileStorage::getAlias, keyword));
+            keywordFileIds = fileMapper.selectList(fw).stream()
+                    .map(FileStorage::getId).filter(Objects::nonNull).toList();
+            if (keywordFileIds.isEmpty()) {
+                // 没有文件命中 → 直接空页（避免 in() 空集合）
+                return page(pageNum, pageSize);
+            }
+        }
         LambdaQueryWrapper<FileDownloadLog> wrapper = new LambdaQueryWrapper<FileDownloadLog>()
                 .eq(fileId != null, FileDownloadLog::getFileId, fileId)
+                .in(keywordFileIds != null, FileDownloadLog::getFileId, keywordFileIds)
                 .orderByDesc(FileDownloadLog::getDownloadedAt);
         IPage<FileDownloadLog> page = downloadLogMapper.selectPage(page(pageNum, pageSize), wrapper);
+        Map<Long, FileStorage> files = fileMap(page.getRecords());
         Map<Long, String> names = uploaderNames(page.getRecords(), FileDownloadLog::getDownloaderId);
         return page.convert(log -> {
             FileDownloadLogVO vo = new FileDownloadLogVO();
             vo.setId(log.getId());
             vo.setFileId(log.getFileId());
+            FileStorage f = files.get(log.getFileId());
+            vo.setFileName(f != null ? f.getOriginalName() : null);
+            vo.setAlias(f != null ? f.getAlias() : null);
             vo.setBizType(log.getBizType());
             vo.setBizId(log.getBizId());
             vo.setDownloaderId(log.getDownloaderId());
@@ -219,6 +259,17 @@ public class FileServiceImpl implements FileService {
             vo.setDownloadIp(log.getDownloadIp());
             return vo;
         });
+    }
+
+    /** 按 fileId 批量回查文件（文件名/别名展示用）；本表无逻辑删除，软删行一并返回 */
+    private Map<Long, FileStorage> fileMap(List<FileDownloadLog> logs) {
+        List<Long> ids = logs.stream().map(FileDownloadLog::getFileId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return fileMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(FileStorage::getId, Function.identity(), (a, b) -> a));
     }
 
     @Override
@@ -264,6 +315,21 @@ public class FileServiceImpl implements FileService {
     private String extension(String filename) {
         int idx = filename.lastIndexOf('.');
         return idx < 0 ? "" : filename.substring(idx + 1).toLowerCase();
+    }
+
+    /**
+     * 别名归一（V23）：去首尾空白；空串归一为 null（回退显示 originalName）；
+     * 超长直接拒（列 VARCHAR(255)）。上传与编辑别名共用，保证两处口径一致。
+     */
+    private String normalizeAlias(String alias) {
+        if (!StringUtils.hasText(alias)) {
+            return null;
+        }
+        String trimmed = alias.trim();
+        if (trimmed.length() > 255) {
+            throw new BizException("文件别名过长（最多 255 字符）");
+        }
+        return trimmed;
     }
 
     private String sha256(Path path) throws IOException {
@@ -342,6 +408,7 @@ public class FileServiceImpl implements FileService {
         vo.setId(f.getId());
         vo.setFileName(f.getFileName());
         vo.setOriginalName(f.getOriginalName());
+        vo.setAlias(f.getAlias());
         vo.setFileType(f.getFileType());
         vo.setBizType(f.getBizType());
         vo.setBizId(f.getBizId());

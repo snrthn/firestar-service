@@ -227,13 +227,17 @@ public class DatabaseCheckService {
          * V20（file_biz_type 字典）新增 1 个字典类型与 7 个字典项，故 dictTypeCount 26→27、
          * dictDataCount 91→98（V20 另将 15 行中文 status 归一为 ENABLED，不改变行数）。
          * V21（audit_operation 补 UPLOAD）新增 1 个字典项，dictDataCount 98→99。
-         * ⚠️ 本类常量已两次（V19/V20）因「迁移改了种子数却没同步这里」触发 503，
-         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
+        * V22（字典对齐真实数据）净变化：+1 类型（audit_target_type）、
+        * permission_action 6→3（-3）、dict_style 3→5（+2）、audit_target_type +6 数据，
+        * 故 dictTypeCount 27→28、dictDataCount 99→104（已用真实库对账，见迁移头注释）。
+        * V24（file_type 补 AUDIO/VIDEO）新增 2 个字典项，dictDataCount 104→106。
+        * ⚠️ 本类常量已三次（V19/V20/V22）因「迁移改了种子数却没同步这里」触发 503，
+        *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 27, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 99, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 28, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 106, errors));
         result.put("configCount", countOf(conn, "sys_config", 5, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

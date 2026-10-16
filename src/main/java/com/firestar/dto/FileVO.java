@@ -28,6 +28,9 @@ public class FileVO implements Serializable {
     /** 原始文件名（展示用） */
     private String originalName;
 
+    /** 文件别名（文件管理处维护，展示/审计用；为空回退 originalName） */
+    private String alias;
+
     /** 文件类型（字典 file_type） */
     private String fileType;
 

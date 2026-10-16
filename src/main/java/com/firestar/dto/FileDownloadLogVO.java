@@ -25,6 +25,9 @@ public class FileDownloadLogVO implements Serializable {
     /** 文件名（冗余，便于列表直接展示；文件被删后仍能看出下载过什么） */
     private String fileName;
 
+    /** 文件别名（V23 随 fileName 一起按 fileId 回查带出；为空回退 fileName） */
+    private String alias;
+
     private String bizType;
 
     private Long bizId;

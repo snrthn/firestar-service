@@ -23,8 +23,9 @@ public interface FileService {
      * @param bizType  关联业务类型（invoice/receipt 等，为空归到 common）
      * @param bizId    关联业务 ID，可空
      * @param fileType 文件类型（字典 file_type），为空用 ATTACHMENT
+     * @param alias    文件别名（V23，可空；文件管理处维护，仅展示/审计用）
      */
-    FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType);
+    FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType, String alias);
 
     /** 文件分页列表（默认只含 NORMAL，已删除的不出现在列表中）。 */
     IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, String fileType, String keyword);
@@ -34,9 +35,17 @@ public interface FileService {
 
     /**
      * 生成访问地址：预览传 preview=true（inline），下载传 false（attachment）。
-     * 同时累加下载次数并写入下载记录（红线 5：谁下载了什么、什么时间）。
+     * 下载时累加下载次数并写入下载记录（红线 5：谁下载了什么、什么时间）；
+     * ⚠️ 预览不计数、不写记录 —— 预览不是下载行为，计进去会污染审计口径
+     * （2026-10-16 修：此前 accessUrl 对预览也无条件 +1 并落下载记录）。
      */
     String accessUrl(Long id, boolean preview, HttpServletRequest request);
+
+    /**
+     * 更新文件别名（V23；文件管理处维护，仅展示/审计用）。
+     * 留审计（@Auditable UPDATE/FILE），可清空（传空串回退显示 originalName）。
+     */
+    FileVO updateAlias(Long id, String alias);
 
     /**
      * 删除文件。按项目分层约定（sys_ 表不带逻辑删除、靠 status 停用），
@@ -45,8 +54,13 @@ public interface FileService {
      */
     void delete(Long id);
 
-    /** 某文件的下载记录分页列表。 */
-    IPage<FileDownloadLogVO> downloadLogs(Long fileId, Integer pageNum, Integer pageSize);
+    /**
+     * 某文件的下载记录分页列表。
+     *
+     * @param keyword 文件名/别名模糊匹配（V23：下载记录表本身不存文件名，
+     *                先反查 sys_file_storage 得 fileId 再过滤，参数化查询无注入）
+     */
+    IPage<FileDownloadLogVO> downloadLogs(Long fileId, Integer pageNum, Integer pageSize, String keyword);
 
     /**
      * 由后端代理输出文件内容（仅本地存储模式需要）。
