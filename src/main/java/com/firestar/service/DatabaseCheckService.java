@@ -222,14 +222,18 @@ public class DatabaseCheckService {
      * 必须同步更新（V16 补 menu_type「外链」字典项 → dictDataCount 82→83，
      * 2026-10-15 探针误报「V2 未完整执行」实为常量未跟上）。
      *
-     * V19（文件/日志模块）新增 3 个字典类型（login_status / file_status / storage_type）
-     * 与 8 个字典项，故 dictTypeCount 23→26、dictDataCount 83→91。
-     * 2026-10-16 同样因常量未跟上导致 /actuator/health 完整检查 503。
+         * V19（文件/日志模块）新增 3 个字典类型（login_status / file_status / storage_type）
+         * 与 8 个字典项，故 dictTypeCount 23→26、dictDataCount 83→91。
+         * V20（file_biz_type 字典）新增 1 个字典类型与 7 个字典项，故 dictTypeCount 26→27、
+         * dictDataCount 91→98（V20 另将 15 行中文 status 归一为 ENABLED，不改变行数）。
+         * V21（audit_operation 补 UPLOAD）新增 1 个字典项，dictDataCount 98→99。
+         * ⚠️ 本类常量已两次（V19/V20）因「迁移改了种子数却没同步这里」触发 503，
+         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 26, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 91, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 27, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 99, errors));
         result.put("configCount", countOf(conn, "sys_config", 5, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

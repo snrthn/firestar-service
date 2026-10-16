@@ -25,6 +25,8 @@ target/
 .temp/
 .tmp/
 
+uploads/
+
 ### Local secrets (dotenv style) ###
 .env/*
 !.env/example.env
