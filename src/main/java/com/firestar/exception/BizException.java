@@ -19,4 +19,10 @@ public class BizException extends RuntimeException {
     public BizException(String message) {
         this(500, message);
     }
+
+    /** 带 cause：透传底层异常（如 OSS SDK 的网络错误），保证堆栈链完整可查 */
+    public BizException(String message, Throwable cause) {
+        super(message, cause);
+        this.code = 500;
+    }
 }

@@ -12,6 +12,7 @@ import com.firestar.exception.BizException;
 import com.firestar.service.FileStorageService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -49,6 +50,7 @@ import java.util.Date;
  * <b>fire-star-prod</b>，因此只有 prod 能享受预览；test / pre 共用 fire-star-stage，
  * 无自定义域名，图片只能下载（PDF 预览不受此限制）。
  */
+@Slf4j
 @Service
 @ConditionalOnProperty(name = "firestar.storage.type", havingValue = "oss")
 public class AliyunOssStorageServiceImpl implements FileStorageService {
@@ -160,7 +162,12 @@ public class AliyunOssStorageServiceImpl implements FileStorageService {
             ossClient.putObject(bucket, withBaseDir(objectKey), in, meta);
             return bucket;
         } catch (Exception e) {
-            throw new BizException("上传文件到 OSS 失败：" + e.getMessage());
+            // ⚠️ 必须打完整堆栈 + 带 cause 抛：OSS SDK 的 "Failed to reset the request
+            // input stream" 是二手错误（第一次请求在连接层失败、重试时 reset 流失败，
+            // 原始网络错误被吞）。只取 getMessage() 会把 SSL/timeout/连接重置的真相
+            // 全丢掉，线上日志只剩一行看不懂的话——2026-10-16 生产排查的教训。
+            log.error("上传 OSS 失败，bucket={}, objectKey={}", bucket, withBaseDir(objectKey), e);
+            throw new BizException("上传文件到 OSS 失败：" + e.getMessage(), e);
         }
     }
 
@@ -170,7 +177,8 @@ public class AliyunOssStorageServiceImpl implements FileStorageService {
             // 幂等：对象不存在时 OSS 仍返回 204，不会报错，便于「写 DB 失败回滚」调用
             ossClient.deleteObject(properties.getOss().getBucket(), withBaseDir(objectKey));
         } catch (Exception e) {
-            throw new BizException("删除 OSS 文件失败：" + e.getMessage());
+            log.error("删除 OSS 文件失败，objectKey={}", withBaseDir(objectKey), e);
+            throw new BizException("删除 OSS 文件失败：" + e.getMessage(), e);
         }
     }
 
