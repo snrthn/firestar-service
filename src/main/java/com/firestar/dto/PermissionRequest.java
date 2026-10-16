@@ -2,8 +2,6 @@ package com.firestar.dto;
 
 import lombok.Data;
 
-import java.util.List;
-
 /**
  * 权限管理表单（创建 / 修改共用）。
  * permCode 创建后不可改（角色授权按 ID 关联，但编码是程序 @PreAuthorize 的引用标识，
