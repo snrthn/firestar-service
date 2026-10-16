@@ -11,6 +11,7 @@ import com.firestar.entity.Post;
 import com.firestar.entity.Role;
 import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
+import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.OrgMapper;
 import com.firestar.mapper.PostMapper;
@@ -175,6 +176,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @Auditable(operationType = "CREATE", targetType = "USER", targetIdSpEl = "#result", entityClass = User.class, fields = {"username", "nickname", "status", "deptId", "phone", "email"})
     public Long createUser(UserRequest req) {
         String username = req.getUsername() == null ? "" : req.getUsername().trim();
         String nickname = req.getNickname() == null ? "" : req.getNickname().trim();
@@ -224,6 +226,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @Auditable(operationType = "UPDATE", targetType = "USER", targetIdSpEl = "#id", entityClass = User.class, fields = {"username", "nickname", "status", "deptId", "phone", "email"})
     public void updateUser(Long id, UserRequest req) {
         User exist = userMapper.selectById(id);
         if (exist == null) {
@@ -260,6 +263,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @Auditable(operationType = "DELETE", targetType = "USER", targetIdSpEl = "#id", entityClass = User.class, fields = {"username", "status", "nickname"})
     public void deleteUser(Long id) {
         User exist = userMapper.selectById(id);
         if (exist == null) {

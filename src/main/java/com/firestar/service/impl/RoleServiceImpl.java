@@ -13,6 +13,7 @@ import com.firestar.entity.Role;
 import com.firestar.entity.RoleMenu;
 import com.firestar.entity.RolePermission;
 import com.firestar.entity.UserRole;
+import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.MenuMapper;
 import com.firestar.mapper.PermissionMapper;
@@ -94,6 +95,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    @Auditable(operationType = "CREATE", targetType = "ROLE", targetIdSpEl = "#result", entityClass = Role.class, fields = {"roleCode", "roleName", "status", "sortNo", "remark"})
     public Long createRole(RoleRequest req) {
         Role role = new Role();
         applyForm(role, req, null);
@@ -102,6 +104,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    @Auditable(operationType = "UPDATE", targetType = "ROLE", targetIdSpEl = "#id", entityClass = Role.class, fields = {"roleCode", "roleName", "status", "sortNo", "remark"})
     public void updateRole(Long id, RoleRequest req) {
         Role exist = roleMapper.selectById(id);
         if (exist == null) {
@@ -121,6 +124,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    @Auditable(operationType = "DELETE", targetType = "ROLE", targetIdSpEl = "#id", entityClass = Role.class, fields = {"roleCode", "roleName", "status"})
     public void deleteRole(Long id) {
         Role exist = roleMapper.selectById(id);
         if (exist == null) {

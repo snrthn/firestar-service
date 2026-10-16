@@ -9,6 +9,7 @@ import com.firestar.dto.DictTypeRequest;
 import com.firestar.dto.DictTypeVO;
 import com.firestar.entity.DictData;
 import com.firestar.entity.DictType;
+import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.DictTypeMapper;
@@ -90,6 +91,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "CREATE", targetType = "DICT_TYPE", targetIdSpEl = "#result", entityClass = DictType.class, fields = {"typeCode", "typeName", "status", "remark"})
     public Long createType(DictTypeRequest req) {
         applyTypeCheck(req, null);
         DictType type = new DictType();
@@ -102,6 +104,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "UPDATE", targetType = "DICT_TYPE", targetIdSpEl = "#id", entityClass = DictType.class, fields = {"typeCode", "typeName", "status", "remark"})
     public void updateType(Long id, DictTypeRequest req) {
         DictType exist = dictTypeMapper.selectById(id);
         if (exist == null) {
@@ -118,6 +121,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "DELETE", targetType = "DICT_TYPE", targetIdSpEl = "#id", entityClass = DictType.class, fields = {"typeCode", "typeName", "status"})
     public void deleteType(Long id) {
         DictType exist = dictTypeMapper.selectById(id);
         if (exist == null) {
@@ -159,6 +163,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "CREATE", targetType = "DICT_DATA", targetIdSpEl = "#result", entityClass = DictData.class, fields = {"typeCode", "dictLabel", "dictValue", "sortNo", "status", "remark"})
     public Long createData(DictDataRequest req) {
         applyDataCheck(req, null);
         DictData data = new DictData();
@@ -175,6 +180,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "UPDATE", targetType = "DICT_DATA", targetIdSpEl = "#id", entityClass = DictData.class, fields = {"typeCode", "dictLabel", "dictValue", "sortNo", "status", "remark"})
     public void updateData(Long id, DictDataRequest req) {
         DictData exist = dictDataMapper.selectById(id);
         if (exist == null) {
@@ -195,6 +201,7 @@ public class DictServiceImpl implements DictService {
     }
 
     @Override
+    @Auditable(operationType = "DELETE", targetType = "DICT_DATA", targetIdSpEl = "#id", entityClass = DictData.class, fields = {"typeCode", "dictLabel", "dictValue", "status"})
     public void deleteData(Long id) {
         DictData exist = dictDataMapper.selectById(id);
         if (exist == null) {

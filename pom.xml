@@ -61,6 +61,12 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!-- AOP：审计切面（@Auditable 自动落库 sys_audit_log）。Spring Boot 自动启用 @Aspect 代理 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <!-- JWT：jjwt 0.12.x（Spring Boot 3 / Java 17 兼容） -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

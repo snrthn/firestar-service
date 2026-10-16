@@ -54,7 +54,7 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginResponse> login(@RequestBody LoginRequest req, HttpServletRequest request) {
         // 真实 IP 由反代头推导（直连时退化为 remoteAddr），登录成功写入 last_login_ip
-        return Result.success(authService.login(req, IpUtil.getClientIp(request)));
+        return Result.success(authService.login(req, IpUtil.getClientIp(request), request.getHeader("User-Agent")));
     }
 
     @PostMapping("/logout")

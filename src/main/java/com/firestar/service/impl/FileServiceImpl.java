@@ -10,6 +10,7 @@ import com.firestar.dto.FileVO;
 import com.firestar.entity.FileDownloadLog;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.User;
+import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.FileDownloadLogMapper;
 import com.firestar.mapper.FileStorageMapper;
@@ -82,6 +83,7 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
+    @Auditable(operationType = "UPLOAD", targetType = "FILE", targetIdSpEl = "#result.id", entityClass = FileStorage.class, fields = {"originalName", "fileType", "bizType", "fileSize", "storageType", "status"})
     public FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType) {
         if (file == null || file.isEmpty()) {
             throw new BizException("请选择要上传的文件");
@@ -188,6 +190,7 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
+    @Auditable(operationType = "DELETE", targetType = "FILE", targetIdSpEl = "#id", entityClass = FileStorage.class, fields = {"originalName", "fileType", "bizType", "status"})
     public void delete(Long id) {
         load(id);
         // ⚠️ 不删 OSS 对象、不物理删 DB 行：财务凭证有合规保留期，

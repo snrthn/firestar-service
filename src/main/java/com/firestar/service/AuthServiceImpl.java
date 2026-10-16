@@ -20,8 +20,10 @@ import com.firestar.entity.Role;
 import com.firestar.entity.RoleMenu;
 import com.firestar.entity.RolePermission;
 import com.firestar.entity.User;
+import com.firestar.entity.LoginLog;
 import com.firestar.entity.UserRole;
 import com.firestar.exception.BizException;
+import com.firestar.service.LogService;
 import com.firestar.mapper.MenuMapper;
 import com.firestar.mapper.OrgMapper;
 import com.firestar.mapper.PermissionMapper;
@@ -38,6 +40,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import com.firestar.realtime.RealtimeEvent;
 import com.firestar.realtime.RealtimeEventType;
+
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -56,6 +60,7 @@ import java.util.stream.Collectors;
  * 角色 / 权限 / 菜单均通过 RBAC 关联表实时查询，不缓存（保证权限变更即时生效）。
  */
 @Service
+@Slf4j
 public class AuthServiceImpl implements AuthService {
 
     private final UserMapper userMapper;
@@ -71,6 +76,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtUtil jwtUtil;
     private final JwtProperties jwtProperties;
     private final ApplicationEventPublisher eventPublisher;
+    private final LogService logService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
@@ -79,6 +85,7 @@ public class AuthServiceImpl implements AuthService {
                            MenuMapper menuMapper, OrgMapper orgMapper, PostMapper postMapper,
                            TokenBlacklistService blacklistService,
                            JwtUtil jwtUtil, JwtProperties jwtProperties,
+                           LogService logService,
                            ApplicationEventPublisher eventPublisher) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
@@ -93,18 +100,23 @@ public class AuthServiceImpl implements AuthService {
         this.jwtUtil = jwtUtil;
         this.jwtProperties = jwtProperties;
         this.eventPublisher = eventPublisher;
+        this.logService = logService;
     }
 
     @Override
-    public LoginResponse login(LoginRequest req, String clientIp) {
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, req.getUsername()));
+    public LoginResponse login(LoginRequest req, String clientIp, String userAgent) {
+        String username = req.getUsername();
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
         if (user == null) {
+            recordLogin(null, username, "FAIL", clientIp, userAgent, "用户名或密码错误");
             throw new BizException("用户名或密码错误");
         }
         if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+            recordLogin(user.getId(), username, "FAIL", clientIp, userAgent, "用户名或密码错误");
             throw new BizException("用户名或密码错误");
         }
         if (!"ENABLED".equals(user.getStatus())) {
+            recordLogin(user.getId(), username, "FAIL", clientIp, userAgent, "账号已被禁用，请联系管理员");
             throw new BizException("账号已被禁用，请联系管理员");
         }
         List<RoleVO> roles = loadRoles(user.getId());
@@ -113,22 +125,32 @@ public class AuthServiceImpl implements AuthService {
         // 生成 token（含唯一 jti），登录即轮换「当前有效会话」
         String token = jwtUtil.generateToken(user.getUsername(), roleCodes);
 
+        // 单点登录：若此前已有有效会话（current_jti 非空且不同于本次），旧会话即被顶替。
+        // 先记一条 KICKED_OUT（被顶下线的原会话），再记本次 SUCCESS。
+        String oldJti = user.getCurrentJti();
+        String newJti = jwtUtil.getJti(token);
+        boolean kicked = oldJti != null && !oldJti.equals(newJti);
+
         // 最后登录时间 / IP / current_jti 一并写入。current_jti 覆盖旧值即单点登录核心：
         // 该账号其它已登录设备的 token 因 jti 不再匹配，下次请求即被 filter 拒绝。
         // clientIp 为 null（取不到时）不写该列，保留历史值而不是覆盖成空
         LambdaUpdateWrapper<User> upd = new LambdaUpdateWrapper<User>()
                 .eq(User::getId, user.getId())
                 .set(User::getLastLoginAt, LocalDateTime.now())
-                .set(User::getCurrentJti, jwtUtil.getJti(token));
+                .set(User::getCurrentJti, newJti);
         if (clientIp != null) {
             upd.set(User::getLastLoginIp, clientIp);
         }
         userMapper.update(null, upd);
 
         // 单点登录：登录即轮换 current_jti，旧设备 token 的 jti 不再匹配。
-        // 发布 FORCE_LOGOUT 事件，推送网关找到该用户旧 SSE 连接即时通知其失效（毫秒级），
-        // 不再依赖 5s 心跳轮询。新设备 SSE 尚未建立，不受影响。
+        // 发布 FORCE_LOGOUT 事件，推送网关找到该用户旧 SSE 连接即时通知其失效（毫秒级）。
         eventPublisher.publishEvent(new RealtimeEvent(this, RealtimeEventType.FORCE_LOGOUT, user.getUsername(), null));
+
+        if (kicked) {
+            recordLogin(user.getId(), username, "KICKED_OUT", clientIp, userAgent, "账号在其他设备登录，原会话已失效");
+        }
+        recordLogin(user.getId(), username, "SUCCESS", clientIp, userAgent, null);
 
         LoginResponse resp = new LoginResponse();
         resp.setToken(token);
@@ -138,6 +160,28 @@ public class AuthServiceImpl implements AuthService {
         resp.setForceChangePassword(user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
         resp.setRoles(roleCodes);
         return resp;
+    }
+
+    /**
+     * 记录一条登录日志（旁路，独立 REQUIRES_NEW 事务，失败不影响登录主流程）。
+     * 状态取值见字典 login_status：SUCCESS / FAIL / KICKED_OUT。
+     */
+    private void recordLogin(Long userId, String username, String status,
+                             String clientIp, String userAgent, String failReason) {
+        try {
+            LoginLog ll = new LoginLog();
+            ll.setUserId(userId);
+            ll.setUsername(username);
+            ll.setLoginStatus(status);
+            ll.setIpAddress(clientIp);
+            ll.setUserAgent(userAgent);
+            ll.setFailReason(failReason);
+            ll.setLoginAt(LocalDateTime.now());
+            logService.saveLogin(ll);
+        } catch (Exception e) {
+            // 审计旁路失败不应阻断登录
+            log.warn("登录日志写入失败: {}", e.getMessage());
+        }
     }
 
     @Override

@@ -6,6 +6,7 @@ import com.firestar.common.MenuTreeUtil;
 import com.firestar.dto.MenuRequest;
 import com.firestar.dto.MenuVO;
 import com.firestar.entity.Menu;
+import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.MenuMapper;
 import com.firestar.service.MenuService;
@@ -37,6 +38,7 @@ public class MenuServiceImpl implements MenuService {
     }
 
     @Override
+    @Auditable(operationType = "CREATE", targetType = "MENU", targetIdSpEl = "#result", entityClass = Menu.class, fields = {"menuName", "parentId", "routePath", "component", "permCode", "menuType", "sortNo", "visible", "status", "icon"})
     public Long create(MenuRequest req) {
         Menu menu = new Menu();
         applyForm(menu, req);
@@ -45,6 +47,7 @@ public class MenuServiceImpl implements MenuService {
     }
 
     @Override
+    @Auditable(operationType = "UPDATE", targetType = "MENU", targetIdSpEl = "#id", entityClass = Menu.class, fields = {"menuName", "parentId", "routePath", "component", "permCode", "menuType", "sortNo", "visible", "status", "icon"})
     public void update(Long id, MenuRequest req) {
         Menu exist = menuMapper.selectById(id);
         if (exist == null) {
@@ -59,6 +62,7 @@ public class MenuServiceImpl implements MenuService {
     }
 
     @Override
+    @Auditable(operationType = "DELETE", targetType = "MENU", targetIdSpEl = "#id", entityClass = Menu.class, fields = {"menuName", "routePath", "menuType", "status"})
     public void delete(Long id) {
         Menu exist = menuMapper.selectById(id);
         if (exist == null) {
