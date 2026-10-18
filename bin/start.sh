@@ -142,11 +142,12 @@ if [ "$OS" = "windows" ] && [ "${SPRING_PROFILE:-dev}" != "production" ]; then
   if command -v mvn >/dev/null 2>&1; then
     BUILD_LOG="$APP_HOME/logs/build.log"
     mkdir -p "$APP_HOME/logs"
-    echo "[start] 本地开发模式：mvn package 重建产物（跳过测试）..."
-    if mvn -q package -DskipTests >> "$BUILD_LOG" 2>&1; then
+    echo "[start] 本地开发模式：mvn clean package 重建产物（跳过测试）..."
+    if mvn -q clean package -DskipTests >> "$BUILD_LOG" 2>&1; then
       echo "[start] 构建完成 -> $BUILD_LOG"
     else
-      echo "[start] mvn package 失败（详见 $BUILD_LOG），仍尝试用已有 jar 启动" >&2
+      echo "[start] mvn clean package 失败（详见 $BUILD_LOG），拒绝启动以免使用旧/损坏产物。" >&2
+      exit 1
     fi
   else
     echo "[start] 未找到 mvn 命令，跳过自动构建，使用已有 jar" >&2
