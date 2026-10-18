@@ -6,9 +6,13 @@ import com.firestar.common.MenuTreeUtil;
 import com.firestar.dto.MenuRequest;
 import com.firestar.dto.MenuVO;
 import com.firestar.entity.Menu;
+import com.firestar.entity.Permission;
+import com.firestar.entity.RoleMenu;
 import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.MenuMapper;
+import com.firestar.mapper.PermissionMapper;
+import com.firestar.mapper.RoleMenuMapper;
 import com.firestar.service.MenuService;
 import org.springframework.stereotype.Service;
 
@@ -24,9 +28,13 @@ import java.util.Set;
 public class MenuServiceImpl implements MenuService {
 
     private final MenuMapper menuMapper;
+    private final RoleMenuMapper roleMenuMapper;
+    private final PermissionMapper permissionMapper;
 
-    public MenuServiceImpl(MenuMapper menuMapper) {
+    public MenuServiceImpl(MenuMapper menuMapper, RoleMenuMapper roleMenuMapper, PermissionMapper permissionMapper) {
         this.menuMapper = menuMapper;
+        this.roleMenuMapper = roleMenuMapper;
+        this.permissionMapper = permissionMapper;
     }
 
     @Override
@@ -72,6 +80,14 @@ public class MenuServiceImpl implements MenuService {
                 .eq(Menu::getParentId, id));
         if (childCount != null && childCount > 0) {
             throw new BizException("该菜单存在子菜单，请先删除或移走子菜单");
+        }
+        // 引用完整性（主数据保护）：菜单被多个角色共享，被角色引用时遵循 Restrict 原则拒删，
+        // 与 PermissionServiceImpl.delete 对 sys_permission 的处理口径一致（对齐若依 / Keycloak）。
+        // 此前缺失此校验，物理删除菜单后会在 sys_role_menu 留下孤儿关联行。
+        Long roleRefCount = roleMenuMapper.selectCount(new LambdaQueryWrapper<RoleMenu>()
+                .eq(RoleMenu::getMenuId, id));
+        if (roleRefCount != null && roleRefCount > 0) {
+            throw new BizException("该菜单已被角色引用，请先在角色授权中移除");
         }
         menuMapper.deleteById(id);
     }
@@ -152,6 +168,16 @@ public class MenuServiceImpl implements MenuService {
         String permCode = req.getPermCode() == null ? null : req.getPermCode().trim();
         if ("BUTTON".equals(menuType) && (permCode == null || permCode.isEmpty())) {
             throw new BizException("菜单类型为「按钮」时，权限编码必填");
+        }
+        // 逻辑外键存在性校验：menu.perm_code → sys_permission.perm_code 是字符串软关联（无物理外键）。
+        // 不校验会让菜单挂着不存在的权限编码，运行时权限判定静默失效。BUTTON 必填，其它类型可空但
+        // 一旦填写就必须指向真实存在的权限，从源头堵住悬挂引用（如删了接口权限后按钮菜单悬空）。
+        if (permCode != null && !permCode.isEmpty()) {
+            Long permCount = permissionMapper.selectCount(new LambdaQueryWrapper<Permission>()
+                    .eq(Permission::getPermCode, permCode));
+            if (permCount == null || permCount == 0) {
+                throw new BizException("权限编码「" + permCode + "」在权限表中不存在");
+            }
         }
         // 外链地址：LINK 必填 + 协议白名单（只放行 http/https，天然拦截
         // javascript:/data: 等危险协议）+ 长度兜底（列宽 500）。

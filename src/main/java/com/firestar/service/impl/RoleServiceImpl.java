@@ -138,9 +138,11 @@ public class RoleServiceImpl implements RoleService {
         if (userCount != null && userCount > 0) {
             throw new BizException("该角色下有关联用户，请先调整用户角色");
         }
-        // 连带清理角色权限关联，避免留下孤儿授权记录
+        // 连带清理角色权限 / 菜单关联，避免留下孤儿授权记录（此前只清了 permission，漏了 menu）
         rolePermissionMapper.delete(new LambdaQueryWrapper<RolePermission>()
                 .eq(RolePermission::getRoleId, id));
+        roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
+                .eq(RoleMenu::getRoleId, id));
         roleMapper.deleteById(id);
     }
 
