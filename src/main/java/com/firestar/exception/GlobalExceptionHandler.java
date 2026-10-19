@@ -2,11 +2,14 @@ package com.firestar.exception;
 
 import com.firestar.common.Result;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 全局异常处理器。注意：JWT 校验失败发生在 Filter 阶段（早于 DispatcherServlet），
@@ -42,6 +45,29 @@ public class GlobalExceptionHandler {
         int status = e.getStatusCode().value();
         String msg = e.getReason() != null ? e.getReason() : "请求处理失败";
         return ResponseEntity.status(status).body(Result.error(status, msg));
+    }
+
+    /**
+     * ⚠️ 404 必须显式处理，否则会被下面的兜底 handler 收走 →
+     * HTTP 200 + {"code":500,"message":"服务器内部错误"}。
+     *
+     * <p>这条是实测发现的真问题（2026-10-19）：请求一个不存在的路径时，
+     * Spring 6.1 的静态资源处理器抛 {@link NoResourceFoundException}，
+     * 它是 RuntimeException 子类，正好落进 {@code @ExceptionHandler(Exception.class)}。
+     * 后果有三个：
+     * <ol>
+     *   <li>调用方拿到的不是 404：前端按 body.code 弹「服务器内部错误」，
+     *       排查时会一直怀疑后端崩了，而其实是路径打错；</li>
+     *   <li>网关 / 监控 / CI 的 {@code curl -f} 看不出「路径不存在」，全按 200 成功处理；</li>
+     *   <li>安全层面的误导：扫描器探测不存在的管理端路径，也会收到"服务正常"的 200。</li>
+     * </ol>
+     * 用 ResponseEntity 而不是 Result，才能把 404 状态码带回响应
+     * （与 {@link ResponseStatusException} 那条同一个道理）。
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<Result<Void>> handleNotFound(Exception e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Result.error(404, "接口不存在"));
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,13 +1,21 @@
 package com.firestar;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,33 +48,50 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 这个测试存在的意义：把上述三条契约钉死，
  * 防止后来有人觉得"双映射是冗余的""再加个 summary 更轻量"
  * "actuator 那个更标准"而改回去。
+ *
+ * 【2026-10-19 安全收口后本类的前提变了】
+ * /system/db-check 不再是匿名接口：必须带有效 JWT（**登录即可，不再要求细粒度权限点**）。
+ * 所以本类统一以管理员身份调用，匿名访问必须 401 的那一半契约搬到 SecurityExposureTest 里断言 ——
+ * 两个类职责分开：这里测「路径/映射契约」，那边测「谁能访问」。
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("dev")
+@WithMockUser(username = "admin", authorities = "ROLE_ADMIN")
 class DatabaseCheckEndpointTest {
 
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    private JsonNode readJson(MvcResult result) throws Exception {
+        return objectMapper.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8));
+    }
+
     @Test
-    @DisplayName("1. /system/db-check 正常返回 200 + healthy=true")
+    @DisplayName("1. /system/db-check 正常返回 200 + healthy=true（断契约，不钉具体表数）")
     void dbCheckReturnsOk() throws Exception {
-        mockMvc.perform(get("/system/db-check"))
+        MvcResult result = mockMvc.perform(get("/system/db-check"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.healthy").value(true))
-                .andExpect(jsonPath("$.tables.businessTableCount").value(25))
-                .andExpect(jsonPath("$.tables.expected").value(25))
-                .andExpect(jsonPath("$.tables.matched").value(true))
-                .andExpect(jsonPath("$.tables.otherTableCount").value(0))
-                .andExpect(jsonPath("$.tables.engineTableCount").value(62))
-                .andExpect(jsonPath("$.flyway.currentVersion").value("3"))
-                .andExpect(jsonPath("$.flyway.appliedCount").value(3))
-                .andExpect(jsonPath("$.seedData.dictTypeCount").value(23))
-                .andExpect(jsonPath("$.seedData.dictDataCount").value(82))
-                .andExpect(jsonPath("$.connection.catalog").value("firestar"))
-                .andExpect(jsonPath("$.connection.productName").value("MySQL"))
-                .andExpect(jsonPath("$.errors").isEmpty());
+                .andReturn();
+        JsonNode body = readJson(result);
+        assertTrue(body.path("healthy").asBoolean(), "自检未通过：" + body.path("errors"));
+
+        JsonNode tables = body.path("tables");
+        // 【2026-10-19 改法说明】原断言把 businessTableCount=25 / engineTableCount=62 /
+        // flyway=3 / dict 条数全写成字面量，等于给数据库拍了一张快照：
+        // V4 加了 RBAC 三张表、后续再加迁移，测试就永久变红，而业务本身完全正常。
+        // 现在只钉「不变量」：业务表数 == 代码基线、没有基线外的游离表、迁移跑过。
+        assertEquals(tables.path("expected").asInt(), tables.path("businessTableCount").asInt(),
+                "业务表数与 EXPECTED_TABLE_COUNT 不一致");
+        assertTrue(tables.path("matched").asBoolean(), "表清单与基线不匹配");
+        assertEquals(0, tables.path("otherTableCount").asInt(),
+                "库里有基线之外的表：" + tables.path("otherTables"));
+        assertTrue(body.path("errors").isEmpty(), "自检报告有错误项");
+        assertEquals("firestar", body.path("connection").path("catalog").asText());
+        assertTrue(body.path("flyway").path("appliedCount").asInt() >= 3, "Flyway 迁移一个都没应用");
     }
 
     @Test

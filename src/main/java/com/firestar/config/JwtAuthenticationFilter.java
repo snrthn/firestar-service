@@ -67,11 +67,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // 单点登录：校验 token 的 jti 是否仍是该用户「当前有效会话」。
                 // current_jti 为 null 视为尚未纳入管控（迁移前已登录的旧会话），放行；
                 // 一旦该用户重新登录写入 current_jti，旧会话即因 jti 不匹配被踢。
+                //
+                // ⚠️ 必须同时查 status（2026-10-19 补）：此前只查 current_jti，
+                // 管理员在后台把账号停用（DISABLED）后，该用户手里未过期的 token
+                // 仍能继续访问 2 小时 —— 「停用」形同虚设。这里把状态判定并进同一次查询，
+                // 换来的代价是零（原本就要查这一行）。
+                // ⚠️ select 里必须带上恒非空的 username：只选 current_jti 时该列为 NULL
+                // 会导致 MyBatis 不创建行对象（returnInstanceForEmptyRow=false）→
+                // 「用户存在」被误判成「用户不存在」（同类坑见 SseEndpointSupport 注释）。
                 String jti = claims.getId();
                 User sessionUser = userMapper.selectOne(new LambdaQueryWrapper<User>()
                         .eq(User::getUsername, username)
-                        .select(User::getCurrentJti));
-                if (sessionUser != null && sessionUser.getCurrentJti() != null
+                        .select(User::getUsername, User::getStatus, User::getCurrentJti));
+                if (sessionUser == null) {
+                    // 用户已被物理删除，token 立即作废（旧实现是「查不到就放行」）
+                    writeUnauthorized(response, "用户不存在或登录已失效");
+                    return;
+                }
+                if (!"ENABLED".equals(sessionUser.getStatus())) {
+                    writeUnauthorized(response, "账号已被禁用，请联系管理员");
+                    return;
+                }
+                if (sessionUser.getCurrentJti() != null
                         && !sessionUser.getCurrentJti().equals(jti)) {
                     writeUnauthorized(response, "您的账号已在其他设备登录，原会话已失效，请重新登录");
                     return;

@@ -68,6 +68,44 @@ public class FileServiceImpl implements FileService {
     /** 与 application.properties 的 spring.servlet.multipart.max-file-size 保持一致，此处为二次兜底 */
     private static final long MAX_SIZE = 20L * 1024 * 1024;
 
+    /**
+     * 扩展名 → 对外 Content-Type 白名单（**只由服务端按扩展名决定，绝不回放客户端声明**）。
+     *
+     * <p>【为什么必须这样：同源存储型 XSS】
+     * 原实现把 {@code file.getContentType()}（完全由客户端控制的 multipart 头）存进
+     * sys_file_storage.mime_type，再在 {@code /files/{id}/raw} 里原样 setContentType 回放。
+     * 攻击者上传一个内容为 {@code <script>...</script>} 的 {@code a.txt}，把 multipart 里的
+     * Content-Type 写成 {@code text/html}，就能拿到一个**与管理系统同源**的 HTML 页面：
+     * 诱导管理员打开即可读取 localStorage 里的 token（前端就是存这儿）、以管理员身份调接口。
+     * 扩展名白名单挡不住这一手 —— .txt 是允许的，问题出在被信任的 MIME 头。
+     *
+     * <p>所以：类型只认扩展名，映射不到的一律 {@code application/octet-stream}
+     * （浏览器只会下载、不会渲染），并附带 {@code X-Content-Type-Options: nosniff}
+     * 禁止浏览器自作聪明嗅探。
+     */
+    private static final Map<String, String> SAFE_CONTENT_TYPE = Map.ofEntries(
+            Map.entry("pdf", "application/pdf"),
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
+            Map.entry("png", "image/png"),
+            Map.entry("gif", "image/gif"),
+            Map.entry("webp", "image/webp"),
+            Map.entry("bmp", "image/bmp"),
+            Map.entry("txt", "text/plain;charset=UTF-8"),
+            Map.entry("csv", "text/csv;charset=UTF-8"),
+            Map.entry("doc", "application/msword"),
+            Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            Map.entry("xls", "application/vnd.ms-excel"),
+            Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            Map.entry("zip", "application/zip"),
+            Map.entry("ofd", "application/ofd"),
+            Map.entry("mp3", "audio/mpeg"),
+            Map.entry("mp4", "video/mp4"));
+
+    /** bizType 会拼进对象键（"<bizType>/yyyy/MM/dd/uuid.ext"），只允许安全字符 */
+    private static final java.util.regex.Pattern BIZ_TYPE_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{1,32}$");
+
     private static final String STATUS_NORMAL = "NORMAL";
     private static final String STATUS_DELETED = "DELETED";
 
@@ -275,8 +313,11 @@ public class FileServiceImpl implements FileService {
     @Override
     public void stream(Long id, boolean preview, HttpServletResponse response) {
         FileStorage file = load(id);
-        response.setContentType(StringUtils.hasText(file.getMimeType())
-                ? file.getMimeType() : "application/octet-stream");
+        // ⚠️ 不再回放客户端声明的 mimeType（同源存储型 XSS，详见 SAFE_CONTENT_TYPE 注释）。
+        // 类型一律按**服务端生成的**对象键扩展名决定，未知扩展名 → 二进制流强制下载。
+        response.setContentType(safeContentType(file.getStoragePath()));
+        // 禁止浏览器嗅探：即便服务端标了 text/plain，也不许它「看内容像 HTML 就当 HTML 渲染」。
+        response.setHeader("X-Content-Type-Options", "nosniff");
         String name = URLEncoder.encode(
                 StringUtils.hasText(file.getOriginalName()) ? file.getOriginalName() : "file",
                 StandardCharsets.UTF_8);
@@ -306,6 +347,12 @@ public class FileServiceImpl implements FileService {
      */
     private String buildObjectKey(String bizType, String ext) {
         String biz = StringUtils.hasText(bizType) ? bizType.trim() : "common";
+        // bizType 由前端传入，会作为对象键的第一层目录。LocalFileStorageServiceImpl.resolve()
+        // 已有 normalize + startsWith 兜底（挡住 ../../ 穿出 uploads 目录），但那属于
+        // 「到磁盘写入那一刻才炸」的纵深防御；在这里先按白名单拒掉，报错更早也更清楚。
+        if (!BIZ_TYPE_PATTERN.matcher(biz).matches()) {
+            throw new BizException("业务类型不合法（仅允许字母、数字、下划线、短横线，最长 32 字符）");
+        }
         LocalDate today = LocalDate.now();
         return String.format("%s/%d/%02d/%02d/%s.%s",
                 biz, today.getYear(), today.getMonthValue(), today.getDayOfMonth(),
@@ -315,6 +362,15 @@ public class FileServiceImpl implements FileService {
     private String extension(String filename) {
         int idx = filename.lastIndexOf('.');
         return idx < 0 ? "" : filename.substring(idx + 1).toLowerCase();
+    }
+
+    /** 按对象键（服务端生成的 uuid.ext）扩展名给出安全 Content-Type；未知类型强制二进制下载 */
+    private String safeContentType(String objectKey) {
+        if (!StringUtils.hasText(objectKey)) {
+            return "application/octet-stream";
+        }
+        String type = SAFE_CONTENT_TYPE.get(extension(objectKey));
+        return type != null ? type : "application/octet-stream";
     }
 
     /**

@@ -5,11 +5,14 @@
 # 用法:
 #   bash bin/start.sh [port] [health-path]
 #   SPRING_PROFILE=test bash bin/start.sh 9090                 # 指定端口 + 切环境
-#   SPRING_PROFILE=prod bash bin/start.sh 2025 /actuator/health # 生产：校验数据库连通
+#   SPRING_PROFILE=prod bash bin/start.sh 2025                     # 生产：门禁用 liveness
+#   SPRING_PROFILE=prod bash bin/start.sh 2025 /actuator/health/liveness
 #
 # 说明:
 #   - Windows(Git Bash) 用 netstat 看端口占用、用 taskkill 停止；Linux 用 kill/PID 文件；
-#   - 默认健康检查打 /actuator/health；传入其它路径则按传入。
+#   - 门禁探针默认 /actuator/health/liveness（匿名、零信息披露）；
+#   - ⚠️ 别把门禁改成 /actuator/health：2026-10-19 安全收口后它需要认证，
+#     匿名轮询拿到 401 会被判成「启动超时」。完整健康改由应用启动自检写日志，见下文。
 #
 set -euo pipefail
 
@@ -246,6 +249,13 @@ fi
 
 # ---- 启动 ----
 mkdir -p "$LOGS_DIR"
+# 记录启动前的日志行数：就绪后只从「本次启动新增的日志段」里读自检结论。
+# 日志是 append 写的，不划基线会读到上一次启动留下的旧结论（典型误判：明明这次库没通，还报 UP）。
+LOG_BASELINE=0
+if [ -f "$LOG_FILE" ]; then
+  LOG_BASELINE="$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -z "$LOG_BASELINE" ] && LOG_BASELINE=0
+fi
 echo "[start] 启动 ${APP_NAME} (port=${PORT}, profile=${SPRING_PROFILE}, health=${HEALTH_PATH}) ..."
 
 if [ "$OS" = "linux" ]; then
@@ -273,10 +283,25 @@ for i in $(seq 1 "$STARTUP_TIMEOUT"); do
     echo "$PID_NOW" > "$PID_FILE"
     echo "[start] 就绪 (${i}s) -> http://localhost:${PORT}${HEALTH_PATH}"
     echo "[start] 日志: $LOG_FILE  停止: bash bin/stop.sh"
-    # 非阻断式就绪检查：完整健康（含库连通/数据基线）若 DOWN 仅提示，不失败部署
-    full=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${PORT}/actuator/health" 2>/dev/null || true)
-    if [ "$full" != "200" ]; then
-      echo "[start] 提示: 完整健康 /actuator/health 返回 $full（数据库或数据自检可能未通过），部署已就绪但请关注。" >&2
+    # ---- 完整健康（含库连通 / 表与种子基线）----
+    # 【为什么不再 curl /actuator/health】
+    # 2026-10-19 安全收口后该端点要求认证，匿名 curl 只能拿到 401。
+    # 401 不是「健康状态」，上一版把它判成「跳过完整检查」等于**把这项能力丢了**：
+    # 部署完再也没人能从这里确认库通不通、表与种子基线对不对。
+    # 现在改读应用自报：StartupHealthReporter 在启动完成时把 HealthEndpoint 的结论
+    # 写进 app.log（同一 JVM 内直读，不走 HTTP、不需要凭证，还能拿到逐组件状态）。
+    # 只在「本次启动新增的日志段」里找，避免读到上一次启动的旧结论。
+    health_line=""
+    for _ in $(seq 1 20); do
+      health_line="$(tail -n +$((LOG_BASELINE + 1)) "$LOG_FILE" 2>/dev/null \
+        | grep -m1 '\[startup-health\]' || true)"
+      [ -n "$health_line" ] && break
+      sleep 0.5
+    done
+    if [ -n "$health_line" ]; then
+      echo "[start] 完整健康: $(printf '%s' "$health_line" | sed 's/.*\[startup-health\] //')"
+    else
+      echo "[start] 提示: 10s 内未拿到启动自检结果，请查看 $LOG_FILE 中的 [startup-health] 行。" >&2
     fi
     exit 0
   fi

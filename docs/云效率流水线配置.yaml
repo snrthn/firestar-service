@@ -133,7 +133,9 @@ stages:
             set -e
             ACTION="${ACTION:-restart}"
             PORT="${DEPLOY_PORT:-2025}"
-            HEALTH_PATH="${HEALTH_PATH:-/actuator/health}"
+            # ⚠️ 2026-10-19 起 /actuator/health 需要认证，匿名轮询会拿到 401 被判「启动超时」。
+            #    门禁统一用 liveness（只验进程存活 + 磁盘，不碰数据库），与 deploy.sh 一致。
+            HEALTH_PATH="${HEALTH_PATH:-/actuator/health/liveness}"
             cd /usr/local/server/java/firestar
             case "$ACTION" in
               stop)    bash bin/stop.sh ;;

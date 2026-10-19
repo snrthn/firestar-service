@@ -33,20 +33,30 @@ import java.util.stream.Collectors;
 @Component
 public class PermissionInterceptor implements HandlerInterceptor {
 
-    /** 白名单：与 SecurityConfig.permitAll 保持一致 */
+    /**
+     * 白名单：与 SecurityConfig.ALWAYS_PUBLIC 保持一致。
+     *
+     * <p>2026-10-19 安全收口时移除了四项，别再「顺手加回来」：
+     * <ul>
+     *   <li>{@code /system/db-check} —— 现在要有效 JWT（登录即可，类上不再有 @RequirePerm）。
+     *       它必须留在白名单外：白名单优先返回 true，会绕过 {@code anyRequest().authenticated()}，
+     *       等于把它重新变成匿名接口；</li>
+     *   <li>{@code /actuator/health} —— 完整健康检查改为需认证，只留 liveness/readiness；</li>
+     *   <li>{@code /doc.html}、{@code /swagger-ui/}、{@code /v3/api-docs/} —— 接口文档
+     *       由 profile 决定是否开启，本拦截器不再单独放行（这些是静态资源/非 Controller
+     *       处理器，本来也不会命中 @RequirePerm 校验）；</li>
+     *   <li>{@code /design-audit/} —— 早期临时静态页，目录早已不存在，属僵尸白名单。</li>
+     * </ul>
+     */
     private static final Set<String> EXACT_WHITELIST = Set.of(
             "/auth/login",
             "/ping",
-            "/system/db-check",
-            "/actuator/health",
-            "/doc.html",
-            "/favicon.ico"
+            "/favicon.ico",
+            // 部署门禁探针（只回 {"status":"UP"}，show-details=never）
+            "/actuator/health/liveness"
     );
     private static final Set<String> PREFIX_WHITELIST = Set.of(
-            "/swagger-ui/",
-            "/v3/api-docs/",
-            "/design-audit/",
-            "/actuator/health/"
+            "/sse/"
     );
 
     @Override

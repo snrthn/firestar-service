@@ -57,20 +57,27 @@ docs/git-workflow.md                 # 分支同步 SOP
 
 - **数据层 / 基础设施：已就绪** —— 25 张表 DDL 全落地、28 实体、25 Mapper、3 个 Flyway 迁移（含字典种子）、5 个配置类、自定义健康指标、1 个真实可用的 DB 自检端点 + 5 个测试类。
 - **业务功能：尚未开始** —— 业务 Controller / Service 为零（仅 `/ping` 冒烟与 `/system/db-check` 运维自检）；接口文档规划的 ~100 个 API / 15 模块均未实现；JWT + RBAC 未接入；Flowable 仅建表、流程定义 / 任务处理未动。
-- **⚠️ 已知安全项**：`SecurityConfig` 当前 `permitAll()` 全放行，任何人可访问 `/system/db-check` 拿到库名 / 表名。属占位阶段，接 JWT+RBAC 后需将 `/system/**` 收进鉴权（类注释已 TODO）。
+- **⚠️ 安全项（2026-10-19 已收口）**：`/system/db-check` 不再是匿名接口 —— 需有效 JWT（**登录即可，不再要求细粒度权限点**）；
+  `/v3/api-docs`、`/doc.html`、`/swagger-ui/**` 由 `springdoc.api-docs.enabled` 控制（**默认关闭**，仅 dev 打开）；
+  `/actuator/health` 需认证，只保留 `/actuator/health/liveness` 匿名供部署门禁轮询。
+  JWT 密钥不再写死，改由环境变量 `JWT_SECRET` 注入（缺失即启动失败），详见 `application.properties` 的 JWT 段注释。
 
 ## 本地运行
 
 ```bash
 # 1. 准备本地 MySQL 库 firestar，复制凭据模板
-cp .env/example.env .env/dev.env   # 填入 DB_PASSWORD
+cp .env/example.env .env/dev.env   # 填入 DB_PASSWORD（dev 的 JWT_SECRET 有 dev 专用回退值，可不填）
 
 # 2. 启动（bin/start.sh 会自动 mvn package 并拉起，监听 2025）
-bash bin/start.sh 2025 /actuator/health
+bash bin/start.sh 2025 /actuator/health/liveness
 
-# 健康: curl http://localhost:2025/actuator/health
-# 冒烟:        curl http://localhost:2025/ping
-# 运维自检:    curl http://localhost:2025/system/db-check
+# 健康:     curl http://localhost:2025/actuator/health/liveness   # 匿名可用（部署门禁口径）
+# 冒烟:     curl http://localhost:2025/ping
+# 运维自检: curl -H "Authorization: Bearer <token>" http://localhost:2025/system/db-check
+#           （登录即可，匿名调用返回 401）
+# 完整健康: 启动时应用已写到 logs/app.log 的 `[startup-health]` 行（bin/start.sh 就绪后会直接打印）
+#           /actuator/health 本身需认证，别再拿它做匿名探针
+# 接口文档: http://localhost:2025/doc.html   # 仅 dev profile 开启
 ```
 
 也可直接用 Maven：`mvn spring-boot:run`（需先 export DB_PASSWORD）。
