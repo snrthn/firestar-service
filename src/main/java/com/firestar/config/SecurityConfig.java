@@ -1,6 +1,7 @@
 package com.firestar.config;
 
 import com.firestar.common.JwtUtil;
+import com.firestar.common.UnauthorizedResponses;
 import com.firestar.service.TokenBlacklistService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -51,10 +52,33 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
                                 "/design-audit/**",
-                                "/favicon.ico"
+                                "/favicon.ico",
+                                // 错误转发。2026-10-19 本地实测发现：任何未捕获异常（含 404）都会
+                                // 转发到 /error，而它对匿名请求同样走 anyRequest().authenticated()
+                                // → 被 entryPoint 拦成 401（改配置前是 403 空响应体）。
+                                // 后果是「接口报错」被伪装成「未登录」：前端按 401 弹「重新登录」，
+                                // 真正的错误信息（415/500/404）全被吞掉，排查时会一直查错方向。
+                                // 放行 /error 后，原始错误状态码才能透出。
+                                "/error",
+                                // SSE 统一前缀：鉴权下沉到端点内部自己裁决（见 SseEndpointSupport）。
+                                // 放行到 Controller 而不是在过滤器链上开特例，是为了让 SSE 能自己决定
+                                // 握手阶段如何表达「身份失效」——缺 token 与 token 过期要能用
+                                // 不同的 message 区分，前端 realtimeClient 靠它区分「重新登录」与「被顶号」。
+                                // ⚠️ 代价：/sse/** 下的端点必须自己调 SseEndpointSupport.serve(...) 做校验，
+                                // 直接返回数据就等于是公开接口。
+                                "/sse/**"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
+                // 未认证统一返 401，而不是 Spring Security 6 的默认 403。
+                // 【为什么必须显式配】没有任何 formLogin/httpBasic 时，ExceptionTranslationFilter
+                // 的默认入口点是 Http403ForbiddenEntryPoint —— 实测（2026-10-18 生产）未带 token
+                // 请求任意受保护接口拿到的都是 **403 空响应体**，而前端 realtimeClient /
+                // api/request.ts 全都按 401 判定会话失效，于是「未登录」被当成「无权限」，
+                // SSE 侧表现为无限退避重连而不是弹「重新登录」。
+                // 语义约定：401 = 未认证（该去登录），403 = 已认证但无权限。
+                .exceptionHandling(e -> e.authenticationEntryPoint((request, response, authException) ->
+                        UnauthorizedResponses.write(response, UnauthorizedResponses.MSG_EXPIRED)))
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

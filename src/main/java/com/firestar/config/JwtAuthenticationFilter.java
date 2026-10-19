@@ -1,6 +1,7 @@
 package com.firestar.config;
 
 import com.firestar.common.JwtUtil;
+import com.firestar.common.UnauthorizedResponses;
 import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
 import com.firestar.service.PermissionResolver;
@@ -96,9 +97,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         chain.doFilter(request, response);
     }
 
+    /**
+     * 写 401 JSON。
+     * ⚠️ 必须走 UnauthorizedResponses，保证与 SecurityConfig 的 authenticationEntryPoint、
+     * SseEndpointSupport 三处产出**完全相同**的 JSON 结构
+     *（{"code":401,"message":...,"data":null}）—— 历史上三处各写各的，
+     * 一旦漂移前端 res.json() 就解析不到 message，只能回落兜底文案。
+     */
     private void writeUnauthorized(HttpServletResponse response, String msg) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write("{\"code\":401,\"message\":\"" + msg + "\",\"data\":null}");
+        UnauthorizedResponses.write(response, msg);
     }
 }

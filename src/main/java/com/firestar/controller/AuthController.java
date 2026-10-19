@@ -1,7 +1,6 @@
 package com.firestar.controller;
 
 import com.firestar.common.IpUtil;
-import com.firestar.common.JwtUtil;
 import com.firestar.common.Result;
 import com.firestar.dto.ChangePasswordRequest;
 import com.firestar.dto.LoginRequest;
@@ -9,22 +8,14 @@ import com.firestar.dto.LoginResponse;
 import com.firestar.dto.MenuVO;
 import com.firestar.dto.ProfileUpdateRequest;
 import com.firestar.dto.ProfileVO;
-import com.firestar.entity.User;
-import com.firestar.mapper.UserMapper;
-import com.firestar.realtime.RealtimeGateway;
 import com.firestar.service.AuthService;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -39,16 +30,9 @@ import java.util.List;
 public class AuthController {
 
     private final AuthService authService;
-    private final JwtUtil jwtUtil;
-    private final UserMapper userMapper;
-    private final RealtimeGateway realtimeGateway;
 
-    public AuthController(AuthService authService, JwtUtil jwtUtil, UserMapper userMapper,
-                          RealtimeGateway realtimeGateway) {
+    public AuthController(AuthService authService) {
         this.authService = authService;
-        this.jwtUtil = jwtUtil;
-        this.userMapper = userMapper;
-        this.realtimeGateway = realtimeGateway;
     }
 
     @PostMapping("/login")
@@ -94,38 +78,6 @@ public class AuthController {
     @GetMapping("/session-check")
     public Result<Void> sessionCheck() {
         return Result.success();
-    }
-
-    /**
-     * SSE 实时推送流端点。握手时校验 JWT + 比对 current_jti（被顶号后旧会话持有的
-     * token jti 不再匹配 → 401，拒绝建立连接）。通过后把 SseEmitter 交给推送网关注册，
-     * 后续业务事件（如 FORCE_LOGOUT）由网关即时推到前端。
-     * 与 profile 等同属 auth 自服务，只验 JWT、不需要 @RequirePerm。
-     */
-    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletRequest request) {
-        String token = extractToken(request);
-        if (token == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
-        }
-        String username;
-        String jti;
-        try {
-            username = jwtUtil.getUsername(token);
-            jti = jwtUtil.getJti(token);
-        } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
-        }
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
-        }
-        // jti 不匹配 = 该 token 已被同账号更新登录顶替（与 filter 的判定一致）。
-        // 文案与 FORCE_LOGOUT 推送保持同一套语义，前端两条路径展示一致。
-        if (user.getCurrentJti() == null || !jti.equals(user.getCurrentJti())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "您的账号已在其他设备登录，原会话已失效，请重新登录");
-        }
-        return realtimeGateway.connect(username, jti);
     }
 
     private String extractToken(HttpServletRequest request) {
