@@ -288,6 +288,18 @@ public class UserServiceImpl implements UserService {
         userMapper.deleteById(id);
     }
 
+    @Override
+    public void updateAvatar(Long userId, String avatarUrl) {
+        User exist = userMapper.selectById(userId);
+        if (exist == null) {
+            throw new BizException("用户不存在");
+        }
+        User user = new User();
+        user.setId(userId);
+        user.setAvatarUrl(avatarUrl);
+        userMapper.updateById(user);
+    }
+
     // ===== 私有辅助 =====
 
     /** 角色 ID 集合存在性校验（去重 + 空集合按「不配角色」处理） */

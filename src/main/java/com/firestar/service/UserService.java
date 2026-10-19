@@ -33,4 +33,7 @@ public interface UserService {
 
     /** 删除用户（ROLE_ADMIN 持有者 / 自己 拒删；连带清理 sys_user_role） */
     void deleteUser(Long id);
+
+    /** 更新头像（存文件ID字符串到 avatar_url；登录用户本人或管理员调用） */
+    void updateAvatar(Long userId, String avatarUrl);
 }

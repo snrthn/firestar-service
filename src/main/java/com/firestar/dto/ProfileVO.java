@@ -35,4 +35,6 @@ public class ProfileVO {
     private String lastLoginIp;
     /** 直属上级名称（服务层按 parentId 回填 sys_user.nickname） */
     private String parentName;
+    /** 头像文件ID（sys_file_storage.id）；为空则前端昵称首字兜底 */
+    private String avatarUrl;
 }

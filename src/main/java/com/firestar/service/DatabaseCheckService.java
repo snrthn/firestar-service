@@ -32,14 +32,15 @@ public class DatabaseCheckService {
     /**
      * V1 基线应该存在的业务表总数（与 docs/建表方案.md 附录 A 一致）。
      *
-     * 28 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
+     * 31 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
      *      + V10 的 sys_post（岗位管理）
-     *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）。
+     *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）
+     *      + V25 的 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）。
      * 后续每次 Flyway 新增业务表，此常量必须同步 +1，否则自检误报
      * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 28;
+    private static final int EXPECTED_TABLE_COUNT = 31;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");
@@ -238,7 +239,7 @@ public class DatabaseCheckService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 28, errors));
         result.put("dictDataCount", countOf(conn, "sys_dict_data", 106, errors));
-        result.put("configCount", countOf(conn, "sys_config", 5, errors));
+        result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
         return result;

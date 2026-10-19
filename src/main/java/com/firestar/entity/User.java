@@ -52,6 +52,9 @@ public class User extends AuditedEntity {
     /** 邮箱（V14 新增，可空，不唯一） */
     private String email;
 
+    /** 头像文件ID（sys_file_storage.id），为空则昵称首字兜底（V28 新增） */
+    private String avatarUrl;
+
     /** 岗位 ID → sys_post.id（单岗，非必填） */
     private Long postId;
 }

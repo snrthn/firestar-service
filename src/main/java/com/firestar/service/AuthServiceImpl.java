@@ -230,6 +230,8 @@ public class AuthServiceImpl implements AuthService {
         // 直属上级（方案 C）：parentId 显式覆盖优先；否则回落所属部门负责人，
         // 沿部门树向上找最近的「有负责人且非本人」的上级部门。都找不到则留 null（页面显示 —）。
         vo.setParentName(resolveParentName(user));
+        // 头像（V28 新增字段，供前端 <img> 解析；为空回退昵称首字）
+        vo.setAvatarUrl(user.getAvatarUrl());
         vo.setLastLoginAt(user.getLastLoginAt());
         vo.setLastLoginIp(user.getLastLoginIp());
         vo.setCreatedAt(user.getCreatedAt());
