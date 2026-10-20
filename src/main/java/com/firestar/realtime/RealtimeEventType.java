@@ -11,5 +11,10 @@ public enum RealtimeEventType {
     FORCE_LOGOUT,
     APPROVAL_CREATED,
     APPROVAL_DONE,
-    NOTIFY
+    NOTIFY,
+    // 问题反馈（V32）：FEEDBACK_CREATED→接收人；FEEDBACK_MESSAGE→对方；
+    // FEEDBACK_STATUS→相关方（创建人+接收人）。payload 见 FeedbackServiceImpl。
+    FEEDBACK_CREATED,
+    FEEDBACK_MESSAGE,
+    FEEDBACK_STATUS
 }
