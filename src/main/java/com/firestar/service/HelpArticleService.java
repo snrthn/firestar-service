@@ -13,8 +13,8 @@ public interface HelpArticleService {
     /** 前台列表（仅 ENABLED，sort_no 升序；不要求权限点，登录即可） */
     List<HelpArticle> listEnabled();
 
-    /** 管理端分页（含停用） */
-    IPage<HelpArticle> page(String keyword, long pageNum, long pageSize);
+    /** 管理端分页（含停用；keyword 按标题模糊、category 精确匹配，均可选） */
+    IPage<HelpArticle> page(String keyword, String category, long pageNum, long pageSize);
 
     /** 详情 */
     HelpArticle detail(Long id);

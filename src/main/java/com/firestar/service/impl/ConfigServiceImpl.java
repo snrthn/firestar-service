@@ -21,7 +21,7 @@ public class ConfigServiceImpl implements ConfigService {
 
     /** 关于我们弹窗需要的配置 key（与 V25 种子对齐） */
     private static final List<String> ABOUT_KEYS = Arrays.asList(
-            "system_name", "icp_no", "support_contact", "about_us", "app_version");
+            "system_name", "icp_no", "support_contact", "about_us", "app_version", "logo_url");
 
     private final ConfigMapper configMapper;
 
@@ -70,6 +70,8 @@ public class ConfigServiceImpl implements ConfigService {
         vo.setSupportContact(m.getOrDefault("support_contact", ""));
         vo.setAboutUs(m.getOrDefault("about_us", ""));
         vo.setAppVersion(m.getOrDefault("app_version", ""));
+        // 侧栏 logo：与 AboutVO 同源下发，省一次请求（V25 种子默认空串=未配置，前端回落默认标识）
+        vo.setLogoUrl(m.getOrDefault("logo_url", ""));
         return vo;
     }
 }

@@ -25,4 +25,10 @@ public class AboutVO {
 
     /** 应用版本号 */
     private String appVersion;
+
+    /**
+     * 系统 Logo 地址（config: logo_url）。
+     * 侧栏 logo 区优先用它渲染图片；为空/加载失败时前端回落「火」字块 + 系统名。
+     */
+    private String logoUrl;
 }

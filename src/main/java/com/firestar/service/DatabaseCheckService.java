@@ -233,13 +233,18 @@ public class DatabaseCheckService {
         * permission_action 6→3（-3）、dict_style 3→5（+2）、audit_target_type +6 数据，
         * 故 dictTypeCount 27→28、dictDataCount 99→104（已用真实库对账，见迁移头注释）。
         * V24（file_type 补 AUDIO/VIDEO）新增 2 个字典项，dictDataCount 104→106。
-        * ⚠️ 本类常量已三次（V19/V20/V22）因「迁移改了种子数却没同步这里」触发 503，
+        * V32（问题反馈 + 帮助中心）新增 1 个类型（feedback_status）与 4 个字典项。
+        * V34（问题类别）新增 1 个类型（feedback_category）与 7 个字典项。
+        * V35（帮助分类）新增 1 个类型（help_category）与 5 个字典项。
+        *    → 三笔合计：dictTypeCount 28→31、dictDataCount 106→122。
+        * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
+        *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 28, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 106, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 31, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 122, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
@@ -251,7 +256,11 @@ public class DatabaseCheckService {
              ResultSet rs = ps.executeQuery()) {
             long n = rs.next() ? rs.getLong(1) : -1;
             if (n != expected) {
-                errors.add(String.format("%s 条数应为 %d，实际 %d —— V2 迁移可能未完整执行",
+                // 文案不再写死「V2 未完整执行」：历史四次误报里有三次是新增字典的迁移
+                // 没同步本类期望值，原文案把排查方向带偏（2026-10-21 修正）
+                errors.add(String.format(
+                        "%s 条数应为 %d，实际 %d —— 与种子基线不符：若近期有新增/删除字典或种子的"
+                                + " Flyway 迁移，需同步 DatabaseCheckService.readSeedData 的期望值",
                         table, expected, n));
             }
             return n;

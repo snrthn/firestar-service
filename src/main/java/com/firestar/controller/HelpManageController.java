@@ -37,12 +37,13 @@ public class HelpManageController {
         this.userMapper = userMapper;
     }
 
-    /** 分页（含停用，keyword 按标题模糊） */
+    /** 分页（含停用，keyword 按标题模糊、category 按分类精确筛选） */
     @GetMapping("/page")
     public Result<IPage<HelpArticle>> page(@RequestParam(defaultValue = "1") long pageNum,
                                            @RequestParam(defaultValue = "10") long pageSize,
-                                           @RequestParam(required = false) String keyword) {
-        return Result.success(helpArticleService.page(keyword, pageNum, pageSize));
+                                           @RequestParam(required = false) String keyword,
+                                           @RequestParam(required = false) String category) {
+        return Result.success(helpArticleService.page(keyword, category, pageNum, pageSize));
     }
 
     /** 详情 */

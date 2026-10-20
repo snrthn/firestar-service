@@ -33,10 +33,11 @@ public class HelpArticleServiceImpl implements HelpArticleService {
     }
 
     @Override
-    public IPage<HelpArticle> page(String keyword, long pageNum, long pageSize) {
+    public IPage<HelpArticle> page(String keyword, String category, long pageNum, long pageSize) {
         return mapper.selectPage(new Page<>(pageNum, pageSize),
                 new LambdaQueryWrapper<HelpArticle>()
                         .like(keyword != null && !keyword.isBlank(), HelpArticle::getTitle, keyword)
+                        .eq(category != null && !category.isBlank(), HelpArticle::getCategory, category)
                         // 维护页按时间倒序（虎哥 2026-10-21）：最近编辑/新建的排最前，
                         // 改完立刻能在首行看到；id 兜底保证同一秒内的顺序稳定
                         .orderByDesc(HelpArticle::getUpdatedAt)
