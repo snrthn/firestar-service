@@ -48,6 +48,10 @@ stages:
             with:
               jdkVersion: '17'
               mavenVersion: '3.9.3'
+              # 增量扫描（2026-10-20 虎哥要求开启）：默认 false=全量；
+              # true=基于 push diff 只扫改动文件，问题直接关联提交人。
+              # ⚠️ 代价：跨文件引用类问题查不出来；历史存量问题不再暴露。
+              incrementalScan: true
           unit_test_step:
             step: Command
             name: Maven 单元测试
