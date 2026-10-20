@@ -32,15 +32,16 @@ public class DatabaseCheckService {
     /**
      * V1 基线应该存在的业务表总数（与 docs/建表方案.md 附录 A 一致）。
      *
-     * 31 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
+     * 33 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
      *      + V10 的 sys_post（岗位管理）
      *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）
-     *      + V25 的 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）。
+     *      + V25 的 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）
+     *      + V30 的 sys_notification / sys_notification_template（P2 通知两表）。
      * 后续每次 Flyway 新增业务表，此常量必须同步 +1，否则自检误报
      * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 31;
+    private static final int EXPECTED_TABLE_COUNT = 33;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");
