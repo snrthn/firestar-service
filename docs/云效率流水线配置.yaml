@@ -57,11 +57,47 @@ stages:
             name: Maven 单元测试
             with:
               run: |
-                # ⚠️ 当前这些测试需要真实 dev 库（@SpringBootTest 会连库），
-                #    构建机上没有 DB_PASSWORD → 上下文起不来 → 全部 Error。
-                #    流水线没配库，所以「失败不阻塞」；等有测试库后应改为
-                #    -Dmaven.test.failure.ignore=false 让它真正兜底。
-                mvn -B test -Dmaven.test.failure.ignore=true
+                set -e
+                # =====================================================================
+                # 自包含 MySQL sidecar —— 根治「集成测试全 Error / 被降级跳」根因
+                # ---------------------------------------------------------------------
+                # 根因：所有测试都是 @ActiveProfiles("dev")，dev profile 连
+                #   jdbc:mysql://127.0.0.1:3306/firestar 且开启 Flyway。CI 构建容器
+                #   里没有 MySQL 实例 → Connection refused → HikariCP 30s+ 超时 →
+                #   Spring 上下文加载失败 → 35 个测试里 29 个 Error。旧流水线用
+                #   -Dmaven.test.failure.ignore=true 把这些真错误「降级」成假绿。
+                #
+                # 修复：本步骤自带一个 MySQL 容器作 sidecar，dev profile 通过
+                #   DB_HOST/DB_USERNAME/DB_PASSWORD 环境变量连它（application-dev.properties
+                #   已支持 ${DB_HOST:127.0.0.1} / ${DB_USERNAME:root} / ${DB_PASSWORD}）；
+                #   并把 failure.ignore 改为 false，让测试真正发挥门禁作用。
+                #
+                # ⚠️ 前提：云效公共构建集群需开放 docker（云效镜像构建即依赖它，
+                #   通常默认开放）。若 CI 报 docker: command not found / permission
+                #   denied，说明该集群未开放 docker —— 请改为在云效控制台 UI 为
+                #   test_job 添加「MySQL 服务容器」(MYSQL_ROOT_PASSWORD 与上述
+                #   DB_PASSWORD 一致, MYSQL_DATABASE=firestar)，并把下方
+                #   export DB_HOST 改成该服务容器的 hostname（云效服务容器默认在
+                #   127.0.0.1 可达）。
+                # =====================================================================
+                export DB_HOST=127.0.0.1
+                export DB_PORT=3306
+                export DB_USERNAME=root
+                export DB_PASSWORD=firestar_ci_2026
+                docker run -d --name ci-mysql -p 3306:3306 \
+                  -e MYSQL_ROOT_PASSWORD=firestar_ci_2026 \
+                  -e MYSQL_DATABASE=firestar \
+                  -e MYSQL_ROOT_HOST=% \
+                  mysql:8.0 --default-authentication-plugin=mysql_native_password
+                # 等待 MySQL 就绪（最多 60s），避免 flyway 在库未起时连不上而超时
+                for i in $(seq 1 60); do
+                  if docker exec ci-mysql mysqladmin ping -h 127.0.0.1 -uroot -pfirestar_ci_2026 2>/dev/null | grep -q "alive"; then
+                    echo "[ci-mysql] ready after ${i}s"; break
+                  fi
+                  sleep 1
+                done
+                docker exec ci-mysql mysqladmin ping -h 127.0.0.1 -uroot -pfirestar_ci_2026
+                mvn -B test -Dmaven.test.failure.ignore=false
                 mvn surefire-report:report-only
                 mvn site -DgenerateReports=false
       build_job:
