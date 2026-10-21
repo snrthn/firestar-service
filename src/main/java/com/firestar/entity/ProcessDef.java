@@ -5,7 +5,8 @@ import lombok.Getter;
 import com.baomidou.mybatisplus.annotation.TableField;
 import lombok.Setter;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
-import java.util.Map;
+import com.firestar.dto.NodeCfg;
+import java.util.List;
 
 /**
  * 由 V1__baseline.sql 自动生成，请勿手改字段（改表请走 Flyway V{n} 增量脚本，
@@ -33,9 +34,9 @@ public class ProcessDef extends AuditedEntity {
     /** 状态（字典 common_status） */
     private String status;
 
-    /** 节点列表（节点名称/类型/审批人/顺序/可否驳回） */
+    /** 节点列表（JSON 数组：[NodeCfg, ...]，由 JacksonTypeHandler 与 List<NodeCfg> 互转） */
     @TableField(typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> nodeList;
+    private List<NodeCfg> nodeList;
 
     /** 备注 */
     private String remark;

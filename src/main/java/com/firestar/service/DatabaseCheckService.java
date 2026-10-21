@@ -237,14 +237,18 @@ public class DatabaseCheckService {
         * V34（问题类别）新增 1 个类型（feedback_category）与 7 个字典项。
         * V35（帮助分类）新增 1 个类型（help_category）与 5 个字典项。
         *    → 三笔合计：dictTypeCount 28→31、dictDataCount 106→122。
+        * V38（P3 审批工作流 · Step 2 配置节点）新增 1 个字典类型
+        * （project_approval_status）与 8 个字典项（project_approval_status 6 项 +
+        *  audit_operation 补 SUBMIT/REJECT 2 项），故 dictTypeCount 31→32、
+        *  dictDataCount 122→130。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 31, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 122, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 32, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 130, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
