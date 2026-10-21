@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.firestar.config.MybatisPlusConfig;
+import com.firestar.dto.NodeCfg;
 import com.firestar.entity.BaseEntity;
 import com.firestar.entity.LogicDeleteEntity;
 import com.firestar.entity.ProcessDef;
@@ -89,12 +90,12 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("1. 27 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
+    @DisplayName("1. 36 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
     void everyColumnHasEntityProperty() throws Exception {
         Map<String, Set<String>> schema = readSchemaColumns();
 
-        assertEquals(27, schema.size(),
-                "业务表数量应为 27，实际 " + schema.size() + " -> " + schema.keySet());
+        assertEquals(36, schema.size(),
+                "业务表数量应为 36，实际 " + schema.size() + " -> " + schema.keySet());
 
         List<String> problems = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
@@ -120,7 +121,7 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("2. 逻辑删除表集合与 V1 基线一致（9 张，多一张少一张都不行）")
+    @DisplayName("2. 逻辑删除表集合与基线一致（36 张表中 9 张，多一张少一张都不行）")
     void logicDeleteTableSetMatchesBaseline() {
         List<String> withLogicDelete = new ArrayList<>();
         List<String> without = new ArrayList<>();
@@ -138,14 +139,18 @@ class EntityMappingConsistencyTest {
                 "应有 9 张逻辑删除表，实际 " + withLogicDelete.size() + " -> " + withLogicDelete);
         assertEquals(new TreeSet<>(LOGIC_DELETE_TABLES), new TreeSet<>(withLogicDelete),
                 "逻辑删除表名单与 V1 基线不一致");
-        assertEquals(16, without.size(), "应有 16 张非逻辑删除表");
+        assertEquals(27, without.size(), "应有 27 张非逻辑删除表");
     }
 
     @Test
-    @DisplayName("3. 所有实体都继承 BaseEntity（保证 L1 预留字段齐全）")
+    @DisplayName("3. 除有意豁免的运维表外，所有实体都继承 BaseEntity（保证 L1 预留字段齐全）")
     void allEntitiesExtendBaseEntity() throws Exception {
+        // sys_token_blacklist 是唯一的有意例外：纯运维记录，DDL 本身就没有
+        // tenant_id / version / ext 列（实体与表自洽），理由见 TokenBlacklist 类注释。
+        Set<String> excluded = Set.of("sys_token_blacklist");
         List<String> bad = new ArrayList<>();
         for (String table : ALL_TABLES) {
+            if (excluded.contains(table)) continue;
             Class<?> cls = classFor(table);
             if (!BaseEntity.class.isAssignableFrom(cls)) bad.add(table);
         }
@@ -186,8 +191,8 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("6. 真实读库验证 JSON 列真的被反序列化成 Map（autoResultMap 生效的硬证据）")
-    void jsonColumnReallyDeserializesToMap() throws Exception {
+    @DisplayName("6. 真实读库验证 JSON 列真的被反序列化成 List<NodeCfg>（autoResultMap 生效的硬证据）")
+    void jsonColumnReallyDeserializesToList() throws Exception {
         ProcessDefMapper mapper = ctxBean(ProcessDefMapper.class);
 
         // 造一条带 nodeList 的流程定义
@@ -195,15 +200,24 @@ class EntityMappingConsistencyTest {
         def.setProcessCode("MP_TEST_PROC_" + System.nanoTime());
         def.setProcessName("阶段6 JSON 验证");
         def.setStatus("ENABLED");
-        def.setNodeList(Map.of("节点1", Map.of("审批人", "张三", "可否驳回", true)));
+        NodeCfg node1 = new NodeCfg();
+        node1.setSeq(1);
+        node1.setNodeId("node_1");
+        node1.setName("节点1");
+        node1.setType("USER");
+        node1.setAssignee("1");
+        node1.setRejectable(true);
+        def.setNodeList(List.of(node1));
         mapper.insert(def);
 
         ProcessDef loaded = mapper.selectById(def.getId());
         assertNotNull(loaded.getNodeList(),
-                "nodeList 应被反序列化为 Map；若为 null 说明 autoResultMap 没生效");
-        Object node1 = loaded.getNodeList().get("节点1");
-        assertTrue(node1 instanceof Map,
-                "嵌套结构应被完整解析，实际类型 " + (node1 == null ? "null" : node1.getClass()));
+                "nodeList 应被反序列化为 List；若为 null 说明 autoResultMap 没生效");
+        assertEquals(1, loaded.getNodeList().size(), "应解析出 1 个节点");
+        NodeCfg first = loaded.getNodeList().get(0);
+        assertEquals("node_1", first.getNodeId(), "nodeId 应原样读回");
+        assertEquals("USER", first.getType(), "type 应原样读回");
+        assertEquals(Boolean.TRUE, first.getRejectable(), "rejectable 应原样读回");
 
         mapper.deleteById(def.getId());
     }
@@ -222,14 +236,18 @@ class EntityMappingConsistencyTest {
         }
     }
 
-    /** 业务表清单（与 V1 基线一致） */
+    /** 业务表清单（与当前 schema 一致：fin 9 张 + sys 27 张 = 36 张） */
     private static final List<String> ALL_TABLES = Arrays.asList(
             "fin_project", "fin_item", "fin_shipment", "fin_shipment_line",
             "fin_return_order", "fin_receivable", "fin_receipt", "fin_write_off", "fin_invoice",
             "sys_process_def", "sys_org", "sys_user", "sys_audit_log", "sys_file_storage",
             "sys_file_download_log", "sys_dict_type", "sys_dict_data", "sys_config",
             "sys_role", "sys_permission", "sys_menu", "sys_user_role",
-            "sys_role_permission", "sys_role_menu", "sys_role_conflict");
+            "sys_role_permission", "sys_role_menu", "sys_role_conflict",
+            "sys_agreement", "sys_agreement_consent", "sys_agreement_version",
+            "sys_feedback", "sys_feedback_message", "sys_help_article",
+            "sys_login_log", "sys_notification", "sys_notification_template",
+            "sys_post", "sys_token_blacklist");
 
     private static final String[] TABLE_TO_ENTITY = {
             "fin_project=Project", "fin_item=Item", "fin_shipment=Shipment",
@@ -242,7 +260,13 @@ class EntityMappingConsistencyTest {
             "sys_dict_data=DictData", "sys_config=Config", "sys_role=Role",
             "sys_permission=Permission", "sys_menu=Menu", "sys_user_role=UserRole",
             "sys_role_permission=RolePermission", "sys_role_menu=RoleMenu",
-            "sys_role_conflict=RoleConflict"};
+            "sys_role_conflict=RoleConflict",
+            "sys_agreement=Agreement", "sys_agreement_consent=AgreementConsent",
+            "sys_agreement_version=AgreementVersion", "sys_feedback=Feedback",
+            "sys_feedback_message=FeedbackMessage", "sys_help_article=HelpArticle",
+            "sys_login_log=LoginLog", "sys_notification=Notification",
+            "sys_notification_template=NotificationTemplate", "sys_post=Post",
+            "sys_token_blacklist=TokenBlacklist"};
 
     /** 表名 → 实体类名。显式映射而非拼字符串：可读、可审计，类名改了这里立刻报错 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {

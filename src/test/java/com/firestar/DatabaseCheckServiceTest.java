@@ -44,15 +44,15 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("1. dev 库自检通过：27 张业务表、Flyway 3 个版本、种子数据齐全")
+    @DisplayName("1. dev 库自检通过：36 张业务表、Flyway 38 个版本、种子数据齐全")
     void devDatabaseIsHealthy() {
         Map<String, Object> r = check();
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
                 "dev 库应健康，实际错误：" + r.get("errors"));
 
         Map<String, Object> tables = (Map<String, Object>) r.get("tables");
-        assertEquals(27, tables.get("businessTableCount"), "业务表应为 27 张");
-        assertEquals(27, tables.get("expected"));
+        assertEquals(36, tables.get("businessTableCount"), "业务表应为 36 张");
+        assertEquals(36, tables.get("expected"));
         assertEquals(Boolean.TRUE, tables.get("matched"));
         assertEquals(0, tables.get("otherTableCount"), "不应存在非业务非引擎的表");
 
@@ -63,8 +63,8 @@ class DatabaseCheckServiceTest {
         assertEquals(62, tables.get("engineTableCount"), "V3 应建出 62 张引擎表");
 
         Map<String, Object> flyway = (Map<String, Object>) r.get("flyway");
-        assertEquals(3, flyway.get("appliedCount"), "Flyway 应已应用 3 个版本");
-        assertEquals("3", flyway.get("currentVersion"));
+        assertEquals(38, flyway.get("appliedCount"), "Flyway 应已应用 38 个版本");
+        assertEquals("38", flyway.get("currentVersion"));
     }
 
     @Test
@@ -103,12 +103,12 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("3. 种子数据条数与 V2 脚本一致")
+    @DisplayName("3. 种子数据条数与当前迁移（V38）一致")
     void seedDataCountsMatchBaseline() {
         Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
-        assertEquals(23L, seed.get("dictTypeCount"));
-        assertEquals(82L, seed.get("dictDataCount"));
-        assertEquals(5L, seed.get("configCount"));
+        assertEquals(32L, seed.get("dictTypeCount"));
+        assertEquals(130L, seed.get("dictDataCount"));
+        assertEquals(13L, seed.get("configCount"));
         assertEquals(7L, seed.get("roleCount"));
         assertEquals(4L, seed.get("roleConflictCount"));
     }
@@ -119,7 +119,7 @@ class DatabaseCheckServiceTest {
         Map<String, Object> flyway = (Map<String, Object>) check().get("flyway");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> applied = (List<Map<String, Object>>) flyway.get("applied");
-        assertEquals(3, applied.size());
+        assertEquals(38, applied.size());
         for (Map<String, Object> row : applied) {
             assertNotNull(row.get("checksum"),
                     row.get("script") + " 的 checksum 为 NULL —— 该版本不是 Flyway 正常执行的");
@@ -127,8 +127,12 @@ class DatabaseCheckServiceTest {
         }
         Set<String> scripts = applied.stream()
                 .map(r -> (String) r.get("script")).collect(Collectors.toSet());
-        assertEquals(Set.of("V1__baseline.sql", "V2__init_dict_data.sql",
-                "V3__flowable_schema.sql"), scripts);
+        // 三个奠基版本必须都在（V1 基线 / V2 字典种子 / V3 引擎表），且脚本名全部符合 Flyway 规范
+        assertTrue(scripts.containsAll(Set.of("V1__baseline.sql", "V2__init_dict_data.sql",
+                "V3__flowable_schema.sql")), "奠基版本缺失：" + scripts);
+        for (String s : scripts) {
+            assertTrue(s.matches("V\\d+__.*\\.sql"), "脚本名不符合 Flyway 规范：" + s);
+        }
     }
 
     @Test
