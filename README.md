@@ -32,7 +32,7 @@ src/main/java/com/firestar/
     FlywayBeforeFlowableConfig.java   # Flyway 先于 Flowable 执行（规避启动竞态）
     AuditMetaObjectHandler.java       # 审计字段自动填充（create/update 时间、操作人）
     DatabaseTableHealthIndicator.java # 自定义健康指标（库表级）
-  controller/                         # 2 个控制器
+  controller/                         # 多组控制器（认证 / RBAC / 字典 / 配置 / 文件 / 通知 / 协议 / 反馈 / 帮助 / 初始化重置 / 审计 等）
     HomeController.java               # 冒烟接口 /ping
     DatabaseCheckController.java      # 运维自检 /system/db-check（返回库名 / 表名 / 行数）
   service/                            # 业务 Service（当前 1 个，均为非业务运维类）
@@ -53,14 +53,16 @@ docs/云效率流水线配置.yaml            # 阿里云效 Flow CI/CD（PaC）
 docs/git-workflow.md                 # 分支同步 SOP
 ```
 
-## 当前进度（截至 2026-10-12）
+## 当前进度（截至 2026-10-21）
 
-- **数据层 / 基础设施：已就绪** —— 25 张表 DDL 全落地、28 实体、25 Mapper、3 个 Flyway 迁移（含字典种子）、5 个配置类、自定义健康指标、1 个真实可用的 DB 自检端点 + 5 个测试类。
-- **业务功能：尚未开始** —— 业务 Controller / Service 为零（仅 `/ping` 冒烟与 `/system/db-check` 运维自检）；接口文档规划的 ~100 个 API / 15 模块均未实现；JWT + RBAC 未接入；Flowable 仅建表、流程定义 / 任务处理未动。
-- **⚠️ 安全项（2026-10-19 已收口）**：`/system/db-check` 不再是匿名接口 —— 需有效 JWT（**登录即可，不再要求细粒度权限点**）；
-  `/v3/api-docs`、`/doc.html`、`/swagger-ui/**` 由 `springdoc.api-docs.enabled` 控制（**默认关闭**，仅 dev 打开）；
+- **数据层 / 基础设施：已就绪** —— 25 张表 DDL 全落地、28 实体、25 Mapper、多个 Flyway 迁移（含字典种子与 V36 初始化/重置菜单种子）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
+- **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及**系统初始化与重置向导**（`InitResetController` + `InitResetServiceImpl` + V36 菜单/权限种子；轻度重置清业务表 + Flowable 运行/历史 + 上传文件，完整重置走 Flyway `clean()+migrate()` 恢复出厂）。
+- **财务业务域（`fin_*`）仅有表结构与空壳 Service，待开发**；Flowable 仅建表，流程定义 / 任务处理未动。
+- ⚠️ **路径前缀约定**：前端经 vite proxy / 生产 nginx 以 `/api` 转发并去前缀；**后端真实路径不含 `/api`**（如 `/system/init/status`），白名单与安全配置一律按后端真实路径书写。
+- ⚠️ **安全项（2026-10-19 已收口）**：`/system/db-check` 需有效 JWT（登录即可，不再要求细粒度权限点）；
+  `/v3/api-docs`、`/doc.html`、`/swagger-ui/**` 由 `springdoc.api-docs.enabled` 控制（默认关闭，仅 dev 打开）；
   `/actuator/health` 需认证，只保留 `/actuator/health/liveness` 匿名供部署门禁轮询。
-  JWT 密钥不再写死，改由环境变量 `JWT_SECRET` 注入（缺失即启动失败），详见 `application.properties` 的 JWT 段注释。
+  JWT 密钥由环境变量 `JWT_SECRET` 注入（缺失即启动失败），详见 `application.properties` 的 JWT 段注释。
 
 ## 本地运行
 

@@ -3,9 +3,11 @@ package com.firestar.controller;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.dto.AboutVO;
+import com.firestar.dto.ConfigCreateRequest;
 import com.firestar.dto.ConfigItemVO;
 import com.firestar.service.ConfigService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,6 +45,22 @@ public class ConfigController {
     @PutMapping
     public Result<Void> update(@RequestBody Map<String, String> values) {
         configService.updateValues(values);
+        return Result.success();
+    }
+
+    /** 新建键值对（管理员；供后期扩展业务状态开关） */
+    @RequirePerm("config:manage")
+    @PostMapping
+    public Result<Void> create(@RequestBody ConfigCreateRequest req) {
+        configService.createConfig(req);
+        return Result.success();
+    }
+
+    /** 更新单个配置项（值 + 说明；键必须已存在，不存在抛错） */
+    @RequirePerm("config:manage")
+    @PutMapping("/item")
+    public Result<Void> updateItem(@RequestBody ConfigCreateRequest req) {
+        configService.updateConfigItem(req);
         return Result.success();
     }
 

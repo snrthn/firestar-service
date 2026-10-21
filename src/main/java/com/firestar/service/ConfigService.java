@@ -1,6 +1,7 @@
 package com.firestar.service;
 
 import com.firestar.dto.AboutVO;
+import com.firestar.dto.ConfigCreateRequest;
 import com.firestar.dto.ConfigItemVO;
 
 import java.util.List;
@@ -20,4 +21,16 @@ public interface ConfigService {
 
     /** 关于我们弹窗聚合数据（登录用户可见，无需 config:manage） */
     AboutVO getAbout();
+
+    /** 按配置键读取单个配置值（如 sys_initialized / trial_mode），不存在返回 null */
+    String getConfigValue(String key);
+
+    /** 按配置键写入单个配置值（按 config_key 匹配更新） */
+    void setConfigValue(String key, String value);
+
+    /** 新建键值对（键格式校验 + 查重；供运营自助扩展业务状态开关） */
+    void createConfig(ConfigCreateRequest req);
+
+    /** 更新单个配置项（值 + 说明；键必须已存在，不存在抛错，防止把更新误用为创建） */
+    void updateConfigItem(ConfigCreateRequest req);
 }

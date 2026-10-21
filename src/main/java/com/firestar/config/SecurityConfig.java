@@ -60,6 +60,13 @@ public class SecurityConfig {
             "/auth/login",
             "/ping",
             "/favicon.ico",
+            // 安装向导：未初始化时公开（POST /system/init 与 GET /system/init/status）。
+            // 即便放行，InitResetServiceImpl 仍会拒绝「已初始化后重复初始化」，
+            // 故匿名可访问不会破坏「已初始化」状态。
+            "/system/init",
+            "/system/init/status",
+            // 安装向导环境预检：未初始化时公开，仅返回连通性/表/目录/磁盘等只读明细。
+            "/system/init/precheck",
             // 错误转发。2026-10-19 本地实测发现：任何未捕获异常（含 404）都会
             // 转发到 /error，而它对匿名请求同样走 anyRequest().authenticated()
             // → 被 entryPoint 拦成 401（改配置前是 403 空响应体）。
