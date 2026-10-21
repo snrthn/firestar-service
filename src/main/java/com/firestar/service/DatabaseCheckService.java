@@ -36,12 +36,13 @@ public class DatabaseCheckService {
      *      + V10 的 sys_post（岗位管理）
      *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）
      *      + V25 的 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）
-     *      + V30 的 sys_notification / sys_notification_template（P2 通知两表）。
+     *      + V30 的 sys_notification / sys_notification_template（P2 通知两表）
+     *      + V39 的 sys_level（职级管理，P3 LEVEL 节点数据层）。
      * 后续每次 Flyway 新增业务表，此常量必须同步 +1，否则自检误报
      * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 36;
+    private static final int EXPECTED_TABLE_COUNT = 37;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");

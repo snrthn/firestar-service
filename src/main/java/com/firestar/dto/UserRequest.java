@@ -33,6 +33,9 @@ public class UserRequest {
     /** 岗位 ID → sys_post.id（可空，创建用户时非必填） */
     private Long postId;
 
+    /** 职级编码 → sys_level.level_code（可空，创建用户时非必填；V39 新增） */
+    private String levelCode;
+
     /** 手机号（可空） */
     private String phone;
 

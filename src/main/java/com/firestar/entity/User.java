@@ -1,5 +1,7 @@
 package com.firestar.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
@@ -57,4 +59,12 @@ public class User extends AuditedEntity {
 
     /** 岗位 ID → sys_post.id（单岗，非必填） */
     private Long postId;
+
+    /**
+     * 职级编码 → sys_level.level_code（可空，非必填；V39 新增，P3 LEVEL 节点解析依据）。
+     * updateStrategy=IGNORED：updateById 时显式写入 null —— 否则 MP 默认忽略 null 字段，
+     * 前端把职级下拉清空后保存，DB 里的旧值清不掉（实测：RESTORE 返回成功但 level_code 仍是 L3）。
+     */
+    @TableField(value = "level_code", updateStrategy = FieldStrategy.IGNORED)
+    private String levelCode;
 }

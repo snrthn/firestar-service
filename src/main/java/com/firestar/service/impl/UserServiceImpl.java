@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.dto.UserOptionVO;
 import com.firestar.dto.UserRequest;
 import com.firestar.dto.UserVO;
+import com.firestar.entity.Level;
 import com.firestar.entity.Org;
 import com.firestar.entity.Post;
 import com.firestar.entity.Role;
@@ -13,6 +14,7 @@ import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.annotation.Auditable;
 import com.firestar.exception.BizException;
+import com.firestar.mapper.LevelMapper;
 import com.firestar.mapper.OrgMapper;
 import com.firestar.mapper.PostMapper;
 import com.firestar.mapper.RoleMapper;
@@ -54,15 +56,18 @@ public class UserServiceImpl implements UserService {
     private final RoleMapper roleMapper;
     private final OrgMapper orgMapper;
     private final PostMapper postMapper;
+    private final LevelMapper levelMapper;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public UserServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
-                           RoleMapper roleMapper, OrgMapper orgMapper, PostMapper postMapper) {
+                           RoleMapper roleMapper, OrgMapper orgMapper, PostMapper postMapper,
+                           LevelMapper levelMapper) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
         this.orgMapper = orgMapper;
         this.postMapper = postMapper;
+        this.levelMapper = levelMapper;
     }
 
     @Override
@@ -129,6 +134,22 @@ public class UserServiceImpl implements UserService {
             }
         }
 
+        // 批量回填职级名称（V39：sys_user.level_code → sys_level.level_code）
+        Map<String, String> levelNames = new HashMap<>();
+        Set<String> levelCodes = new HashSet<>();
+        for (User u : records) {
+            if (u.getLevelCode() != null) {
+                levelCodes.add(u.getLevelCode());
+            }
+        }
+        if (!levelCodes.isEmpty()) {
+            List<Level> levels = levelMapper.selectList(new LambdaQueryWrapper<Level>()
+                    .in(Level::getLevelCode, levelCodes));
+            for (Level l : levels) {
+                levelNames.put(l.getLevelCode(), l.getLevelName());
+            }
+        }
+
         Map<Long, List<Long>> roleIdsOfUser = new HashMap<>();
         Map<Long, String> roleNames = new HashMap<>();
         if (!records.isEmpty()) {
@@ -166,6 +187,8 @@ public class UserServiceImpl implements UserService {
             vo.setLastLoginAt(u.getLastLoginAt());
             vo.setPostId(u.getPostId());
             vo.setPostName(postNames.get(u.getPostId()));
+            vo.setLevelCode(u.getLevelCode());
+            vo.setLevelName(levelNames.get(u.getLevelCode()));
             vo.setPhone(u.getPhone());
             vo.setEmail(u.getEmail());
             vos.add(vo);
@@ -216,6 +239,7 @@ public class UserServiceImpl implements UserService {
         user.setForceChangePassword(1);
         user.setDeptId(deptId);
         user.setPostId(req.getPostId());
+        user.setLevelCode(req.getLevelCode());
         user.setPhone(req.getPhone());
         user.setEmail(req.getEmail());
         user.setStatus(status);
@@ -254,6 +278,7 @@ public class UserServiceImpl implements UserService {
         user.setNickname(nickname);
         user.setDeptId(deptId);
         user.setPostId(req.getPostId());
+        user.setLevelCode(req.getLevelCode());
         user.setPhone(req.getPhone());
         user.setEmail(req.getEmail());
         user.setStatus(status);

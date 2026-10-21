@@ -39,6 +39,12 @@ public class UserVO {
     /** 岗位名称（Service 回填） */
     private String postName;
 
+    /** 职级编码 → sys_level.level_code（V39 新增） */
+    private String levelCode;
+
+    /** 职级名称（Service 回填） */
+    private String levelName;
+
     /** 手机号 */
     private String phone;
 
