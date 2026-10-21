@@ -259,11 +259,11 @@ fi
 echo "[start] 启动 ${APP_NAME} (port=${PORT}, profile=${SPRING_PROFILE}, health=${HEALTH_PATH}) ..."
 
 if [ "$OS" = "linux" ]; then
-  setsid "$JAVA_HOME/bin/java" -jar "$JAR" --server.port="$PORT" --spring.profiles.active="$SPRING_PROFILE" >> "$LOG_FILE" 2>&1 < /dev/null &
+  setsid "$JAVA_HOME/bin/java" -jar "$JAR" --server.port="$PORT" --spring.profiles.active="$SPRING_PROFILE" > /dev/null 2>&1 < /dev/null &
   JAVA_BG=$!
   disown "$JAVA_BG" 2>/dev/null || true
 else
-  nohup "$JAVA_HOME/bin/java" -jar "$JAR" --server.port="$PORT" --spring.profiles.active="$SPRING_PROFILE" >> "$LOG_FILE" 2>&1 &
+  nohup "$JAVA_HOME/bin/java" -jar "$JAR" --server.port="$PORT" --spring.profiles.active="$SPRING_PROFILE" > /dev/null 2>&1 &
   JAVA_BG=$!
 fi
 
@@ -293,8 +293,9 @@ for i in $(seq 1 "$STARTUP_TIMEOUT"); do
     # 只在「本次启动新增的日志段」里找，避免读到上一次启动的旧结论。
     health_line=""
     for _ in $(seq 1 20); do
-      health_line="$(tail -n +$((LOG_BASELINE + 1)) "$LOG_FILE" 2>/dev/null \
-        | grep -m1 '\[startup-health\]' || true)"
+      # 取 app.log 中最后一条 [startup-health]（logback 滚动后当前片段里仍含本行，
+      # 取最后一条对滚动免疫；该标签由 logback 写入 app.log，与 stdout 重定向无关）
+      health_line="$(grep '\[startup-health\]' "$LOG_FILE" 2>/dev/null | tail -n 1 || true)"
       [ -n "$health_line" ] && break
       sleep 0.5
     done

@@ -24,11 +24,13 @@ import com.firestar.service.InitResetService;
 import com.firestar.service.LogService;
 import org.flywaydb.core.Flyway;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import javax.sql.DataSource;
@@ -120,9 +122,11 @@ public class InitResetServiceImpl implements InitResetService {
     @Override
     @Transactional
     public InitStatusVO init(InitRequest req) {
-        // 初始化完成后安装向导关闭：匿名端点收口，返回 403（而非普通业务错误）
+        // 初始化完成后安装向导关闭：匿名端点收口，回真 HTTP 403
+        // （ResponseStatusException 走 GlobalExceptionHandler 的 ResponseEntity 通道带出状态码，
+        //  而非 BizException 的 HTTP 200 + body.code 壳——后者会被监控/curl -f 误判成成功）
         if ("true".equalsIgnoreCase(getConfig(KEY_INITIALIZED))) {
-            throw new BizException(403, "系统已完成初始化，安装向导已关闭");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "系统已完成初始化，安装向导已关闭");
         }
         if (req.getAdminPassword() == null || req.getAdminPassword().isBlank()) {
             throw new BizException("请设置管理员密码");
@@ -195,9 +199,9 @@ public class InitResetServiceImpl implements InitResetService {
         if (!"light".equals(type) && !"full".equals(type)) {
             throw new BizException("重置类型只能是 light 或 full");
         }
-        // 重置安全红线：仅试运行模式可用
+        // 重置安全红线：仅试运行模式可用（真 HTTP 403，非 200 壳）
         if (!"true".equalsIgnoreCase(getConfig(KEY_TRIAL_MODE))) {
-            throw new BizException(403, "试运行模式已关闭，重置功能不可用");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "试运行模式已关闭，重置功能不可用");
         }
         if (!CONFIRM_WORD.equals(req.getConfirmText())) {
             throw new BizException("请输入确认词 " + CONFIRM_WORD + " 以确认重置");
@@ -362,9 +366,11 @@ public class InitResetServiceImpl implements InitResetService {
 
     @Override
     public List<EnvCheckItem> precheck() {
-        // 初始化完成后安装向导关闭：预检明细（环境信息）不再对匿名暴露，返回 403
+        // 初始化完成后安装向导关闭：预检明细（环境信息）不再对匿名暴露，回真 HTTP 403
+        // （ResponseStatusException → GlobalExceptionHandler 用 ResponseEntity 带出状态码；
+        //  此前 BizException(403) 会被 handleBiz 写成 HTTP 200 + body.code，监控侧误判成功）
         if ("true".equalsIgnoreCase(getConfig(KEY_INITIALIZED))) {
-            throw new BizException(403, "系统已完成初始化，安装向导已关闭");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "系统已完成初始化，安装向导已关闭");
         }
         return doEnvCheck();
     }
