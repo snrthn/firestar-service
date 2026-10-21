@@ -267,7 +267,10 @@ public class FeedbackServiceImpl implements FeedbackService {
     /**
      * 反馈事件 → 通知中枢（sys_notification 落库 + NOTIFY SSE 推送）。
      * 走 SYSTEM_NOTICE 模板（{{title}}/{{content}} 变量），bizType=FEEDBACK，
-     * linkUrl=/system/feedback 供详情弹窗「查看详情」直达。
+     * linkUrl=/system/feedback?tab=my|received 供详情弹窗「查看详情」直达，
+     * 并按收件人与该反馈的关系精确带 Tab（2026-10-21 虎哥要求：通知跳反馈页时
+     * 自动落到对应 Tab）：收件人是创建人 → my（我提交的），否则是接收人 →
+     * received（我接收的）；反馈查不到时退化为 my（与旧行为一致）。
      * dedupKey 前缀 FB:{feedbackId}:{kind}，同一事件重试不落第二条。
      */
     private void notifyUser(Long userId, Long feedbackId, String title, String content,
@@ -279,7 +282,11 @@ public class FeedbackServiceImpl implements FeedbackService {
         cmd.setVars(Map.of("title", title, "content", content));
         cmd.setBizType("FEEDBACK");
         cmd.setBizId(String.valueOf(feedbackId));
-        cmd.setLinkUrl("/system/feedback");
+        // linkUrl 按收件人与反馈的关系精确带 Tab 参数（4 个调用点——新反馈/开始处理/
+        // 新留言/状态更新——都走本方法，此处统一判断，各调用点无需重复算）
+        Feedback fb = feedbackMapper.selectById(feedbackId);
+        String tab = (fb != null && !userId.equals(fb.getCreatedBy())) ? "received" : "my";
+        cmd.setLinkUrl("/system/feedback?tab=" + tab);
         cmd.setDedupKey("FB:" + feedbackId + ":" + kind);
         cmd.setOperatorId(operatorId);
         notificationService.notify(cmd);
