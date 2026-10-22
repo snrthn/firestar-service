@@ -27,13 +27,13 @@ public interface ProjectService {
     ProjectVO detail(Long id);
 
     /**
-     * 分页查询（projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500）。
+     * 分页查询（projectNo / projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500）。
      *
      * <p>数据行级隔离（2026-10-22 虎哥）：非 ROLE_ADMIN 只能看到 applicantUsername = username
      * 的自己发起的立项（含草稿）；viewAll = true（ROLE_ADMIN）时无人员限制看全部。</p>
      */
     IPage<ProjectVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                          String projectName, String approvalStatus);
+                          String projectNo, String projectName, String approvalStatus);
 
     /**
      * 审批中心「我发起的」分页（2026-10-22 虎哥：审批中心 Tab 化）。
@@ -41,7 +41,7 @@ public interface ProjectService {
      * 并排除 DRAFT（未发起流程不算发起）；viewAll = true（ROLE_ADMIN）时无人员限制。
      */
     IPage<ProjectVO> pageMine(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                              String projectName, String approvalStatus);
+                              String projectNo, String projectName, String approvalStatus);
 
     /**
      * 提交审批：DRAFT → 发起流程实例 → APPROVING，回写 processInstanceId。

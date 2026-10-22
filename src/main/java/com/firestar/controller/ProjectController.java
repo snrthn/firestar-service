@@ -51,11 +51,12 @@ public class ProjectController {
     public Result<IPage<ProjectVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
             @RequestParam(required = false) String approvalStatus) {
         return Result.success(projectService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectName, approvalStatus));
+                pageNum, pageSize, projectNo, projectName, approvalStatus));
     }
 
     /**
@@ -66,11 +67,12 @@ public class ProjectController {
     public Result<IPage<ProjectVO>> pageMine(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
             @RequestParam(required = false) String approvalStatus) {
         return Result.success(projectService.pageMine(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectName, approvalStatus));
+                pageNum, pageSize, projectNo, projectName, approvalStatus));
     }
 
     /** 保存立项草稿（approvalStatus = DRAFT） */
