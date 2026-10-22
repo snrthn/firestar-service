@@ -42,11 +42,14 @@ DEALLOCATE PREPARE s2;
 -- 历史回填：ACT_HI_VARINST 无 BUSINESS_KEY_，按 PROC_INST_ID_ JOIN ACT_HI_PROCINST 取
 -- business_key（= 项目 id 的字符串形式，submit 时 String.valueOf(projectId) 传入）；
 -- applicantUsername 为 string 变量，值在 TEXT_ 列
+-- ⚠️ 2026-10-22 生产事故修复（第二次）：表名必须大写！生产 MySQL 跑 Linux，
+--   lower_case_table_names=0 大小写敏感，小写 act_hi_varinst 报 ERROR 1146
+--   （本地 Windows MySQL 大小写不敏感所以永远测不出）。与 V3 建表脚本命名对齐。
 UPDATE fin_project p
     JOIN (
         SELECT CAST(pi.BUSINESS_KEY_ AS SIGNED) AS biz_id, MAX(v.TEXT_) AS applicant
-        FROM act_hi_varinst v
-        JOIN act_hi_procinst pi ON v.PROC_INST_ID_ = pi.PROC_INST_ID_
+        FROM ACT_HI_VARINST v
+        JOIN ACT_HI_PROCINST pi ON v.PROC_INST_ID_ = pi.PROC_INST_ID_
         WHERE v.NAME_ = 'applicantUsername'
           AND pi.BUSINESS_KEY_ IS NOT NULL
         GROUP BY pi.BUSINESS_KEY_

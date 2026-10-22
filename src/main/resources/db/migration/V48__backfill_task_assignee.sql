@@ -20,10 +20,12 @@
 --        claim 保证 ASSIGNEE_ 有值，不需要回填。
 
 -- 第一步：评论 userId → ASSIGNEE_（仅补 NULL 行）
-UPDATE act_hi_taskinst t
+-- ⚠️ 2026-10-22 生产事故修复：表名必须大写（生产 MySQL lower_case_table_names=0
+--   大小写敏感，小写报 ERROR 1146；本地 Windows 大小写不敏感测不出）。与 V3 对齐。
+UPDATE ACT_HI_TASKINST t
     JOIN (
         SELECT c.TASK_ID_, MAX(c.USER_ID_) AS uid
-        FROM act_hi_comment c
+        FROM ACT_HI_COMMENT c
         WHERE c.USER_ID_ IS NOT NULL AND c.USER_ID_ <> ''
         GROUP BY c.TASK_ID_
     ) x ON t.ID_ = x.TASK_ID_
@@ -31,6 +33,6 @@ SET t.ASSIGNEE_ = x.uid
 WHERE t.ASSIGNEE_ IS NULL;
 
 -- 第二步：COMPLETED_BY_ 补齐（ASSIGNEE_ 已有值的行；NULL 行无来源可填，跳过）
-UPDATE act_hi_taskinst
+UPDATE ACT_HI_TASKINST
 SET COMPLETED_BY_ = ASSIGNEE_
 WHERE COMPLETED_BY_ IS NULL AND ASSIGNEE_ IS NOT NULL;
