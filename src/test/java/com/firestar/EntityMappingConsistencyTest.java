@@ -90,12 +90,12 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("1. 36 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
+    @DisplayName("1. 37 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
     void everyColumnHasEntityProperty() throws Exception {
         Map<String, Set<String>> schema = readSchemaColumns();
 
-        assertEquals(36, schema.size(),
-                "业务表数量应为 36，实际 " + schema.size() + " -> " + schema.keySet());
+        assertEquals(37, schema.size(),
+                "业务表数量应为 37（V39 加 sys_level），实际 " + schema.size() + " -> " + schema.keySet());
 
         List<String> problems = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
@@ -121,7 +121,7 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("2. 逻辑删除表集合与基线一致（36 张表中 9 张，多一张少一张都不行）")
+    @DisplayName("2. 逻辑删除表集合与基线一致（37 张表中 9 张，多一张少一张都不行）")
     void logicDeleteTableSetMatchesBaseline() {
         List<String> withLogicDelete = new ArrayList<>();
         List<String> without = new ArrayList<>();
@@ -139,7 +139,7 @@ class EntityMappingConsistencyTest {
                 "应有 9 张逻辑删除表，实际 " + withLogicDelete.size() + " -> " + withLogicDelete);
         assertEquals(new TreeSet<>(LOGIC_DELETE_TABLES), new TreeSet<>(withLogicDelete),
                 "逻辑删除表名单与 V1 基线不一致");
-        assertEquals(27, without.size(), "应有 27 张非逻辑删除表");
+        assertEquals(28, without.size(), "应有 28 张非逻辑删除表（36→37 后 27→28）");
     }
 
     @Test
@@ -236,7 +236,7 @@ class EntityMappingConsistencyTest {
         }
     }
 
-    /** 业务表清单（与当前 schema 一致：fin 9 张 + sys 27 张 = 36 张） */
+    /** 业务表清单（与当前 schema 一致：fin 9 张 + sys 28 张 = 37 张，sys_level 为 V39 新增） */
     private static final List<String> ALL_TABLES = Arrays.asList(
             "fin_project", "fin_item", "fin_shipment", "fin_shipment_line",
             "fin_return_order", "fin_receivable", "fin_receipt", "fin_write_off", "fin_invoice",
@@ -247,7 +247,7 @@ class EntityMappingConsistencyTest {
             "sys_agreement", "sys_agreement_consent", "sys_agreement_version",
             "sys_feedback", "sys_feedback_message", "sys_help_article",
             "sys_login_log", "sys_notification", "sys_notification_template",
-            "sys_post", "sys_token_blacklist");
+            "sys_post", "sys_token_blacklist", "sys_level");
 
     private static final String[] TABLE_TO_ENTITY = {
             "fin_project=Project", "fin_item=Item", "fin_shipment=Shipment",
@@ -266,7 +266,7 @@ class EntityMappingConsistencyTest {
             "sys_feedback_message=FeedbackMessage", "sys_help_article=HelpArticle",
             "sys_login_log=LoginLog", "sys_notification=Notification",
             "sys_notification_template=NotificationTemplate", "sys_post=Post",
-            "sys_token_blacklist=TokenBlacklist"};
+            "sys_token_blacklist=TokenBlacklist", "sys_level=Level"};
 
     /** 表名 → 实体类名。显式映射而非拼字符串：可读、可审计，类名改了这里立刻报错 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {

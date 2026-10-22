@@ -44,15 +44,15 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("1. dev 库自检通过：36 张业务表、Flyway 38 个版本、种子数据齐全")
+    @DisplayName("1. dev 库自检通过：37 张业务表、Flyway 40 个版本、种子数据齐全")
     void devDatabaseIsHealthy() {
         Map<String, Object> r = check();
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
                 "dev 库应健康，实际错误：" + r.get("errors"));
 
         Map<String, Object> tables = (Map<String, Object>) r.get("tables");
-        assertEquals(36, tables.get("businessTableCount"), "业务表应为 36 张");
-        assertEquals(36, tables.get("expected"));
+        assertEquals(37, tables.get("businessTableCount"), "业务表应为 37 张（V39 加 sys_level）");
+        assertEquals(37, tables.get("expected"));
         assertEquals(Boolean.TRUE, tables.get("matched"));
         assertEquals(0, tables.get("otherTableCount"), "不应存在非业务非引擎的表");
 
@@ -63,8 +63,8 @@ class DatabaseCheckServiceTest {
         assertEquals(62, tables.get("engineTableCount"), "V3 应建出 62 张引擎表");
 
         Map<String, Object> flyway = (Map<String, Object>) r.get("flyway");
-        assertEquals(38, flyway.get("appliedCount"), "Flyway 应已应用 38 个版本");
-        assertEquals("38", flyway.get("currentVersion"));
+        assertEquals(40, flyway.get("appliedCount"), "Flyway 应已应用 40 个版本（V39 职级 + V40 种子）");
+        assertEquals("40", flyway.get("currentVersion"));
     }
 
     @Test
@@ -103,7 +103,7 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("3. 种子数据条数与当前迁移（V38）一致")
+    @DisplayName("3. 种子数据条数与当前迁移（V40，V39/V40 未动种子）一致")
     void seedDataCountsMatchBaseline() {
         Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
         assertEquals(32L, seed.get("dictTypeCount"));
@@ -119,7 +119,7 @@ class DatabaseCheckServiceTest {
         Map<String, Object> flyway = (Map<String, Object>) check().get("flyway");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> applied = (List<Map<String, Object>>) flyway.get("applied");
-        assertEquals(38, applied.size());
+        assertEquals(40, applied.size());
         for (Map<String, Object> row : applied) {
             assertNotNull(row.get("checksum"),
                     row.get("script") + " 的 checksum 为 NULL —— 该版本不是 Flyway 正常执行的");
