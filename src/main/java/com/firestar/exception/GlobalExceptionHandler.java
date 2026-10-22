@@ -27,6 +27,18 @@ public class GlobalExceptionHandler {
         return Result.error(e.getCode(), e.getMessage());
     }
 
+    /**
+     * IllegalArgumentException 透传 message（400）——引擎层/业务层的参数类校验
+     * （如「任务不存在或已结束」「驳回目标节点非法」）抛的是裸 IAE，没有专门 handler
+     * 时会落进兜底 Exception → HTTP 200 + {"code":500,"message":"服务器内部错误"}，
+     * 真实原因被吞，用户只看得到「服务器内部错误」（2026-10-22 虎哥实测：
+     * 审批点通过报 500，实际是旧 taskId 被重新提交终结）。
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Result<Void> handleIllegalArg(IllegalArgumentException e) {
+        return Result.error(400, e.getMessage());
+    }
+
     @ExceptionHandler(AuthenticationException.class)
     public Result<Void> handleAuth(AuthenticationException e) {
         return Result.error(401, "未登录或登录已过期");

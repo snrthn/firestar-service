@@ -39,11 +39,23 @@ public class Project extends LogicDeleteEntity {
     /** 销售经理 ID → sys_user.id */
     private Long salesManagerId;
 
-    /** 合同签约状态（字典 project_contract_status） */
+    /** 合同签约状态（字典 project_contract_status；V46 起由签约动作后置驱动，建项时强制 UNSIGNED） */
     private String contractStatus;
 
     /** 合同总金额 */
     private BigDecimal contractAmount;
+
+    /** 签约描述/签约留言（签约时补录，非必填；V46） */
+    private String contractDesc;
+
+    /** 签约时间（V46） */
+    private java.time.LocalDateTime contractSignedAt;
+
+    /** 签约人 → sys_user.id（V46） */
+    private Long contractSignedBy;
+
+    /** 审批发起人用户名（V47：审批中心「我发起的」过滤；create/submit 双写保新数据） */
+    private String applicantUsername;
 
     /** 审批状态（Flowable 流程驱动） */
     private String approvalStatus;

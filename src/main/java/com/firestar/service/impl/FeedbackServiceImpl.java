@@ -151,20 +151,24 @@ public class FeedbackServiceImpl implements FeedbackService {
         messageMapper.insert(msg);
 
         // PENDING 有留言即进入 PROCESSING（接收人首条留言才算处理中，创建人留言不改变状态）
+        boolean autoProcessing = false;
         if ("PENDING".equals(fb.getStatus()) && senderId.equals(fb.getReceiverId())) {
             fb.setStatus("PROCESSING");
             feedbackMapper.updateById(fb);
-            // 状态变更只通知对方（创建人），不给留言人自己发
-            notifyUser(fb.getCreatedBy(), fb.getId(), "反馈开始处理：" + fb.getTitle(),
-                    displayName(senderId) + " 已开始处理该反馈。",
-                    "STS:PROCESSING:" + msg.getId(), senderId);
+            autoProcessing = true;
         }
 
         // 留言只通知对方（发送人自己不用通知；对方 = 创建人/接收人中非发送人的那一方）
         Long other = senderId.equals(fb.getCreatedBy()) ? fb.getReceiverId() : fb.getCreatedBy();
         if (!other.equals(senderId)) {
+            // 2026-10-22 虎哥：PENDING 首条留言原本次「开始处理」与「有新留言」连发两条，
+            // 同一操作、同一接收者（创建人）纯重复，铃铛/SSE 双弹。合并为一条：标题仍点明
+            // 有新留言，正文带出状态已自动流转；dedupKey 沿用 MSG:{msgId}。
+            String body = autoProcessing
+                    ? displayName(senderId) + " 已开始处理该反馈并留言，点击查看。"
+                    : displayName(senderId) + " 在反馈中留言，点击查看。";
             notifyUser(other, fb.getId(), "反馈有新留言：" + fb.getTitle(),
-                    displayName(senderId) + " 在反馈中留言，点击查看。", "MSG:" + msg.getId(), senderId);
+                    body, "MSG:" + msg.getId(), senderId);
         }
         return msg.getId();
     }

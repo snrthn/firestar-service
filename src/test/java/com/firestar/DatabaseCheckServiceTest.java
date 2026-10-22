@@ -44,7 +44,7 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("1. dev 库自检通过：37 张业务表、Flyway 40 个版本、种子数据齐全")
+    @DisplayName("1. dev 库自检通过：37 张业务表、Flyway 41 个版本、种子数据齐全")
     void devDatabaseIsHealthy() {
         Map<String, Object> r = check();
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
@@ -63,8 +63,8 @@ class DatabaseCheckServiceTest {
         assertEquals(62, tables.get("engineTableCount"), "V3 应建出 62 张引擎表");
 
         Map<String, Object> flyway = (Map<String, Object>) r.get("flyway");
-        assertEquals(40, flyway.get("appliedCount"), "Flyway 应已应用 40 个版本（V39 职级 + V40 种子）");
-        assertEquals("40", flyway.get("currentVersion"));
+        assertEquals(41, flyway.get("appliedCount"), "Flyway 应已应用 41 个版本（V39 职级 + V40 种子 + V41 立项种子 + V42 列修正）");
+        assertEquals("41", flyway.get("currentVersion"));
     }
 
     @Test
@@ -119,7 +119,7 @@ class DatabaseCheckServiceTest {
         Map<String, Object> flyway = (Map<String, Object>) check().get("flyway");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> applied = (List<Map<String, Object>>) flyway.get("applied");
-        assertEquals(40, applied.size());
+        assertEquals(41, applied.size());
         for (Map<String, Object> row : applied) {
             assertNotNull(row.get("checksum"),
                     row.get("script") + " 的 checksum 为 NULL —— 该版本不是 Flyway 正常执行的");

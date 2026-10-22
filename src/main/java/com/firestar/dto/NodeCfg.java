@@ -10,7 +10,7 @@ import lombok.Setter;
  * <ul>
  *   <li>{@code USER}  → {@code userTask.assignee = assignee}（sys_user.id 的字符串形式）</li>
  *   <li>{@code ROLE}  → {@code userTask.candidateGroups = [assignee]}（sys_role.role_code）</li>
- *   <li>{@code LEVEL} → {@code userTask.assignee = "${levelResolver.resolve(execution)}"}（Step 3 注册 bean）</li>
+ *   <li>{@code LEVEL} → 多实例会签：{@code levelResolver.resolveList('L3')} 提供该职级全员用户名集合，逐人生成并行任务（Step 3 注册 bean）</li>
  * </ul>
  */
 @Getter
