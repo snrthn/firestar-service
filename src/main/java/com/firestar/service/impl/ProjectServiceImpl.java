@@ -157,8 +157,10 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
-    public IPage<ProjectVO> page(Integer pageNum, Integer pageSize,
+    public IPage<ProjectVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
                                  String projectName, String approvalStatus) {
+        // 数据行级隔离（2026-10-22 虎哥）：非 ROLE_ADMIN 只能看 applicantUsername = 自己的
+        // 立项（含 DRAFT 草稿——本页即「立项管理」，用户管理自己的草稿）；ROLE_ADMIN 看全部。
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(pageSize, MAX_PAGE_SIZE);
         String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
@@ -167,6 +169,7 @@ public class ProjectServiceImpl implements ProjectService {
                 new LambdaQueryWrapper<Project>()
                         .like(nameKw != null, Project::getProjectName, nameKw)
                         .eq(statusEq != null, Project::getApprovalStatus, statusEq)
+                        .eq(!viewAll, Project::getApplicantUsername, username)
                         .orderByDesc(Project::getCreatedAt));
         Map<String, DictData> approvalDict = approvalStatusDict();
         // 用户展示名批量翻译：销售经理 + 签约人（V46）合并 id 集合一页一次查询，避免 N+1
@@ -178,11 +181,13 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
-    public IPage<ProjectVO> pageMine(String username, Integer pageNum, Integer pageSize,
+    public IPage<ProjectVO> pageMine(String username, boolean viewAll, Integer pageNum, Integer pageSize,
                                      String projectName, String approvalStatus) {
         // 同 page 范式（默认 1/10、size 上限 500），追加两个条件：
         //   applicantUsername = 当前用户（V47 列，create/submit 双写 + V47 迁移回填历史）；
         //   approvalStatus != DRAFT（草稿未发起流程，不算「我发起的」）。
+        // 数据行级隔离（2026-10-22 虎哥）：ROLE_ADMIN（viewAll）无人员限制看全部，
+        // 但仍排除 DRAFT——豁免的是「只能看自己」的人员限制，不是「已发起」的语义限制。
         // 查询参数与 page 完全一致，前端「我发起的」Tab 直接复用 projectName/approvalStatus。
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(pageSize, MAX_PAGE_SIZE);
@@ -192,7 +197,7 @@ public class ProjectServiceImpl implements ProjectService {
                 new LambdaQueryWrapper<Project>()
                         .like(nameKw != null, Project::getProjectName, nameKw)
                         .eq(statusEq != null, Project::getApprovalStatus, statusEq)
-                        .eq(Project::getApplicantUsername, username)
+                        .eq(!viewAll, Project::getApplicantUsername, username)
                         .ne(Project::getApprovalStatus, "DRAFT")
                         .orderByDesc(Project::getCreatedAt));
         Map<String, DictData> approvalDict = approvalStatusDict();

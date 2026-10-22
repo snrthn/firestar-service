@@ -3,6 +3,7 @@ package com.firestar.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
+import com.firestar.common.SecurityContextUtils;
 import com.firestar.dto.ApprovalHistoryVO;
 import com.firestar.dto.ProjectRequest;
 import com.firestar.dto.ProjectSignRequest;
@@ -40,19 +41,26 @@ public class ProjectController {
         this.projectService = projectService;
     }
 
-    /** 分页立项列表（projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500） */
+    /**
+     * 分页立项列表（projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500）。
+     *
+     * <p>数据行级隔离（2026-10-22 虎哥）：非 ROLE_ADMIN 只能看到自己发起的（applicantUsername
+     * = 当前用户，含草稿）；ROLE_ADMIN 无条件放行看全部。</p>
+     */
     @GetMapping("/page")
     public Result<IPage<ProjectVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) String projectName,
             @RequestParam(required = false) String approvalStatus) {
-        return Result.success(projectService.page(pageNum, pageSize, projectName, approvalStatus));
+        return Result.success(projectService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                pageNum, pageSize, projectName, approvalStatus));
     }
 
     /**
      * 审批中心「我发起的」分页（2026-10-22 虎哥：审批中心 Tab 化）。
-     * 服务端自动按当前登录用户过滤，排除 DRAFT；查询参数同 /page。
+     * 服务端自动按当前登录用户过滤（ROLE_ADMIN 除外），排除 DRAFT；查询参数同 /page。
      */
     @GetMapping("/page/mine")
     public Result<IPage<ProjectVO>> pageMine(
@@ -60,8 +68,9 @@ public class ProjectController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) String projectName,
             @RequestParam(required = false) String approvalStatus) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        return Result.success(projectService.pageMine(username, pageNum, pageSize, projectName, approvalStatus));
+        return Result.success(projectService.pageMine(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                pageNum, pageSize, projectName, approvalStatus));
     }
 
     /** 保存立项草稿（approvalStatus = DRAFT） */
