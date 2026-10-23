@@ -242,6 +242,10 @@ public class DatabaseCheckService {
         * （project_approval_status）与 8 个字典项（project_approval_status 6 项 +
         *  audit_operation 补 SUBMIT/REJECT 2 项），故 dictTypeCount 31→32、
         *  dictDataCount 122→130。
+        * V50（发货审批）新增 1 个字典项（shipment_status 补 REJECTED），130→131；
+        * V54（签收证据）新增 1 个字典项（file_biz_type 补 shipment_receive_proof），131→132；
+        * V56（撤回）新增 1 个字典项（shipment_status 补 CANCELLED），132→133。
+        *    → 三笔均未新增字典类型，故 dictTypeCount 保持 32。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
@@ -249,7 +253,7 @@ public class DatabaseCheckService {
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 32, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 130, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 133, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

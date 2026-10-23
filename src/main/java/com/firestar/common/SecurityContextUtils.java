@@ -14,6 +14,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
  *
  * <p>约定：后续新增任何「我发起的」语义的查询，一律沿用本范式
  * （username + viewAll 双参 + 非 admin 按发起人列过滤），不要另起炉灶。</p>
+ *
+ * <p><b>2026-10-24 强化</b>：过滤动作本身收进了 {@link DataScopeHelper}
+ * （{@code DataScopeHelper.own(wrapper, 归属列, 归属值)}），归属列对照表与完整落地步骤
+ * 见 {@code docs/开发规范.md} 第四节。本类只负责提供 username / isAdmin 两个信号。</p>
  */
 public final class SecurityContextUtils {
 

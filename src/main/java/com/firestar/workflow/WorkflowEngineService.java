@@ -82,6 +82,21 @@ public interface WorkflowEngineService {
      */
     String reject(String taskId, String toNode, String comment);
 
+    /**
+     * 申请人撤回（2026-10-23 虎哥拍板方案 B）：流程未结束即可撤回，不必等审批人处理。
+     *
+     * <p>三道闸：① 发起人身份 —— {@code ACT_HI_PROCINST.START_USER_ID_} 必须等于当前用户，
+     * 管理员不代撤（撤回是申请人对自有单据的处置权，放大给别人等于授予销毁他人单据的能力）；
+     * ② 流程仍在运行 —— 已自然结束（审完）的撤回语义不存在；③ 并发 —— 撤回与审批撞车时
+     * 谁先谁赢，后到者报错（terminate 后审批人 complete 查不到任务，由候选人校验兜底）。</p>
+     *
+     * <p>撤回 = 终结实例 + 留痕，绝不物理删除（财务系统审计要求）。</p>
+     *
+     * @return 已审批人 userId 列表（不含发起人自己），供业务层发「申请已撤回」通知；
+     *         尚无人审批时返回空列表，业务层据此跳过通知（方案 B 强制通知已审批人的落点）
+     */
+    List<Long> withdraw(String processInstanceId, String username, String reason);
+
     /** 流程实例内节点跳转（驳回/加签底层原语，需显式传 from/to 节点 id） */
     void moveTo(String processInstanceId, String fromNode, String toNode);
 

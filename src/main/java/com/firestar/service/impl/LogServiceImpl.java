@@ -3,6 +3,8 @@ package com.firestar.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.DataScopeHelper;
+import com.firestar.common.SecurityContextUtils;
 import com.firestar.dto.AuditLogVO;
 import com.firestar.dto.LoginLogVO;
 import com.firestar.entity.AuditLog;
@@ -60,12 +62,17 @@ public class LogServiceImpl implements LogService {
         int current = (pageNum == null || pageNum < 1) ? 1 : pageNum;
         int size = (pageSize == null || pageSize < 1) ? 10 : Math.min(pageSize, 500);
 
+        // 行级数据隔离（2026-10-24 虎哥）：非 ROLE_ADMIN 只看自己的登录日志
+        // （LoginLog.username 存的是登录账号，直接用，不必回查 userId）。
+        // 查询框里的「账号」是 admin 在全员视角下的二次筛选，与隔离条件叠加生效。
+        String me = SecurityContextUtils.currentUsername();
         LambdaQueryWrapper<LoginLog> qw = new LambdaQueryWrapper<>();
         qw.like(username != null && !username.isBlank(), LoginLog::getUsername, username)
            .eq(status != null && !status.isBlank(), LoginLog::getLoginStatus, status)
            .ge(startTime != null, LoginLog::getLoginAt, startTime)
            .le(endTime != null, LoginLog::getLoginAt, endTime)
            .orderByDesc(LoginLog::getLoginAt);
+        DataScopeHelper.own(qw, LoginLog::getUsername, me);
         IPage<LoginLog> page = loginLogMapper.selectPage(new Page<>(current, size), qw);
 
         Page<LoginLogVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
@@ -92,6 +99,10 @@ public class LogServiceImpl implements LogService {
             }
         }
 
+        // 行级数据隔离（2026-10-24 虎哥）：非 ROLE_ADMIN 只看自己的操作日志
+        // （AuditLog.operatorId = 自己）。「操作人」查询框是 admin 全员视角下的二次筛选，
+        // 与隔离条件叠加生效（operatorIds 与 me 同时命中才会留下记录）。
+        Long me = DataScopeHelper.currentUserId(userMapper);
         LambdaQueryWrapper<AuditLog> qw = new LambdaQueryWrapper<>();
         qw.in(operatorIds != null, AuditLog::getOperatorId, operatorIds)
            .eq(targetType != null && !targetType.isBlank(), AuditLog::getTargetType, targetType)
@@ -99,6 +110,7 @@ public class LogServiceImpl implements LogService {
            .ge(startTime != null, AuditLog::getOperatedAt, startTime)
            .le(endTime != null, AuditLog::getOperatedAt, endTime)
            .orderByDesc(AuditLog::getOperatedAt);
+        DataScopeHelper.own(qw, AuditLog::getOperatorId, me);
         IPage<AuditLog> page = auditLogMapper.selectPage(new Page<>(current, size), qw);
 
         // operatorId → username 回填

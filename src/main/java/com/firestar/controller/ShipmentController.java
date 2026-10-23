@@ -12,6 +12,7 @@ import com.firestar.service.ShipmentService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -65,6 +66,23 @@ public class ShipmentController {
     @PostMapping
     public Result<Long> create(@RequestBody ShipmentCreateReq req) {
         return Result.success(shipmentService.create(req));
+    }
+
+    /** 编辑发货单（2026-10-23 虎哥要求补入口）：仅 PENDING（待发货）可改，项目不可更换 */
+    @PutMapping("/{id}")
+    public Result<Void> update(@PathVariable Long id, @RequestBody ShipmentCreateReq req) {
+        shipmentService.update(id, req);
+        return Result.success();
+    }
+
+    /**
+     * 申请人撤回（方案 B）：审批流程未结束时，发起人可主动撤回 → CANCELLED 终态，
+     * 并退还发货申请占用的货物额度。仅发起人可撤（引擎把关，管理员不代撤）。
+     */
+    @PostMapping("/{id}/withdraw")
+    public Result<Void> withdraw(@PathVariable Long id) {
+        shipmentService.withdraw(id);
+        return Result.success();
     }
 
     /** 标记已发货（审批通过后；shippedById = 当前操作人，决策#2 澄清发货人=操作人自身） */

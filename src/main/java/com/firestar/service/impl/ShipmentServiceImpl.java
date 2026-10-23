@@ -3,6 +3,7 @@ package com.firestar.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.DataScopeHelper;
 import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
@@ -132,49 +133,9 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new IllegalArgumentException("项目不存在：" + req.getProjectId());
         }
 
-        // 逐行校验：超发硬卡（决策#3）+ 超合同金额硬卡（决策#4）+ 累计已发量（乐观锁）
-        BigDecimal newAmount = BigDecimal.ZERO;
+        // 逐行校验 + 占用（create/update 共用同一份校验，避免两份逻辑漂移）
         List<Item> toUpdateItems = new ArrayList<>();
-        for (ShipmentLineCreateReq line : req.getLines()) {
-            if (line.getItemId() == null) {
-                throw new IllegalArgumentException("明细行缺少货物 ID");
-            }
-            if (line.getShipmentQty() == null || line.getShipmentQty() <= 0) {
-                throw new IllegalArgumentException("发货数量必须为正：" + line.getItemId());
-            }
-            Item item = itemMapper.selectById(line.getItemId());
-            if (item == null) {
-                throw new IllegalArgumentException("货物不存在：" + line.getItemId());
-            }
-            if (!Objects.equals(item.getProjectId(), project.getId())) {
-                throw new IllegalArgumentException("货物不属于该项目：" + line.getItemId());
-            }
-            int shipped = item.getShippedQty() == null ? 0 : item.getShippedQty();
-            int remaining = item.getQuantity() - shipped;
-            // 超发硬卡（决策#3）
-            if (line.getShipmentQty() > remaining) {
-                throw new IllegalArgumentException(String.format(
-                        "货物「%s」超发：合同量 %d，已发 %d，剩余 %d，本次申请 %d（超 %d）",
-                        item.getItemName(), item.getQuantity(), shipped, remaining,
-                        line.getShipmentQty(), line.getShipmentQty() - remaining));
-            }
-            // 超合同金额硬卡（决策#4）：历史已发金额 + 本次金额 不得超过合同金额
-            BigDecimal lineAmt = item.getUnitPrice() != null
-                    ? item.getUnitPrice().multiply(BigDecimal.valueOf(line.getShipmentQty())) : BigDecimal.ZERO;
-            if (project.getContractAmount() != null) {
-                BigDecimal shippedAmt = item.getUnitPrice() != null
-                        ? item.getUnitPrice().multiply(BigDecimal.valueOf(shipped)) : BigDecimal.ZERO;
-                if (shippedAmt.add(lineAmt).compareTo(project.getContractAmount()) > 0) {
-                    throw new IllegalArgumentException(String.format(
-                            "货物「%s」将导致累计发货金额超过合同金额（合同 %s）",
-                            item.getItemName(), project.getContractAmount()));
-                }
-            }
-            // 累计已发量（带 version 乐观锁，并发超发会抛 OptimisticLockException 回滚）
-            item.setShippedQty(shipped + line.getShipmentQty());
-            toUpdateItems.add(item);
-            newAmount = newAmount.add(lineAmt);
-        }
+        BigDecimal newAmount = validateAndOccupy(project, req.getLines(), toUpdateItems);
 
         String batchNo = generateBatchNo(project);
 
@@ -221,6 +182,137 @@ public class ShipmentServiceImpl implements ShipmentService {
         // 提交时通知所有销售经理（决策#2）
         notifySubmitted(project, shipment.getId(), operatorId);
         return shipment.getId();
+    }
+
+    /**
+     * 明细行逐行校验 + 占用额度（create / update 共用一份，避免两份校验逻辑漂移）。
+     *
+     * <p>校验项：货物存在且属于本项目、数量为正、超发硬卡（决策#3）、超合同金额硬卡（决策#4）。
+     * 占用：{@code item.shippedQty += 本次数量}（带 version 乐观锁，并发超发抛 OptimisticLockException 回滚）。
+     *
+     * <p>⚠️ 占用发生在「申请创建时」而非「实际发货时」——故任何让申请失效的动作（撤回 / 编辑减量）
+     * 都必须走 {@link #releaseItemOccupancy} 退还，否则额度被永久占用。</p>
+     *
+     * @param toUpdateItems 出参：待回写的 Item（调用方统一 updateById）
+     * @return 本次发货总金额
+     */
+    private BigDecimal validateAndOccupy(Project project, List<ShipmentLineCreateReq> lines,
+                                         List<Item> toUpdateItems) {
+        BigDecimal newAmount = BigDecimal.ZERO;
+        for (ShipmentLineCreateReq line : lines) {
+            if (line.getItemId() == null) {
+                throw new IllegalArgumentException("明细行缺少货物 ID");
+            }
+            if (line.getShipmentQty() == null || line.getShipmentQty() <= 0) {
+                throw new IllegalArgumentException("发货数量必须为正：" + line.getItemId());
+            }
+            Item item = itemMapper.selectById(line.getItemId());
+            if (item == null) {
+                throw new IllegalArgumentException("货物不存在：" + line.getItemId());
+            }
+            if (!Objects.equals(item.getProjectId(), project.getId())) {
+                throw new IllegalArgumentException("货物不属于该项目：" + line.getItemId());
+            }
+            int shipped = item.getShippedQty() == null ? 0 : item.getShippedQty();
+            int remaining = item.getQuantity() - shipped;
+            if (line.getShipmentQty() > remaining) {
+                throw new IllegalArgumentException(String.format(
+                        "货物「%s」超发：合同量 %d，已发 %d，剩余 %d，本次申请 %d（超 %d）",
+                        item.getItemName(), item.getQuantity(), shipped, remaining,
+                        line.getShipmentQty(), line.getShipmentQty() - remaining));
+            }
+            BigDecimal lineAmt = item.getUnitPrice() != null
+                    ? item.getUnitPrice().multiply(BigDecimal.valueOf(line.getShipmentQty())) : BigDecimal.ZERO;
+            if (project.getContractAmount() != null) {
+                BigDecimal shippedAmt = item.getUnitPrice() != null
+                        ? item.getUnitPrice().multiply(BigDecimal.valueOf(shipped)) : BigDecimal.ZERO;
+                if (shippedAmt.add(lineAmt).compareTo(project.getContractAmount()) > 0) {
+                    throw new IllegalArgumentException(String.format(
+                            "货物「%s」将导致累计发货金额超过合同金额（合同 %s）",
+                            item.getItemName(), project.getContractAmount()));
+                }
+            }
+            item.setShippedQty(shipped + line.getShipmentQty());
+            toUpdateItems.add(item);
+            newAmount = newAmount.add(lineAmt);
+        }
+        return newAmount;
+    }
+
+    /** 退还某发货单全部明细行已占用的货物额度（撤回 / 编辑前调用） */
+    private void releaseItemOccupancy(Long shipmentId) {
+        List<ShipmentLine> lines = shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
+                .eq(ShipmentLine::getShipmentId, shipmentId));
+        for (ShipmentLine ln : lines) {
+            Item item = itemMapper.selectById(ln.getItemId());
+            if (item == null) {
+                continue;
+            }
+            int shipped = item.getShippedQty() == null ? 0 : item.getShippedQty();
+            int back = ln.getShipmentQty() == null ? 0 : ln.getShipmentQty();
+            item.setShippedQty(Math.max(0, shipped - back));
+            itemMapper.updateById(item);
+        }
+    }
+
+    // ===================== 编辑（2026-10-23 虎哥：发货单需要编辑入口） =====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void update(Long id, ShipmentCreateReq req) {
+        Long operatorId = currentUserId();
+        Shipment s = shipmentMapper.selectById(id);
+        if (s == null) {
+            throw new IllegalArgumentException("发货单不存在：" + id);
+        }
+        // 仅 PENDING（待发货）可编辑：此状态下未产生实际出入库与应收，改内容不牵动下游；
+        // 已发货/已收货/已驳回/已撤销的单据改内容会与库存、应收、审批结论冲突。
+        // 项目不允许更换（换项目等于换合同，应新建）。
+        if (!"PENDING".equals(s.getShipmentStatus())) {
+            throw new IllegalArgumentException("仅待发货状态可编辑，当前：" + s.getShipmentStatus());
+        }
+        if (req.getProjectId() == null) {
+            throw new IllegalArgumentException("项目不能为空");
+        }
+        if (!Objects.equals(req.getProjectId(), s.getProjectId())) {
+            throw new IllegalArgumentException("不允许更换项目，请新建发货单");
+        }
+        if (req.getLines() == null || req.getLines().isEmpty()) {
+            throw new IllegalArgumentException("发货明细不能为空");
+        }
+        Project project = projectMapper.selectById(req.getProjectId());
+        if (project == null) {
+            throw new IllegalArgumentException("项目不存在：" + req.getProjectId());
+        }
+        // ① 先退还旧明细行的占用，② 再按新明细行校验并占用——顺序不可颠倒，
+        // 否则「减量编辑」会因自己的旧占用而误判超发（remaining 被自己吃掉）
+        releaseItemOccupancy(id);
+        List<Item> toUpdateItems = new ArrayList<>();
+        BigDecimal newAmount = validateAndOccupy(project, req.getLines(), toUpdateItems);
+
+        shipmentLineMapper.delete(new LambdaQueryWrapper<ShipmentLine>().eq(ShipmentLine::getShipmentId, id));
+        for (ShipmentLineCreateReq line : req.getLines()) {
+            Item item = toUpdateItems.stream().filter(i -> i.getId().equals(line.getItemId()))
+                    .findFirst().orElseThrow();
+            ShipmentLine sl = new ShipmentLine();
+            sl.setShipmentId(id);
+            sl.setItemId(line.getItemId());
+            sl.setShipmentQty(line.getShipmentQty());
+            sl.setReceivedQty(0);
+            sl.setReturnedQty(0);
+            sl.setLineStatus("PENDING");
+            sl.setUnitPrice(item.getUnitPrice());
+            sl.setLineAmount(item.getUnitPrice() != null
+                    ? item.getUnitPrice().multiply(BigDecimal.valueOf(line.getShipmentQty())) : BigDecimal.ZERO);
+            shipmentLineMapper.insert(sl);
+        }
+        for (Item item : toUpdateItems) {
+            itemMapper.updateById(item);
+        }
+        s.setShipmentAmount(newAmount);
+        s.setUpdatedBy(operatorId);
+        shipmentMapper.updateById(s);
+        log.info("[shipment] 编辑发货单 id={} amount={} user={}", id, newAmount, currentUsername());
     }
 
     // ===================== 标记已发货 =====================
@@ -348,6 +440,14 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (s.getProcessInstanceId() != null) {
             engine.terminate(s.getProcessInstanceId(), "发货申请被退回：" + comment);
         }
+        // 退还本单占用的货物额度（2026-10-24 补齐）。
+        // shippedQty 在 create 时即占用，任何让本单失效的路径（撤回 / 驳回 / 编辑减量）
+        // 都必须退还，否则额度被永久占用，后续发货申请可用量莫名变少——
+        // 此前撤回与编辑已退还，唯独驳回漏了（既有缺陷）。
+        // 状态守卫：终态不再退，避免异常重试导致二次退还把额度退成负数方向。
+        if (!"REJECTED".equals(s.getShipmentStatus()) && !"CANCELLED".equals(s.getShipmentStatus())) {
+            releaseItemOccupancy(s.getId());
+        }
         s.setShipmentStatus("REJECTED");
         s.setUpdatedBy(currentUserId());
         shipmentMapper.updateById(s);
@@ -378,6 +478,54 @@ public class ShipmentServiceImpl implements ShipmentService {
         notificationService.notify(cmd);
     }
 
+    // ===================== 申请人撤回（决策#2 方案 B，2026-10-23 虎哥拍板） =====================
+
+    @Override
+    public void withdraw(Long shipmentId) {
+        Shipment s = shipmentMapper.selectById(shipmentId);
+        if (s == null) {
+            throw new IllegalArgumentException("发货单不存在：" + shipmentId);
+        }
+        if (s.getProcessInstanceId() == null || s.getProcessInstanceId().isBlank()) {
+            throw new IllegalArgumentException("该发货单没有进行中的审批流程，无需撤回");
+        }
+        // 引擎三道闸：发起人身份（admin 不代撤）+ 流程仍在运行；返回已审批人 userId
+        List<Long> approvedUserIds = engine.withdraw(s.getProcessInstanceId(), currentUsername(),
+                "申请人撤回发货申请，发货单 id=" + s.getId());
+        // 退还货物额度：create 时已累加 item.shippedQty（占用），撤回必须退还，
+        // 否则额度被永久占用（后续发货会误判超发）。
+        releaseItemOccupancy(s.getId());
+        // CANCELLED = 终态只读（方案 B）。发货状态字典 shipment_status 无 CANCELLED 项，
+        // V56 一并补字典，避免列表状态列显示裸码（V55 同款教训）。
+        s.setShipmentStatus("CANCELLED");
+        s.setUpdatedBy(currentUserId());
+        shipmentMapper.updateById(s);
+        log.info("[shipment] 申请人撤回 id={} user={} 已审批人={}", shipmentId, currentUsername(), approvedUserIds);
+        notifyWithdrawn(s, approvedUserIds);
+    }
+
+    /** 撤回通知（模板 SHIPMENT_WITHDRAWN，V56 种子）；无人审批过则不发 */
+    private void notifyWithdrawn(Shipment s, List<Long> approvedUserIds) {
+        if (approvedUserIds == null || approvedUserIds.isEmpty()) {
+            log.debug("[notify] 撤回时尚无人审批，跳过通知 shipmentId={}", s.getId());
+            return;
+        }
+        Project p = projectMapper.selectById(s.getProjectId());
+        NotifyCommand cmd = new NotifyCommand();
+        cmd.setCode("SHIPMENT_WITHDRAWN");
+        cmd.setReceivers(approvedUserIds);
+        cmd.setBizType("SHIPMENT");
+        cmd.setBizId(String.valueOf(s.getId()));
+        cmd.setLinkUrl("/shipment");
+        cmd.setDedupKey("SHIPMENT_WITHDRAWN:SHIPMENT:" + s.getId());
+        cmd.setVars(Map.of(
+                "batchNo", s.getBatchNo() == null ? "" : s.getBatchNo(),
+                "projectName", p != null && p.getProjectName() != null ? p.getProjectName() : "",
+                "operator", currentUsername() == null ? "" : currentUsername()));
+        cmd.setOperatorId(currentUserId());
+        notificationService.notify(cmd);
+    }
+
     // ===================== 查询 =====================
 
     @Override
@@ -389,11 +537,36 @@ public class ShipmentServiceImpl implements ShipmentService {
         String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
         String statusEq = status == null || status.isBlank() ? null : status.trim();
 
+        // 项目名称模糊 → projectId 集合（两段式，与 LogServiceImpl「操作人模糊」同范式，
+        // 不拼 SQL 无注入）。发货表只有 projectId 没有 projectName 列，只能先反查项目。
+        // 修复既有缺陷：nameKw 此前算了没用，前端「项目名称」查询框实际无效。
+        List<Long> projectIds = null;
+        if (nameKw != null) {
+            projectIds = projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                            .like(Project::getProjectName, nameKw).select(Project::getId))
+                    .stream().map(Project::getId).filter(Objects::nonNull).toList();
+            if (projectIds.isEmpty()) {
+                return new Page<>(current, size, 0);
+            }
+        }
+
+        // 行级数据隔离（2026-10-24 虎哥）：与立项同口径 —— 非 ROLE_ADMIN 只看 applicantId
+        // = 自己的发货单；ROLE_ADMIN 看全部。
+        // ⚠️ 此前 viewAll 参数从 Controller 一路传进来却没被使用（全员可见），本次补上。
+        // 发货人 shippedById 通常就是申请人自己（决策#2：发货人 = 操作人自身），
+        // 故只按 applicantId 过滤即可覆盖「我要处理的单子」；确认收货同理。
+        Long me = currentUserId();
+        if (DataScopeHelper.denyAll(me)) {
+            return new Page<>(current, size, 0);
+        }
         IPage<Shipment> page = shipmentMapper.selectPage(new Page<>(current, size),
-                new LambdaQueryWrapper<Shipment>()
-                        .like(noKw != null, Shipment::getBatchNo, noKw)
-                        .eq(statusEq != null, Shipment::getShipmentStatus, statusEq)
-                        .orderByDesc(Shipment::getCreatedAt));
+                DataScopeHelper.own(
+                        new LambdaQueryWrapper<Shipment>()
+                                .like(noKw != null, Shipment::getBatchNo, noKw)
+                                .in(projectIds != null, Shipment::getProjectId, projectIds)
+                                .eq(statusEq != null, Shipment::getShipmentStatus, statusEq)
+                                .orderByDesc(Shipment::getCreatedAt),
+                        Shipment::getApplicantId, me));
         return page.convert(s -> toVO(s, dictMaps(), userNamesOf(page.getRecords())));
     }
 

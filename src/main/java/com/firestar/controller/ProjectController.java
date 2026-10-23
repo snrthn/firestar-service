@@ -101,6 +101,16 @@ public class ProjectController {
         return Result.success();
     }
 
+    /**
+     * 申请人撤回（方案 B）：审批流程未结束时，发起人可主动撤回 → CANCELLED 终态。
+     * 仅发起人可撤（引擎三道闸把关，管理员不代撤）；已审批过的人会收到撤回通知。
+     */
+    @PostMapping("/{id}/withdraw")
+    public Result<Void> withdraw(@PathVariable Long id) {
+        projectService.withdraw(id);
+        return Result.success();
+    }
+
     /** 审批进度：查询某立项单据的完整审批时间线（进行中节点前端高亮，2026-10-22 时间线化改造） */
     @GetMapping("/{id}/timeline")
     public Result<List<TimelineNodeVO>> timeline(@PathVariable Long id) {

@@ -374,6 +374,48 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     @Override
+    public List<Long> withdraw(String processInstanceId, String username, String reason) {
+        if (processInstanceId == null || processInstanceId.isBlank()
+                || username == null || username.isBlank()) {
+            throw new IllegalArgumentException("流程实例或操作人缺失，无法撤回");
+        }
+        // 闸①发起人身份：运行中实例在历史表同样有记录，直接查历史表最稳
+        HistoricProcessInstance hi = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        if (hi == null) {
+            throw new IllegalArgumentException("流程实例不存在，无法撤回");
+        }
+        if (!username.equals(hi.getStartUserId())) {
+            throw new IllegalArgumentException("仅发起人可撤回本申请");
+        }
+        // 闸②流程仍在运行：已自然结束（审完）的实例撤回语义不存在
+        if (runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult() == null) {
+            throw new IllegalArgumentException("流程已结束，无法撤回");
+        }
+        // 先收集已审批人再终结：terminate 后历史任务虽仍在，但先取可避免任何时序歧义
+        Set<String> approved = new LinkedHashSet<>();
+        for (HistoricTaskInstance h : historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(processInstanceId).finished().list()) {
+            String a = h.getAssignee();
+            if (a != null && !a.isBlank() && !a.equals(username)) {
+                approved.add(a);
+            }
+        }
+        // 闸③并发：terminate 与审批撞车时先到先赢，后到者由 complete 侧报错（候选人校验兜底）
+        terminate(processInstanceId, reason);
+        List<Long> ids = new ArrayList<>();
+        for (String u : approved) {
+            User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, u));
+            if (user != null && user.getId() != null) {
+                ids.add(user.getId());
+            }
+        }
+        log.info("[workflow] 申请人撤回 instanceId={} user={} 已审批人={}", processInstanceId, username, approved);
+        return ids;
+    }
+
+    @Override
     public List<TaskInfo> listTasks(String processInstanceId) {
         if (processInstanceId == null || processInstanceId.isBlank()) {
             return Collections.emptyList();
@@ -546,6 +588,11 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             vo.setNodeId(h.getTaskDefinitionKey());
             vo.setProcessInstanceId(h.getProcessInstanceId());
             vo.setProcessDefinitionKey(defKeyOf(h.getProcessDefinitionId()));
+            // bizKey 必填（2026-10-23 虎哥：「我已审批」业务列整列空白）：审批中心门面
+            // （ProjectServiceImpl.myApprovedHistoryPage）靠它 enrich 业务标题，此前漏填
+            // 导致 bizKey/bizTitle 恒 null。getBusinessKey 内部 runtime 查不到会兜底查
+            // 历史实例表——本场景流程大多已结束，正好适配。
+            vo.setBizKey(getBusinessKey(h.getProcessInstanceId()));
             vo.setEndTime(toLocalDateTime(h.getEndTime()));
             // 结果列判据同时间线：deleteReason 非空 = 该任务被 moveActivityIdTo 删除 = 我在此节点驳回
             vo.setResult(h.getDeleteReason() != null && !h.getDeleteReason().isEmpty()

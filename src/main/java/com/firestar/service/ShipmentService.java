@@ -32,6 +32,20 @@ public interface ShipmentService {
     /** 审批通过回调（P3 引擎 complete 后业务回写 + 通知引导发货，决策#2） */
     void completeTask(String taskId, Map<String, Object> variables);
 
+    /**
+     * 申请人撤回（2026-10-23 虎哥拍板方案 B）：审批流程未结束时，发起人可主动撤回发货申请。
+     * 引擎层三道闸（发起人身份 / 流程运行中 / 并发谁先谁赢）不过即抛异常。
+     * 撤回后状态置 CANCELLED，并强制通知已审批过的人。
+     */
+    void withdraw(Long shipmentId);
+
+    /**
+     * 编辑发货申请（2026-10-23 虎哥：发货单需要编辑入口）。
+     * 仅 PENDING 可编辑，项目不可更换；先退还旧明细占用额度再按新明细重新校验占用，
+     * 避免「减量编辑」被自己旧占用误判超发。
+     */
+    void update(Long id, ShipmentCreateReq req);
+
     /** 审批驳回（单节点流程无退回目标，故终结流程实例 + 置 REJECTED + 通知申请人，决策#2/#6 同人逻辑） */
     void rejectTask(String taskId, String comment);
 

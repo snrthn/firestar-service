@@ -345,6 +345,53 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
+    @Auditable(operationType = "UPDATE", targetType = "PROJECT",
+            targetIdSpEl = "#id", entityClass = Project.class,
+            fields = {"approvalStatus"})
+    public void withdraw(Long id) {
+        Project exist = mapper.selectById(id);
+        if (exist == null) {
+            throw new IllegalArgumentException("项目不存在：" + id);
+        }
+        if (exist.getProcessInstanceId() == null || exist.getProcessInstanceId().isBlank()) {
+            throw new IllegalArgumentException("该项目没有进行中的审批流程，无需撤回");
+        }
+        // 引擎三道闸：发起人身份（admin 不代撤）+ 流程仍在运行；返回已审批人 userId
+        List<Long> approvedUserIds = engine.withdraw(exist.getProcessInstanceId(), currentUsername(),
+                "申请人撤回立项审批，项目 id=" + exist.getId());
+        // CANCELLED = 终态只读（方案 B）：要再来就新建，不回草稿——已有人审过的内容再改会污染审计链
+        exist.setApprovalStatus("CANCELLED");
+        exist.setUpdatedBy(currentUserId());
+        mapper.updateById(exist);
+        log.info("[project] 申请人撤回 id={} user={} 已审批人={}", id, currentUsername(), approvedUserIds);
+        // 方案 B 核心补偿：告知已审过的人，否则其审批动作无声蒸发
+        notifyWithdrawn(approvedUserIds, String.valueOf(exist.getId()), exist.getProjectName());
+    }
+
+    /**
+     * 撤回通知（模板 PROJECT_WITHDRAWN，V56 种子）。
+     * 收件人 = 引擎返回的已审批人（无人审批过时列表为空 → 跳过，不必打扰任何人）。
+     */
+    private void notifyWithdrawn(List<Long> receivers, String bizKey, String bizTitle) {
+        if (receivers == null || receivers.isEmpty()) {
+            log.debug("[notify] 撤回时尚无人审批，跳过通知 bizKey={}", bizKey);
+            return;
+        }
+        NotifyCommand cmd = new NotifyCommand();
+        cmd.setCode("PROJECT_WITHDRAWN");
+        cmd.setReceivers(receivers);
+        cmd.setBizType("PROJECT");
+        cmd.setBizId(bizKey);
+        cmd.setLinkUrl("/project");
+        cmd.setDedupKey("PROJECT_WITHDRAWN:PROJECT:" + bizKey);
+        cmd.setVars(Map.of(
+                "bizTitle", bizTitle == null ? "" : bizTitle,
+                "operator", currentUsername() == null ? "" : currentUsername()));
+        cmd.setOperatorId(currentUserId());
+        notificationService.notify(cmd);
+    }
+
+    @Override
     public List<TimelineNodeVO> listTimeline(Long id) {
         Project exist = mapper.selectById(id);
         if (exist == null) {

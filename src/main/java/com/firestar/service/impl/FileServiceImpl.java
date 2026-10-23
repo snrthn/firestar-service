@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.DataScopeHelper;
 import com.firestar.common.IpUtil;
 import com.firestar.dto.FileDownloadLogVO;
 import com.firestar.dto.FileVO;
@@ -188,6 +189,13 @@ public class FileServiceImpl implements FileService {
 
     @Override
     public IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, String fileType, String keyword) {
+        // 行级数据隔离（2026-10-24 虎哥）：非 ROLE_ADMIN 只看自己上传的文件（uploaderId = 自己）。
+        // 注意这里隔离的是「文件管理」列表页；业务单据里按 fileId 直取附件不受影响——
+        // 审批人仍能在发货详情里看到别人传的签收证据，只是不会出现在自己的文件管理列表。
+        Long me = DataScopeHelper.currentUserId(userMapper);
+        if (DataScopeHelper.denyAll(me)) {
+            return page(pageNum, pageSize);
+        }
         LambdaQueryWrapper<FileStorage> wrapper = new LambdaQueryWrapper<>();
         // 已删除的不进列表（sys_ 表不带逻辑删除，靠 status 停用）
         wrapper.eq(FileStorage::getStatus, STATUS_NORMAL);
@@ -197,6 +205,7 @@ public class FileServiceImpl implements FileService {
                 .like(FileStorage::getOriginalName, keyword)
                 .or().like(FileStorage::getFileName, keyword));
         wrapper.orderByDesc(FileStorage::getCreatedAt);
+        DataScopeHelper.own(wrapper, FileStorage::getUploaderId, me);
 
         IPage<FileStorage> page = fileMapper.selectPage(page(pageNum, pageSize), wrapper);
         Map<Long, String> names = uploaderNames(page.getRecords());
@@ -275,10 +284,19 @@ public class FileServiceImpl implements FileService {
                 return page(pageNum, pageSize);
             }
         }
+        // 行级数据隔离（2026-10-24 虎哥）：非 ROLE_ADMIN 只看自己的下载记录
+        // （downloaderId = 自己）。口径 = 「我下载过什么」，与登录日志/操作日志一致。
+        // ⚠️ 取舍：文件属主因此看不到「谁下载了我的文件」——那是另一种审计视角，
+        //    当前菜单（下载记录）没有该诉求，先按统一口径收敛，需要时再开白名单。
+        Long me = DataScopeHelper.currentUserId(userMapper);
+        if (DataScopeHelper.denyAll(me)) {
+            return page(pageNum, pageSize);
+        }
         LambdaQueryWrapper<FileDownloadLog> wrapper = new LambdaQueryWrapper<FileDownloadLog>()
                 .eq(fileId != null, FileDownloadLog::getFileId, fileId)
                 .in(keywordFileIds != null, FileDownloadLog::getFileId, keywordFileIds)
                 .orderByDesc(FileDownloadLog::getDownloadedAt);
+        DataScopeHelper.own(wrapper, FileDownloadLog::getDownloaderId, me);
         IPage<FileDownloadLog> page = downloadLogMapper.selectPage(page(pageNum, pageSize), wrapper);
         Map<Long, FileStorage> files = fileMap(page.getRecords());
         Map<Long, String> names = uploaderNames(page.getRecords(), FileDownloadLog::getDownloaderId);

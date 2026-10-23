@@ -50,6 +50,14 @@ public interface ProjectService {
      */
     void submit(Long id);
 
+    /**
+     * 申请人撤回（2026-10-23 虎哥拍板方案 B）：审批流程未结束时，发起人可主动撤回立项申请。
+     * 引擎层三道闸（发起人身份 / 流程运行中 / 并发谁先谁赢）不过即抛异常。
+     * 撤回后状态置 CANCELLED（终态只读），并强制通知已审批过的人（方案 B 核心补偿，
+     * 否则他们的审批动作被无声抹掉 = 审计断链）。
+     */
+    void withdraw(Long id);
+
     /** 查询某立项单据的完整审批时间线（ACT_HI_TASKINST 单源，进行中节点前端高亮） */
     List<TimelineNodeVO> listTimeline(Long id);
 
