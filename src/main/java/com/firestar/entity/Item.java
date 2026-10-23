@@ -31,6 +31,13 @@ public class Item extends LogicDeleteEntity {
     /** 数量 */
     private Integer quantity;
 
+    /**
+     * 已发货累计数量（V49 新增）。
+     * 超发硬卡实时判断：quantity - shippedQty = 剩余可发量（决策#3）；
+     * 写时带 version 乐观锁，并发超发会抛 OptimisticLockException 回滚。
+     */
+    private Integer shippedQty;
+
     /** 单价 */
     private BigDecimal unitPrice;
 

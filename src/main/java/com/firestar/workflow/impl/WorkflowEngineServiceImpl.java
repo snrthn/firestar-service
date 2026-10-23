@@ -243,6 +243,8 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (task == null) {
             throw new IllegalArgumentException(describeMissingTask(taskId));
         }
+        // 候选人校验（2026-10-23）：非候选人/非管理员直接拒，堵「谁拿 taskId 都能批」
+        assertHandleable(task);
         String instanceId = task.getProcessInstanceId();
         // claim 落实际操作人（2026-10-22 虎哥截图实锤：时间线历史节点「处理人：—」）：
         // ROLE/USER 候选组任务不 claim 直接 complete 时 ACT_HI_TASKINST.ASSIGNEE_ 为 null，
@@ -273,6 +275,8 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (task == null) {
             throw new IllegalArgumentException(describeMissingTask(taskId));
         }
+        // 同 complete：先过候选人校验再动流程
+        assertHandleable(task);
         String instanceId = task.getProcessInstanceId();
         // 同 complete：claim 落实际操作人 + 落评论归属 userId（2026-10-22 虎哥截图实锤）
         claimAsCurrentUser(task);
@@ -541,6 +545,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             vo.setTaskName(h.getName());
             vo.setNodeId(h.getTaskDefinitionKey());
             vo.setProcessInstanceId(h.getProcessInstanceId());
+            vo.setProcessDefinitionKey(defKeyOf(h.getProcessDefinitionId()));
             vo.setEndTime(toLocalDateTime(h.getEndTime()));
             // 结果列判据同时间线：deleteReason 非空 = 该任务被 moveActivityIdTo 删除 = 我在此节点驳回
             vo.setResult(h.getDeleteReason() != null && !h.getDeleteReason().isEmpty()
@@ -578,6 +583,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         info.setTaskName(t.getName());
         info.setNodeId(t.getTaskDefinitionKey());
         info.setProcessInstanceId(t.getProcessInstanceId());
+        info.setProcessDefinitionKey(defKeyOf(t.getProcessDefinitionId()));
         info.setBizKey(getBusinessKey(t.getProcessInstanceId()));
         info.setAssignee(t.getAssignee());
         fillCandidates(t, info);
@@ -604,6 +610,61 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     private String currentUsername() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return auth == null ? null : auth.getName();
+    }
+
+    @Override
+    public void assertTaskHandleable(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            throw new IllegalArgumentException("taskId 不能为空");
+        }
+        Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
+        if (task == null) {
+            return; // 任务不存在由调用方（complete/reject）抛，此处不重复
+        }
+        assertHandleable(task);
+    }
+
+    /**
+     * 候选人校验（complete/reject 内部 + assertTaskHandleable 共用）：
+     * 当前用户命中 assignee / candidateUser / candidateGroups（按用户角色匹配）放行；
+     * ROLE_ADMIN 兜底放行（管理员演示/运维需要）；否则抛 IllegalArgumentException。
+     */
+    private void assertHandleable(Task task) {
+        String username = currentUsername();
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("无登录上下文，无法处理审批任务");
+        }
+        List<String> myRoles = roleCodesOf(username);
+        if (myRoles.contains("ROLE_ADMIN")) {
+            return;
+        }
+        if (username.equals(task.getAssignee())) {
+            return;
+        }
+        for (IdentityLink link : taskService.getIdentityLinksForTask(task.getId())) {
+            if (!IdentityLinkType.CANDIDATE.equals(link.getType())) {
+                continue;
+            }
+            if (username.equals(link.getUserId())) {
+                return;
+            }
+            if (link.getGroupId() != null && myRoles.contains(link.getGroupId())) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException("无权处理该审批任务：当前用户不在候选人范围（任务：" + task.getName() + "）");
+    }
+
+    /**
+     * Flowable processDefinitionId 形如 {@code key:version:id}（如 shipment_approval:1:4445…），
+     * 取冒号前第一段即流程定义 key；无冒号时原样返回。供审批中心 enrich 按流程分发（2026-10-23）。
+     */
+    private String defKeyOf(String processDefinitionId) {
+        if (processDefinitionId == null || processDefinitionId.isEmpty()) {
+            return null;
+        }
+        int idx = processDefinitionId.indexOf(':');
+        return idx > 0 ? processDefinitionId.substring(0, idx) : processDefinitionId;
     }
 
     /**

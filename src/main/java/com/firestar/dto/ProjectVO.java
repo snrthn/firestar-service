@@ -5,6 +5,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 项目视图对象（含字典翻译后的 approvalStatusName）。
@@ -31,6 +32,15 @@ public class ProjectVO {
 
     private BigDecimal contractAmount;
 
+    /** 累计发货金额（Σ fin_shipment.shipment_amount，按项目聚合；发货流程 V50 起有数，需求「项目六件套」之一） */
+    private BigDecimal shippedAmount;
+
+    /** 累计已收货金额（Σ fin_shipment.received_amount） */
+    private BigDecimal receivedAmount;
+
+    /** 累计退货金额（Σ fin_shipment.returned_amount） */
+    private BigDecimal returnedAmount;
+
     /** 签约描述/签约留言（签约时补录，非必填；V46） */
     private String contractDesc;
 
@@ -48,6 +58,9 @@ public class ProjectVO {
 
     /** 审批状态中文名（字典翻译） */
     private String approvalStatusName;
+
+    /** 货物明细列表（方案2：立项带行；详情/编辑回填用，列表页不填充以避 N+1） */
+    private List<ItemVO> items;
 
     /** 审批状态标签色（字典 style：info/warning/danger/success，V45 补种；前端 el-tag type 直接用） */
     private String approvalStatusStyle;

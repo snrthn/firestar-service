@@ -38,6 +38,9 @@ public class Shipment extends LogicDeleteEntity {
     /** 发货状态（字典 shipment_status） */
     private String shipmentStatus;
 
+    /** Flowable 流程实例 ID（提交审批后写入；驳回/终结后保留便于排查） */
+    private String processInstanceId;
+
     /** 关联应收单 ID（1:1 反向引用） */
     private Long receivableId;
 

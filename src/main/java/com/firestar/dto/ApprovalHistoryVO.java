@@ -31,6 +31,9 @@ public class ApprovalHistoryVO {
     /** 业务单据标识（= 流程实例 businessKey，如项目 ID），前端据此调进度接口 */
     private String bizKey;
 
+    /** 流程定义 key（project_initiate / shipment_approval …，2026-10-23 通用化 enrich 分发用） */
+    private String processDefinitionKey;
+
     /** 业务标题（如项目名称），由业务层 enrich，引擎层不直接查业务表 */
     private String bizTitle;
 

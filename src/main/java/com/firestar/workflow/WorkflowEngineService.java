@@ -55,6 +55,9 @@ public interface WorkflowEngineService {
     /**
      * 完成当前任务。
      *
+     * <p>内部强制候选人校验（assertTaskHandleable）：当前用户须为 assignee / candidateUser /
+     * candidateGroups 命中其角色之一，ROLE_ADMIN 兜底放行；否则抛 IllegalArgumentException。</p>
+     *
      * @param taskId    任务 ID
      * @param variables 流程变量（可空）
      * @param comment   审批留言（可空；非空时落 Flowable 评论 ACT_HI_COMMENT，
@@ -62,6 +65,14 @@ public interface WorkflowEngineService {
      * @return 该任务所属流程实例 ID（调用方据其查新任务 / 业务单据，驱动通知与进度）
      */
     String complete(String taskId, Map<String, Object> variables, String comment);
+
+    /**
+     * 候选人校验（2026-10-23 虎哥：审批入口收归审批中心，引擎层堵「谁拿 taskId 都能批」）：
+     * 当前登录用户须命中任务 assignee / candidateUser / candidateGroups（按用户角色匹配），
+     * ROLE_ADMIN 兜底放行（管理员演示/运维需要）。任务不存在时静默返回（由调用方抛任务不存在）。
+     * reject 内部同样执行；terminate 路径（业务层自行调用）需显式调用本方法。
+     */
+    void assertTaskHandleable(String taskId);
 
     /**
      * 驳回：把指定任务退回目标节点（源节点由任务自动解析，调用方只需传目标节点 id）。
