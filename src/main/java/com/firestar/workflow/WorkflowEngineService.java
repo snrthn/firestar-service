@@ -96,6 +96,14 @@ public interface WorkflowEngineService {
      */
     List<TimelineNodeVO> listTimeline(String processInstanceId);
 
+    /**
+     * 按业务单据标识（businessKey，如项目 ID）聚合该单据的全部历史审批时间线。
+     * <p>与 {@link #listTimeline(String)} 的区别：重提会终结旧流程实例并起新实例，
+     * 二者 businessKey 相同（submit 时 businessKey = 项目 ID），此方法 union 出重提前后的
+     * 完整时间线——2026-10-23 虎哥：驳回/重提后历史必须完整，不可只从最后一次实例开始。</p>
+     */
+    List<TimelineNodeVO> listTimelineByBusinessKey(String businessKey);
+
     /** 取流程实例的 businessKey（业务单据标识，如项目 ID）；实例不存在返回 null */
     String getBusinessKey(String instanceId);
 

@@ -266,7 +266,7 @@ public class ProjectServiceImpl implements ProjectService {
         if (exist.getProcessInstanceId() == null || exist.getProcessInstanceId().isBlank()) {
             return Collections.emptyList();
         }
-        return appendEndNode(engine.listTimeline(exist.getProcessInstanceId()), exist.getApprovalStatus());
+        return appendEndNode(engine.listTimelineByBusinessKey(String.valueOf(exist.getId())), exist.getApprovalStatus());
     }
 
     /**

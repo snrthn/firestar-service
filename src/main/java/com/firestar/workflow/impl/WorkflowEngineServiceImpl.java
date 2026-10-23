@@ -20,6 +20,7 @@ import org.flowable.bpmn.model.*;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.IdentityService;
 import org.flowable.engine.RepositoryService;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.task.api.history.HistoricTaskInstance;
@@ -423,13 +424,49 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (processInstanceId == null || processInstanceId.isBlank()) {
             return Collections.emptyList();
         }
-        // ACT_HI_TASKINST 单源查询：已完成 / 已驳回删除（deleteReason 非空）/ 进行中
-        // （endTime = null）三类实例同表，按开始时间升序即完整时间线。
-        // 被 skipNodeIds 条件流绕过的节点不会创建任务实例，天然不出现在时间线里。
         List<HistoricTaskInstance> his = historyService.createHistoricTaskInstanceQuery()
                 .processInstanceId(processInstanceId)
                 .orderByHistoricTaskInstanceStartTime().asc()
                 .list();
+        return buildTimelineFromTasks(his);
+    }
+
+    /**
+     * 按业务单据标识（businessKey，如项目 ID）聚合该单据的全部历史审批时间线。
+     * <p>重提会 terminate 旧流程实例并 start 新实例，二者 businessKey 同为项目 ID
+     * （{@code submit} 时 businessKey = String.valueOf(projectId)），故可 union 出
+     * 重提前后的完整时间线——2026-10-23 虎哥：驳回/重提后历史必须完整，不可只从最后一次实例开始。</p>
+     */
+    @Override
+    public List<TimelineNodeVO> listTimelineByBusinessKey(String businessKey) {
+        if (businessKey == null || businessKey.isBlank()) {
+            return Collections.emptyList();
+        }
+        // 聚合该 businessKey 下的所有流程实例（含已 terminate 的旧实例，其 ACT_HI_PROCINST 仍在）
+        List<HistoricProcessInstance> procInsts = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceBusinessKey(businessKey)
+                .list();
+        List<HistoricTaskInstance> allTasks = new ArrayList<>();
+        for (HistoricProcessInstance pi : procInsts) {
+            allTasks.addAll(historyService.createHistoricTaskInstanceQuery()
+                    .processInstanceId(pi.getId())
+                    .list());
+        }
+        if (allTasks.isEmpty()) {
+            return Collections.emptyList();
+        }
+        // 跨实例统一按开始时间升序（单实例查询已隐含此序，跨实例必须显式排）
+        allTasks.sort(Comparator.comparing(HistoricTaskInstance::getStartTime,
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        return buildTimelineFromTasks(allTasks);
+    }
+
+    /**
+     * 由历史任务列表构建时间线节点。ACT_HI_TASKINST 单源：已完成 / 已驳回删除
+     * （deleteReason 非空）/ 进行中（endTime = null）三类同表。被 skipNodeIds 条件流
+     * 绕过的节点不会创建任务实例，天然不出现在时间线里。调用方需保证入参按开始时间升序。
+     */
+    private List<TimelineNodeVO> buildTimelineFromTasks(List<HistoricTaskInstance> his) {
         List<TimelineNodeVO> result = new ArrayList<>();
         for (HistoricTaskInstance h : his) {
             TimelineNodeVO vo = new TimelineNodeVO();
