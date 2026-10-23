@@ -330,6 +330,12 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (!"PENDING".equals(s.getShipmentStatus())) {
             throw new IllegalArgumentException("仅「待发货」状态可标记发货，当前：" + s.getShipmentStatus());
         }
+        // 审批闸门（2026-10-24 虎哥补洞）：shipment_status 审批期间一直是 PENDING，
+        // 只查状态拦不住「审批没批完就发货」——必须叠加 approval_status=APPROVED 判定，
+        // 否则标记发货+标记收货可整条绕过审批链（决策#1/#2：审批通过后才发货）
+        if (!"APPROVED".equals(s.getApprovalStatus())) {
+            throw new IllegalArgumentException("发货审批通过后才可标记发货，当前审批状态：" + s.getApprovalStatus());
+        }
         s.setShipmentStatus("SHIPPED");
         s.setShipmentDate(LocalDateTime.now());
         s.setShippedById(operatorId); // 决策#2 澄清：发货人 = 操作人自身
