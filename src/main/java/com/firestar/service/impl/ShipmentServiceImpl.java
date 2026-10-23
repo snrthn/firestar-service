@@ -175,6 +175,8 @@ public class ShipmentServiceImpl implements ShipmentService {
         vars.put("applicantId", operatorId);
         String instanceId = engine.start(SHIPMENT_PROCESS_CODE, String.valueOf(shipment.getId()), vars);
         shipment.setProcessInstanceId(instanceId);
+        // 创建即提交审批 → 审批中（2026-10-24 虎哥：需明确信号供前端区分「审批中」与「已通过待发货」）
+        shipment.setApprovalStatus("APPROVING");
         shipmentMapper.updateById(shipment);
 
         log.info("[shipment] 创建并发起审批 id={} batchNo={} projectId={} amount={}",
@@ -350,14 +352,15 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (s == null) {
             throw new IllegalArgumentException("发货单不存在：" + req.getShipmentId());
         }
-        if (!"SHIPPED".equals(s.getShipmentStatus())) {
-            throw new IllegalArgumentException("仅「已发货」状态可标记客户收货，当前：" + s.getShipmentStatus());
+        // 部分收货后可续收（2026-10-24 虎哥：玻璃水本次收 0，剩余量后续还要再收）
+        // SHIPPED = 首次收货；PARTIAL_RECEIVED = 续收。FULL_RECEIVED/FINAL 为终态不可再收
+        if (!"SHIPPED".equals(s.getShipmentStatus()) && !"PARTIAL_RECEIVED".equals(s.getShipmentStatus())) {
+            throw new IllegalArgumentException("仅「已发货/部分收货」状态可标记客户收货，当前：" + s.getShipmentStatus());
         }
         List<ShipmentLine> lines = shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
                 .eq(ShipmentLine::getShipmentId, s.getId()));
         Map<Long, ShipmentLine> lineByItem = lines.stream()
                 .collect(Collectors.toMap(ShipmentLine::getItemId, l -> l));
-        boolean allReceived = true;
         for (ShipmentLineReceiveReq r : req.getLines()) {
             ShipmentLine line = lineByItem.get(r.getItemId());
             if (line == null) {
@@ -376,10 +379,12 @@ public class ShipmentServiceImpl implements ShipmentService {
             line.setLineStatus(Objects.equals(line.getReceivedQty(), line.getShipmentQty())
                     ? "FULL_RECEIVED" : "PARTIAL_RECEIVED");
             shipmentLineMapper.updateById(line);
-            if (!Objects.equals(line.getReceivedQty(), line.getShipmentQty())) {
-                allReceived = false;
-            }
         }
+        // 全部收货判定必须覆盖发货单「全部」明细行（2026-10-24 虎哥实锤：玻璃水收 0 被误判全部收货）。
+        // 前端 payload 只携带本次有收货动作的行（收 0 的行被过滤），逐行累加后必须回到全量行上判定，
+        // 任一行 已收 < 已发 即为部分收货
+        boolean allReceived = lines.stream().allMatch(l ->
+                Objects.equals(l.getReceivedQty(), l.getShipmentQty()));
         s.setShipmentStatus(allReceived ? "FULL_RECEIVED" : "PARTIAL_RECEIVED");
         s.setConfirmedById(operatorId);
         s.setUpdatedBy(operatorId);
@@ -406,8 +411,12 @@ public class ShipmentServiceImpl implements ShipmentService {
             String bizKey = bizKeyUpfront != null ? bizKeyUpfront : engine.getBusinessKey(instanceId);
             Shipment s = (bizKey != null) ? shipmentMapper.selectById(Long.parseLong(bizKey)) : null;
             if (s != null) {
-                // 状态创建时即 PENDING（待发货），此处无需改状态，仅发通知引导发货
-                notifyApproved(s, currentUserId());
+                // shipment_status 创建时即 PENDING（待发货），此处无需改；但回写审批状态为 APPROVED，
+                // 供前端据此隐藏「编辑」入口（虎哥 2026-10-24：审批通过后不可再编辑，直接标记发货）
+                s.setApprovalStatus("APPROVED");
+                shipmentMapper.updateById(s);
+                // 通知申请人（= 提交发货单的人）前往发货管理页自己发货（数据隔离：审批人未必能看该单）
+                notifyApproved(s);
                 log.info("[shipment] 审批通过回写并通知 id={}", s.getId());
             } else {
                 log.warn("[shipment] 审批通过但未回写：bizKey={} 找不到发货单 instanceId={}", bizKey, instanceId);
@@ -449,6 +458,7 @@ public class ShipmentServiceImpl implements ShipmentService {
             releaseItemOccupancy(s.getId());
         }
         s.setShipmentStatus("REJECTED");
+        s.setApprovalStatus("REJECTED");
         s.setUpdatedBy(currentUserId());
         shipmentMapper.updateById(s);
         log.info("[shipment] 审批驳回回写 id={} comment={}", s.getId(), comment);
@@ -498,6 +508,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         // CANCELLED = 终态只读（方案 B）。发货状态字典 shipment_status 无 CANCELLED 项，
         // V56 一并补字典，避免列表状态列显示裸码（V55 同款教训）。
         s.setShipmentStatus("CANCELLED");
+        s.setApprovalStatus("CANCELLED");
         s.setUpdatedBy(currentUserId());
         shipmentMapper.updateById(s);
         log.info("[shipment] 申请人撤回 id={} user={} 已审批人={}", shipmentId, currentUsername(), approvedUserIds);
@@ -601,6 +612,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         vo.setShipmentStatusStyle(st != null ? st.getStyle() : null);
         vo.setReceivableId(s.getReceivableId());
         vo.setProcessInstanceId(s.getProcessInstanceId());
+        vo.setApprovalStatus(s.getApprovalStatus());
         vo.setApplicantId(s.getApplicantId());
         vo.setApplicantName(s.getApplicantId() != null ? userNames.get(s.getApplicantId()) : null);
         vo.setShippedById(s.getShippedById());
@@ -765,23 +777,28 @@ public class ShipmentServiceImpl implements ShipmentService {
         notificationService.notify(cmd);
     }
 
-    /** 审批通过时通知审批人（= 当前操作人 = 发货人，决策#2 澄清同人）引导发货 */
-    private void notifyApproved(Shipment s, Long approverId) {
-        if (approverId == null) {
+    /**
+     * 审批通过时通知申请人（= 提交发货单的销售经理）：引导其前往发货管理页自己发货。
+     * 不通知审批人——审批人因数据隔离（非申请人看不到该单）不一定能点进 /shipment 操作，
+     * 让申请人自行发货才是闭环（虎哥 2026-10-24）。链接已指向 /shipment，模板文案亦为申请人视角。
+     */
+    private void notifyApproved(Shipment s) {
+        Long applicantId = s.getApplicantId();
+        if (applicantId == null) {
             return;
         }
         Project p = projectMapper.selectById(s.getProjectId());
         NotifyCommand cmd = new NotifyCommand();
         cmd.setCode("SHIPMENT_APPROVED_GUIDE");
-        cmd.setReceivers(List.of(approverId));
+        cmd.setReceivers(List.of(applicantId));
         cmd.setBizType("SHIPMENT");
         cmd.setBizId(String.valueOf(s.getId()));
         cmd.setLinkUrl("/shipment");
-        cmd.setDedupKey("SHIPMENT_APPROVED_GUIDE:SHIPMENT:" + s.getId() + ":" + approverId);
+        cmd.setDedupKey("SHIPMENT_APPROVED_GUIDE:SHIPMENT:" + s.getId());
         cmd.setVars(Map.of(
                 "batchNo", s.getBatchNo() == null ? "" : s.getBatchNo(),
                 "projectName", p != null && p.getProjectName() != null ? p.getProjectName() : ""));
-        cmd.setOperatorId(approverId);
+        cmd.setOperatorId(applicantId);
         notificationService.notify(cmd);
     }
 

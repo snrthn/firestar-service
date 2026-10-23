@@ -50,10 +50,22 @@ public class ReceivableServiceImpl implements ReceivableService {
 
     @Override
     public Long createFromShipment(Long shipmentId, Long operatorId) {
-        // 幂等：同发货单已生成过应收单则直接返回（避免 uk_receivable_shipment 撞 DuplicateKey）
+        // 幂等：同发货单已生成过应收单则「金额重算后复用」（2026-10-24 虎哥：部分收货可续收，
+        // 第二次收货必须把新增已收金额补进同一张应收单——既不能重复建单，也不能金额停在首收值）
         Receivable exist = receivableMapper.selectOne(new LambdaQueryWrapper<Receivable>()
-                .eq(Receivable::getShipmentId, shipmentId).select(Receivable::getId));
+                .eq(Receivable::getShipmentId, shipmentId));
         if (exist != null) {
+            BigDecimal amount = cumulativeReceivedAmount(shipmentId);
+            exist.setReceivableAmount(amount);
+            // 已核销/已开票保持不动（可能已有后续核销/开票动作），未核销/未开票 = 应收 - 对应已发生额
+            BigDecimal writtenOff = exist.getWrittenOffAmount() == null ? BigDecimal.ZERO : exist.getWrittenOffAmount();
+            BigDecimal invoiced = exist.getInvoicedAmount() == null ? BigDecimal.ZERO : exist.getInvoicedAmount();
+            exist.setUnwrittenOffAmount(amount.subtract(writtenOff));
+            exist.setUninvoicedAmount(amount.subtract(invoiced));
+            exist.setUpdatedBy(operatorId);
+            receivableMapper.updateById(exist);
+            log.info("[receivable] 部分收货续收，应收单金额重算 id={} no={} amount={}",
+                    exist.getId(), exist.getReceivableNo(), amount);
             return exist.getId();
         }
         Shipment shipment = shipmentMapper.selectById(shipmentId);
@@ -61,13 +73,7 @@ public class ReceivableServiceImpl implements ReceivableService {
             throw new IllegalArgumentException("发货单不存在：" + shipmentId);
         }
         // 金额 = Σ 已收数量 × 单价（决策#2：金额按 receivedQty 计算，收货确认才确认金额）
-        BigDecimal amount = shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
-                        .eq(ShipmentLine::getShipmentId, shipmentId))
-                .stream()
-                .map(line -> (line.getUnitPrice() != null && line.getReceivedQty() != null)
-                        ? line.getUnitPrice().multiply(BigDecimal.valueOf(line.getReceivedQty()))
-                        : BigDecimal.ZERO)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal amount = cumulativeReceivedAmount(shipmentId);
 
         Receivable r = new Receivable();
         r.setProjectId(shipment.getProjectId());
@@ -87,6 +93,17 @@ public class ReceivableServiceImpl implements ReceivableService {
 
         log.info("[receivable] 由发货单生成应收单 id={} no={} amount={}", r.getId(), r.getReceivableNo(), amount);
         return r.getId();
+    }
+
+    /** 金额 = Σ 已收数量 × 单价（决策#2：金额按 receivedQty 计算，收货确认才确认金额；首建/续收共用一份口径） */
+    private BigDecimal cumulativeReceivedAmount(Long shipmentId) {
+        return shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
+                        .eq(ShipmentLine::getShipmentId, shipmentId))
+                .stream()
+                .map(line -> (line.getUnitPrice() != null && line.getReceivedQty() != null)
+                        ? line.getUnitPrice().multiply(BigDecimal.valueOf(line.getReceivedQty()))
+                        : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** 当日序号自增（同 ShipmentServiceImpl.generateBatchNo 范式；uk_tenant_receivable_no 兜底防重） */

@@ -41,6 +41,9 @@ public class Shipment extends LogicDeleteEntity {
     /** Flowable 流程实例 ID（提交审批后写入；驳回/终结后保留便于排查） */
     private String processInstanceId;
 
+    /** 审批状态（APPROVING/APPROVED/REJECTED/CANCELLED；区分 shipment_status=PENDING 的审批中 vs 已通过待发货） */
+    private String approvalStatus;
+
     /** 关联应收单 ID（1:1 反向引用） */
     private Long receivableId;
 
