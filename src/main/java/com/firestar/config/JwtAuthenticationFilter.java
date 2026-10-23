@@ -6,6 +6,7 @@ import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
 import com.firestar.service.PermissionResolver;
 import com.firestar.service.TokenBlacklistService;
+import com.firestar.service.UserRoleService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -24,14 +25,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * JWT 认证过滤器：从 Authorization: Bearer <token> 解析出用户与角色，写入 Spring Security 上下文。
+ * JWT 认证过滤器：从 Authorization: Bearer <token> 解析出用户，写入 Spring Security 上下文。
  * 同时查 Token 黑名单（logout 后失效）。无 token 的请求直接放行，由 SecurityConfig 的
  * authorizeHttpRequests 决定是否需要认证（白名单匿名、其余 authenticated）。
  * 解析失败 / 黑名单命中 → 直接写 401 JSON，不再向下传递。
  *
- * 权限注入：除角色 authority 外，额外把当前用户拥有的 perm_code 以 {@code PERM:<code>}
- * 形式写入 authorities，供 PermissionInterceptor 做 API 级权限拦截。权限实时查库（不缓存，
- * 保证权限变更即时生效）。
+ * 角色来源（2026-10-23 改）：不再读 token 里的 roles 快照，而是按 token 的 username
+ * 实时查 user_role + sys_role 拿 roleCode。这样「变更用户角色」在下次请求即生效，
+ * 无需重登（菜单本就实时，此举让数据隔离/拦截器与菜单同源）；同时堵住
+ * 「减 ROLE_ADMIN 后菜单秒隐但 isAdmin()/超管捷径仍为真」的减权不生效洞。
+ * 权限点（PERM:<code>）仍由 PermissionResolver 每次实时解析。
  */
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -42,13 +45,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final TokenBlacklistService blacklistService;
     private final PermissionResolver permissionResolver;
     private final UserMapper userMapper;
+    private final UserRoleService userRoleService;
 
     public JwtAuthenticationFilter(JwtUtil jwtUtil, TokenBlacklistService blacklistService,
-                                   PermissionResolver permissionResolver, UserMapper userMapper) {
+                                   PermissionResolver permissionResolver, UserMapper userMapper,
+                                   UserRoleService userRoleService) {
         this.jwtUtil = jwtUtil;
         this.blacklistService = blacklistService;
         this.permissionResolver = permissionResolver;
         this.userMapper = userMapper;
+        this.userRoleService = userRoleService;
     }
 
     @Override
@@ -75,10 +81,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // ⚠️ select 里必须带上恒非空的 username：只选 current_jti 时该列为 NULL
                 // 会导致 MyBatis 不创建行对象（returnInstanceForEmptyRow=false）→
                 // 「用户存在」被误判成「用户不存在」（同类坑见 SseEndpointSupport 注释）。
+                // 2026-10-23 增补 User::getId：供下方 UserRoleService 按 userId 实时查角色。
                 String jti = claims.getId();
                 User sessionUser = userMapper.selectOne(new LambdaQueryWrapper<User>()
                         .eq(User::getUsername, username)
-                        .select(User::getUsername, User::getStatus, User::getCurrentJti));
+                        .select(User::getId, User::getUsername, User::getStatus, User::getCurrentJti));
                 if (sessionUser == null) {
                     // 用户已被物理删除，token 立即作废（旧实现是「查不到就放行」）
                     writeUnauthorized(response, "用户不存在或登录已失效");
@@ -93,7 +100,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     writeUnauthorized(response, "您的账号已在其他设备登录，原会话已失效，请重新登录");
                     return;
                 }
-                List<String> roles = jwtUtil.getRoles(token);
+                // 角色来源：实时查库（不再读 token 的 roles 快照）。
+                // 变更用户角色后，下次请求即按新角色重建 authorities（无需重登）。
+                List<String> roles = userRoleService.findRoleCodesByUserId(sessionUser.getId());
                 List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                 if (roles != null) {
                     roles.stream().map(SimpleGrantedAuthority::new).forEach(authorities::add);
