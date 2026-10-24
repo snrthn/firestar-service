@@ -250,6 +250,12 @@ public class DatabaseCheckService {
          *    → dictTypeCount 32→33、dictDataCount 133→135。
          * V62（回款/发票真上传）仅幂等覆盖既有 file_biz_type 项（receipt/invoice 早在 V20 已种），
          *    → 不新增任何字典行，故二者计数均保持 V59 后的值不变。
+         * V63（开票状态补枚举）新增 2 个字典项（invoice_status 补 CANCELLED/REJECTED，
+         *    后端 InvoiceServiceImpl 早就写入这两个字面量，V2 种子漏种），
+         *    → 不新增字典类型，故 dictTypeCount 保持 33、dictDataCount 135→137。
+         * V64（收款状态补 CANCELLED）新增 1 个字典项（receipt_status 补 CANCELLED，
+         *    撤回动作 2026-10-23 才有，V2 种子未含），
+         *    → 不新增字典类型，故 dictTypeCount 保持 33、dictDataCount 137→138。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
@@ -257,7 +263,7 @@ public class DatabaseCheckService {
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 33, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 135, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 138, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

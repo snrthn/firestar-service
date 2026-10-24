@@ -16,14 +16,18 @@ import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.entity.DictData;
+import com.firestar.entity.Invoice;
 import com.firestar.entity.Item;
 import com.firestar.entity.ProcessDef;
 import com.firestar.entity.Project;
+import com.firestar.entity.Receipt;
 import com.firestar.entity.User;
 import com.firestar.mapper.DictDataMapper;
+import com.firestar.mapper.InvoiceMapper;
 import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
+import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ShipmentMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.entity.Role;
@@ -96,13 +100,17 @@ public class ProjectServiceImpl implements ProjectService {
     private final UserRoleMapper userRoleMapper;
     private final ShipmentMapper shipmentMapper;
     private final ItemMapper itemMapper;
+    /** 收款/发票审批的业务标题 enrich（V63）：bizKey 是收款单/发票单 ID，与项目 ID 空间独立 */
+    private final ReceiptMapper receiptMapper;
+    private final InvoiceMapper invoiceMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
                               DictDataMapper dictDataMapper, WorkflowEngineService engine,
                               NotificationService notificationService, UserMapper userMapper,
                               RoleMapper roleMapper, UserRoleMapper userRoleMapper,
-                              ShipmentMapper shipmentMapper, ItemMapper itemMapper) {
+                              ShipmentMapper shipmentMapper, ItemMapper itemMapper,
+                              ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -113,6 +121,8 @@ public class ProjectServiceImpl implements ProjectService {
         this.userRoleMapper = userRoleMapper;
         this.shipmentMapper = shipmentMapper;
         this.itemMapper = itemMapper;
+        this.receiptMapper = receiptMapper;
+        this.invoiceMapper = invoiceMapper;
     }
 
     @Override
@@ -561,7 +571,8 @@ public class ProjectServiceImpl implements ProjectService {
             return tasks;
         }
         // enrich 业务标题 + 可驳回目标节点（2026-10-23 通用化：按 processDefinitionKey 分发，
-        // project_initiate → fin_project 项目名；shipment_approval → fin_shipment 批次号·项目名）
+        // project_initiate → 项目名；shipment_approval → 批次号·项目名；
+        // receipt_approval → 收款单号·项目名；invoice_approval → 发票号·项目名）
         Map<String, String> titleMap = enrichBizTitles(tasks);
         for (TaskInfo t : tasks) {
             t.setBizTitle(titleMap.get(t.getBizKey()));
@@ -571,10 +582,11 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     /**
-     * 按流程 key 批量 enrich 业务标题（bizKey 在项目/发货 ID 空间各自独立，必须按 key 分组合查，
-     * 不能混查——project 150 与 shipment 150 是两张表的不同单据）。
+     * 按流程 key 批量 enrich 业务标题（bizKey 在各业务 ID 空间各自独立，必须按 key 分组合查，
+     * 不能混查——project 150 与 shipment 150 与 receipt 150 是三张表的不同单据）。
      *
-     * @return bizKey → 标题（project：项目名；shipment：批次号 · 项目名）
+     * @return bizKey → 标题（project：项目名；shipment：批次号 · 项目名；
+     *          receipt：收款单号 · 项目名；invoice：发票号 · 项目名）
      */
     private Map<String, String> enrichBizTitles(List<TaskInfo> tasks) {
         Map<String, String> titleMap = new HashMap<>();
@@ -609,7 +621,51 @@ public class ProjectServiceImpl implements ProjectService {
                 titleMap.put(String.valueOf(s.getId()), pn == null ? title : title + " · " + pn);
             }
         }
+        // 收款审批（V63）：bizKey = 收款单 ID，标题「收款单号 · 项目名」——审批人要知道是哪笔钱
+        Set<String> receiptKeys = keysOf(tasks, ReceiptServiceImpl.RECEIPT_PROCESS_CODE);
+        if (!receiptKeys.isEmpty()) {
+            List<Long> ids = receiptKeys.stream().map(Long::parseLong).collect(Collectors.toList());
+            List<Receipt> receipts = receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
+                    .in(Receipt::getId, ids)
+                    .select(Receipt::getId, Receipt::getReceiptNo, Receipt::getProjectId));
+            Map<Long, String> projectNames = projectNamesOf(
+                    receipts.stream().map(Receipt::getProjectId).filter(Objects::nonNull).collect(Collectors.toSet()));
+            for (Receipt r : receipts) {
+                String title = r.getReceiptNo() == null ? "回款单" : r.getReceiptNo();
+                String pn = projectNames.get(r.getProjectId());
+                titleMap.put(String.valueOf(r.getId()), pn == null ? title : title + " · " + pn);
+            }
+        }
+        // 发票审批（V63）：bizKey = 发票单 ID，标题「发票号 · 项目名」
+        Set<String> invoiceKeys = keysOf(tasks, InvoiceServiceImpl.INVOICE_PROCESS_CODE);
+        if (!invoiceKeys.isEmpty()) {
+            List<Long> ids = invoiceKeys.stream().map(Long::parseLong).collect(Collectors.toList());
+            List<Invoice> invoices = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
+                    .in(Invoice::getId, ids)
+                    .select(Invoice::getId, Invoice::getInvoiceNo, Invoice::getProjectId));
+            Map<Long, String> projectNames = projectNamesOf(
+                    invoices.stream().map(Invoice::getProjectId).filter(Objects::nonNull).collect(Collectors.toSet()));
+            for (Invoice iv : invoices) {
+                String title = iv.getInvoiceNo() == null ? "发票单" : iv.getInvoiceNo();
+                String pn = projectNames.get(iv.getProjectId());
+                titleMap.put(String.valueOf(iv.getId()), pn == null ? title : title + " · " + pn);
+            }
+        }
         return titleMap;
+    }
+
+    /** 项目 ID → 项目名 的批量补查（shipment/receipt/invoice 三个 enrich 分支共用，避免各写一遍） */
+    private Map<Long, String> projectNamesOf(Set<Long> projectIds) {
+        Map<Long, String> projectNames = new HashMap<>();
+        if (projectIds.isEmpty()) {
+            return projectNames;
+        }
+        List<Project> projects = mapper.selectList(new LambdaQueryWrapper<Project>()
+                .in(Project::getId, projectIds).select(Project::getId, Project::getProjectName));
+        for (Project p : projects) {
+            projectNames.put(p.getId(), p.getProjectName());
+        }
+        return projectNames;
     }
 
     /** 取指定流程 key 的任务 bizKey 集合（过滤 null / 非数字） */
@@ -699,12 +755,31 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     /**
-     * 历史记录业务标题（2026-10-23 通用化：按流程 key 分发查表）。
-     * project_initiate → 项目名；shipment_approval → 批次号 · 项目名。
+     * 历史记录业务标题（2026-10-23 通用化：按流程 key 分发查表；V63 补收款/发票）。
+     * project_initiate → 项目名；shipment_approval → 批次号 · 项目名；
+     * receipt_approval → 收款单号 · 项目名；invoice_approval → 发票号 · 项目名。
      */
     private String bizTitleOf(String processCode, String bizKey) {
         if (bizKey == null) {
             return null;
+        }
+        if (ReceiptServiceImpl.RECEIPT_PROCESS_CODE.equals(processCode)) {
+            Receipt r = safeSelectReceipt(bizKey);
+            if (r == null) {
+                return null;
+            }
+            String title = r.getReceiptNo() == null ? "回款单" : r.getReceiptNo();
+            Project p = r.getProjectId() == null ? null : mapper.selectById(r.getProjectId());
+            return p == null ? title : title + " · " + p.getProjectName();
+        }
+        if (InvoiceServiceImpl.INVOICE_PROCESS_CODE.equals(processCode)) {
+            Invoice iv = safeSelectInvoice(bizKey);
+            if (iv == null) {
+                return null;
+            }
+            String title = iv.getInvoiceNo() == null ? "发票单" : iv.getInvoiceNo();
+            Project p = iv.getProjectId() == null ? null : mapper.selectById(iv.getProjectId());
+            return p == null ? title : title + " · " + p.getProjectName();
         }
         if (SHIPMENT_PROCESS_CODE.equals(processCode)) {
             Shipment s = safeSelectShipment(bizKey);
@@ -717,6 +792,22 @@ public class ProjectServiceImpl implements ProjectService {
         }
         Project p = safeSelectProject(bizKey);
         return p == null ? null : p.getProjectName();
+    }
+
+    private Receipt safeSelectReceipt(String bizKey) {
+        try {
+            return receiptMapper.selectById(Long.parseLong(bizKey));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Invoice safeSelectInvoice(String bizKey) {
+        try {
+            return invoiceMapper.selectById(Long.parseLong(bizKey));
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Shipment safeSelectShipment(String bizKey) {
