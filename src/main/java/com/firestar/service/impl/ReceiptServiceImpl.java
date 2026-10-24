@@ -12,6 +12,7 @@ import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.entity.DictData;
+import com.firestar.entity.FileStorage;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
 import com.firestar.entity.Role;
@@ -19,6 +20,7 @@ import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.entity.ProcessDef;
 import com.firestar.mapper.DictDataMapper;
+import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
@@ -67,6 +69,14 @@ public class ReceiptServiceImpl implements ReceiptService {
     /** 审批节点候选角色（出纳） */
     private static final String ROLE_CASHIER = "ROLE_CASHIER";
 
+    /**
+     * 附件软关联业务类型（2026-10-25 V62 真上传）。
+     *
+     * <p>字面量必须与 file_biz_type 字典的 dict_value 严格一致（V20/V54 口径），
+     * 否则该文件在文件管理页不可见、不可筛。</p>
+     */
+    public static final String RECEIPT_ATTACH_BIZ_TYPE = "receipt";
+
     private static final DateTimeFormatter RECEIPT_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private static final String DICT_RECEIPT_STATUS = "receipt_status";
@@ -74,6 +84,7 @@ public class ReceiptServiceImpl implements ReceiptService {
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
     private final ReceiptMapper receiptMapper;
+    private final FileStorageMapper fileStorageMapper;
     private final ProjectMapper projectMapper;
     private final DictDataMapper dictDataMapper;
     private final ProcessDefMapper processDefMapper;
@@ -84,11 +95,12 @@ public class ReceiptServiceImpl implements ReceiptService {
     private final UserRoleMapper userRoleMapper;
 
     @Autowired
-    public ReceiptServiceImpl(ReceiptMapper receiptMapper, ProjectMapper projectMapper,
-                              DictDataMapper dictDataMapper, ProcessDefMapper processDefMapper,
+    public ReceiptServiceImpl(ReceiptMapper receiptMapper, FileStorageMapper fileStorageMapper,
+                              ProjectMapper projectMapper,                               DictDataMapper dictDataMapper, ProcessDefMapper processDefMapper,
                               WorkflowEngineService engine, NotificationService notificationService,
                               UserMapper userMapper, RoleMapper roleMapper, UserRoleMapper userRoleMapper) {
         this.receiptMapper = receiptMapper;
+        this.fileStorageMapper = fileStorageMapper;
         this.projectMapper = projectMapper;
         this.dictDataMapper = dictDataMapper;
         this.processDefMapper = processDefMapper;
@@ -124,7 +136,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         receipt.setReceiptAmount(req.getReceiptAmount());
         receipt.setReceiptType(req.getReceiptType());
         receipt.setReceiptDate(req.getReceiptDate());
-        receipt.setBankReceiptPath(req.getBankReceiptPath());
+        // 注意：bank_receipt_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
         // docDirection 默认 BLUE（蓝字）
         receipt.setDocDirection("BLUE");
         // 创建即草稿，待提交再拉审批
@@ -133,6 +145,8 @@ public class ReceiptServiceImpl implements ReceiptService {
         // 归属人 = createdBy（LogicDeleteEntity 父类列）
         receipt.setCreatedBy(operatorId);
         receiptMapper.insert(receipt);
+        // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
+        bindAttachments(receipt.getId(), req.getAttachmentFileIds());
 
         log.info("[receipt] 创建收款单草稿 id={} no={} projectId={} amount={}",
                 receipt.getId(), receipt.getReceiptNo(), project.getId(), req.getReceiptAmount());
@@ -210,9 +224,11 @@ public class ReceiptServiceImpl implements ReceiptService {
         r.setReceiptAmount(req.getReceiptAmount());
         r.setReceiptType(req.getReceiptType());
         r.setReceiptDate(req.getReceiptDate());
-        r.setBankReceiptPath(req.getBankReceiptPath());
+        // bank_receipt_path 已废弃（V62 真上传），不再写该列
         r.setUpdatedBy(operatorId);
         receiptMapper.updateById(r);
+        // 附件以本次提交的全量列表为准：新上传的挂上，前端删掉的会被解绑（bizId 置 NULL）
+        rebindAttachments(id, req.getAttachmentFileIds());
         log.info("[receipt] 编辑收款单 id={} amount={} user={}", id, req.getReceiptAmount(), currentUsername());
     }
 
@@ -356,7 +372,10 @@ public class ReceiptServiceImpl implements ReceiptService {
         Map<Long, String> userNames = userNamesOf(List.of(r));
         Map<Long, Project> projects =
                 BatchLoader.projects(projectMapper, List.of(r), Receipt::getProjectId);
-        return toVO(r, statusDict, typeDict, docDict, userNames, projects);
+        ReceiptVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects);
+        // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
+        vo.setAttachmentFileIds(loadAttachmentIds(id));
+        return vo;
     }
 
     @Override
@@ -558,5 +577,57 @@ public class ReceiptServiceImpl implements ReceiptService {
         User u = userMapper.selectOne(new LambdaQueryWrapper<User>()
                 .eq(User::getId, userId).select(User::getUsername));
         return u == null ? String.valueOf(userId) : u.getUsername();
+    }
+
+    // ===================== 附件软关联（2026-10-25 V62 真上传） =====================
+
+    /**
+     * 单据落库后挂载附件：把前端上传时（单据尚无 id）没带 bizId 的文件改写 bizType/bizId。
+     *
+     * <p>与发货签收证据同构（V54）——附件不落在业务表列上，只存在于 sys_file_storage。
+     * bizType 固定 {@link #RECEIPT_ATTACH_BIZ_TYPE}，与 file_biz_type 字典 value 一致。</p>
+     */
+    private void bindAttachments(Long receiptId, List<Long> fileIds) {
+        if (fileIds == null || fileIds.isEmpty() || receiptId == null) {
+            return;
+        }
+        for (Long fid : fileIds) {
+            FileStorage f = fileStorageMapper.selectById(fid);
+            if (f == null) {
+                continue;
+            }
+            f.setBizType(RECEIPT_ATTACH_BIZ_TYPE);
+            f.setBizId(receiptId);
+            fileStorageMapper.updateById(f);
+        }
+    }
+
+    /**
+     * 编辑态重新挂载：以本次提交的全量 fileIds 为准。
+     *
+     * <p>先挂载（新上传的），再把「已属于本单但不在本次列表里」的文件解绑（bizId 置 NULL）——
+     * 前端删除附件时不调删除接口（文件本身保留在库），只是在表单里移除，故这里做差分解绑。</p>
+     */
+    private void rebindAttachments(Long receiptId, List<Long> fileIds) {
+        bindAttachments(receiptId, fileIds);
+        List<Long> keep = fileIds == null ? List.of() : fileIds;
+        List<FileStorage> bound = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                .eq(FileStorage::getBizType, RECEIPT_ATTACH_BIZ_TYPE)
+                .eq(FileStorage::getBizId, receiptId));
+        for (FileStorage f : bound) {
+            if (!keep.contains(f.getId())) {
+                f.setBizId(null);
+                fileStorageMapper.updateById(f);
+            }
+        }
+    }
+
+    /** 按 bizType+bizId 回查附件 ID 列表（顺序稳定：按文件主键升序）。 */
+    private List<Long> loadAttachmentIds(Long receiptId) {
+        List<FileStorage> files = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                .eq(FileStorage::getBizType, RECEIPT_ATTACH_BIZ_TYPE)
+                .eq(FileStorage::getBizId, receiptId)
+                .orderByAsc(FileStorage::getId));
+        return files.stream().map(FileStorage::getId).collect(Collectors.toList());
     }
 }

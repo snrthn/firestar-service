@@ -12,6 +12,7 @@ import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.entity.DictData;
+import com.firestar.entity.FileStorage;
 import com.firestar.entity.Invoice;
 import com.firestar.entity.ProcessDef;
 import com.firestar.entity.Project;
@@ -20,6 +21,7 @@ import com.firestar.entity.Role;
 import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.mapper.DictDataMapper;
+import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
@@ -71,7 +73,16 @@ public class InvoiceServiceImpl implements InvoiceService {
     private static final String DICT_INVOICE_TYPE = "invoice_type";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
+    /**
+     * 附件软关联业务类型（2026-10-25 V62 真上传）。
+     *
+     * <p>字面量必须与 file_biz_type 字典的 dict_value 严格一致（V20/V54 口径），
+     * 否则该文件在文件管理页不可见、不可筛。</p>
+     */
+    public static final String INVOICE_ATTACH_BIZ_TYPE = "invoice";
+
     private final InvoiceMapper invoiceMapper;
+    private final FileStorageMapper fileStorageMapper;
     private final ReceivableMapper receivableMapper;
     private final ProjectMapper projectMapper;
     private final DictDataMapper dictDataMapper;
@@ -83,12 +94,14 @@ public class InvoiceServiceImpl implements InvoiceService {
     private final UserRoleMapper userRoleMapper;
 
     @Autowired
-    public InvoiceServiceImpl(InvoiceMapper invoiceMapper, ReceivableMapper receivableMapper,
+    public InvoiceServiceImpl(InvoiceMapper invoiceMapper, FileStorageMapper fileStorageMapper,
+                             ReceivableMapper receivableMapper,
                              ProjectMapper projectMapper, DictDataMapper dictDataMapper,
                              ProcessDefMapper processDefMapper, WorkflowEngineService engine,
                              NotificationService notificationService, UserMapper userMapper,
                              RoleMapper roleMapper, UserRoleMapper userRoleMapper) {
         this.invoiceMapper = invoiceMapper;
+        this.fileStorageMapper = fileStorageMapper;
         this.receivableMapper = receivableMapper;
         this.projectMapper = projectMapper;
         this.dictDataMapper = dictDataMapper;
@@ -141,7 +154,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setInvoiceCode(req.getInvoiceCode());
         invoice.setInvoiceType(req.getInvoiceType());
         invoice.setInvoiceDate(req.getInvoiceDate());
-        invoice.setInvoiceFilePath(req.getInvoiceFilePath());
+        // invoice_file_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
         // 单据方向默认蓝字（红字发票为后续扩展，本期仅蓝字）
         invoice.setDocDirection("BLUE");
         // 创建即草稿，待提交再拉审批
@@ -150,6 +163,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setApplicantId(operatorId);
         invoice.setClerkId(null);
         invoiceMapper.insert(invoice);
+        // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
+        bindAttachments(invoice.getId(), req.getAttachmentFileIds());
 
         log.info("[invoice] 创建发票草稿 id={} projectId={} receivableId={} amount={}",
                 invoice.getId(), project.getId(), receivable.getId(), req.getInvoiceAmount());
@@ -219,9 +234,11 @@ public class InvoiceServiceImpl implements InvoiceService {
         r.setInvoiceCode(req.getInvoiceCode());
         r.setInvoiceType(req.getInvoiceType());
         r.setInvoiceDate(req.getInvoiceDate());
-        r.setInvoiceFilePath(req.getInvoiceFilePath());
+        // invoice_file_path 已废弃（V62 真上传），不再写该列
         r.setUpdatedBy(operatorId);
         invoiceMapper.updateById(r);
+        // 附件以本次提交的全量列表为准：新上传的挂上，前端删掉的会被解绑（bizId 置 NULL）
+        rebindAttachments(id, req.getAttachmentFileIds());
         log.info("[invoice] 编辑发票 id={} amount={} user={}", id, req.getInvoiceAmount(), currentUsername());
     }
 
@@ -366,7 +383,10 @@ public class InvoiceServiceImpl implements InvoiceService {
                 BatchLoader.projects(projectMapper, List.of(r), Invoice::getProjectId);
         Map<Long, Receivable> receivables =
                 BatchLoader.receivables(receivableMapper, List.of(r), Invoice::getReceivableId);
-        return toVO(r, statusDict, typeDict, docDict, userNames, projects, receivables);
+        InvoiceVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects, receivables);
+        // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
+        vo.setAttachmentFileIds(loadAttachmentIds(id));
+        return vo;
     }
 
     @Override
@@ -555,5 +575,57 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     private String currentUsername() {
         return SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
+    // ===================== 附件软关联（2026-10-25 V62 真上传） =====================
+
+    /**
+     * 单据落库后挂载附件：把前端上传时（单据尚无 id）没带 bizId 的文件改写 bizType/bizId。
+     *
+     * <p>与发货签收证据同构（V54）——附件不落在业务表列上，只存在于 sys_file_storage。
+     * bizType 固定 {@link #INVOICE_ATTACH_BIZ_TYPE}，与 file_biz_type 字典 value 一致。</p>
+     */
+    private void bindAttachments(Long invoiceId, List<Long> fileIds) {
+        if (fileIds == null || fileIds.isEmpty() || invoiceId == null) {
+            return;
+        }
+        for (Long fid : fileIds) {
+            FileStorage f = fileStorageMapper.selectById(fid);
+            if (f == null) {
+                continue;
+            }
+            f.setBizType(INVOICE_ATTACH_BIZ_TYPE);
+            f.setBizId(invoiceId);
+            fileStorageMapper.updateById(f);
+        }
+    }
+
+    /**
+     * 编辑态重新挂载：以本次提交的全量 fileIds 为准。
+     *
+     * <p>先挂载（新上传的），再把「已属于本单但不在本次列表里」的文件解绑（bizId 置 NULL）——
+     * 前端删除附件时不调删除接口（文件本身保留在库），只是在表单里移除，故这里做差分解绑。</p>
+     */
+    private void rebindAttachments(Long invoiceId, List<Long> fileIds) {
+        bindAttachments(invoiceId, fileIds);
+        List<Long> keep = fileIds == null ? List.of() : fileIds;
+        List<FileStorage> bound = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                .eq(FileStorage::getBizType, INVOICE_ATTACH_BIZ_TYPE)
+                .eq(FileStorage::getBizId, invoiceId));
+        for (FileStorage f : bound) {
+            if (!keep.contains(f.getId())) {
+                f.setBizId(null);
+                fileStorageMapper.updateById(f);
+            }
+        }
+    }
+
+    /** 按 bizType+bizId 回查附件 ID 列表（顺序稳定：按文件主键升序）。 */
+    private List<Long> loadAttachmentIds(Long invoiceId) {
+        List<FileStorage> files = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                .eq(FileStorage::getBizType, INVOICE_ATTACH_BIZ_TYPE)
+                .eq(FileStorage::getBizId, invoiceId)
+                .orderByAsc(FileStorage::getId));
+        return files.stream().map(FileStorage::getId).collect(Collectors.toList());
     }
 }

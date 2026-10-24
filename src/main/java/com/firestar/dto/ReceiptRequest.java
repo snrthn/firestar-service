@@ -5,6 +5,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 收款单创建/编辑请求。
@@ -31,7 +32,21 @@ public class ReceiptRequest {
     private LocalDate receiptDate;
 
     /** 银行回单路径（只存路径，不存文件） */
+    /**
+     * 历史残留列（2026-10-25 起不再使用）：原「银行回单路径」，真上传改造后弃用。
+     *
+     * <p>附件改走 {@code bankReceiptFileIds} 软关联；此字段保留仅为兼容旧请求体，
+     * 业务层不再写入。</p>
+     */
     private String bankReceiptPath;
+
+    /**
+     * 银行回单附件文件 ID 列表（软关联，2026-10-25 V62）。
+     *
+     * <p>前端先调 POST /files/upload（bizType='receipt'、新建时无 id 故 bizId 留空）拿到
+     * fileId，随本请求提交；业务层在单据落库后统一把这批文件的 bizType/bizId 改写挂载。</p>
+     */
+    private List<Long> attachmentFileIds;
 
     /** 备注（可选） */
     private String remark;

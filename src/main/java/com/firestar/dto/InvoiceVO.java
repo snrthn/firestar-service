@@ -6,6 +6,7 @@ import lombok.Setter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 发票（开票）视图对象（含字典翻译 + 项目/应收单信息 + 申请人名）。
@@ -63,7 +64,20 @@ public class InvoiceVO {
     private LocalDate invoiceDate;
 
     /** 发票文件路径 */
+    /**
+     * 历史残留列：fin_invoice.invoice_file_path（V1 baseline 的「只存路径」设计，
+     * 系统无任何环节会产出该路径 —— 2026-10-25 虎哥拍板改真上传后此列废弃，不再写入也不再展示。
+     */
     private String invoiceFilePath;
+
+    /**
+     * 附件文件 ID 列表（软关联，2026-10-25 V62）。
+     *
+     * <p>不落在业务表上，而是 {@code sys_file_storage.biz_type='invoice' + biz_id=本单 id}，
+     * 与发货签收证据（V54 shipment_receive_proof）严格同构。前端据此调 GET /files/{id} 取
+     * 文件名、调 GET /files/{id}/download 取签名 URL 下载。</p>
+     */
+    private List<Long> attachmentFileIds;
 
     /** 开票状态（字典 invoice_status：PENDING/APPROVING/ISSUED/REJECTED） */
     private String invoiceStatus;
