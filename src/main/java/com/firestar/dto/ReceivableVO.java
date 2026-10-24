@@ -23,6 +23,12 @@ public class ReceivableVO {
 
     private Long projectId;
 
+    /** 项目编号（由 projectId 关联 fin_project 带出，供列表/详情直接展示） */
+    private String projectNo;
+
+    /** 项目名称（同上） */
+    private String projectName;
+
     /** 关联发货 ID → fin_shipment.id（1:1） */
     private Long shipmentId;
 

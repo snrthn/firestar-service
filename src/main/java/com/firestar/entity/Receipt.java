@@ -50,6 +50,9 @@ public class Receipt extends LogicDeleteEntity {
     /** 审批状态（字典 receipt_status） */
     private String approvalStatus;
 
+    /** Flowable 流程实例 ID（提交审批后写入，驳回/终结后保留便于排查） */
+    private String processInstanceId;
+
     /** 款项类型（字典 receipt_type） */
     private String receiptType;
 }

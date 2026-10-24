@@ -1,5 +1,8 @@
 package com.firestar.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.firestar.dto.ReceivableVO;
+
 /**
  * 应收单服务（由发货「客户已收货」时点自动生成，决策#2）。
  *
@@ -18,4 +21,10 @@ public interface ReceivableService {
      * @return 应收单 ID
      */
     Long createFromShipment(Long shipmentId, Long operatorId);
+
+    /** 应收单详情（含字典翻译） */
+    ReceivableVO detail(Long id);
+
+    /** 应收单分页列表（projectId/status 精确；字典翻译） */
+    IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status);
 }

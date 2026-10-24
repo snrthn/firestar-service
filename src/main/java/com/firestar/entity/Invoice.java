@@ -57,6 +57,12 @@ public class Invoice extends LogicDeleteEntity {
     /** 开票状态（字典 invoice_status） */
     private String invoiceStatus;
 
+    /** Flowable 流程实例 ID（提交审批后写入，驳回/终结后保留便于排查） */
+    private String processInstanceId;
+
+    /** 发票类型（字典 invoice_type；V59 新增列：NORMAL 普通发票 / SPECIAL 增值税专用发票） */
+    private String invoiceType;
+
     /** 申请人 ID */
     private Long applicantId;
 

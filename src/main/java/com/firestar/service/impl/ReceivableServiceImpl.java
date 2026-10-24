@@ -1,9 +1,17 @@
 package com.firestar.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.BatchLoader;
+import com.firestar.dto.ReceivableVO;
+import com.firestar.entity.DictData;
+import com.firestar.entity.Project;
 import com.firestar.entity.Receivable;
 import com.firestar.entity.Shipment;
 import com.firestar.entity.ShipmentLine;
+import com.firestar.mapper.DictDataMapper;
+import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.ShipmentLineMapper;
 import com.firestar.mapper.ShipmentMapper;
@@ -16,11 +24,18 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 应收单生成实现：客户已收货 → 蓝字应收单（doc_direction=BLUE, source_type=FROM_SHIPMENT）。
  *
  * <p>tenant_id / version 不手动 set（BaseEntity 约定：由插件/拦截器管，业务代码不碰）。</p>
+ *
+ * <p>V59 汇总列维护：本服务在「生成应收单」时按 delta 累加 fin_project.receivable_amount
+ * （金额纪律：null 当 0，add，不 +=）。部分收货续收场景用
+ * 新金额 - 旧金额 作为 delta，避免重复累加。</p>
  */
 @Slf4j
 @Service
@@ -35,17 +50,27 @@ public class ReceivableServiceImpl implements ReceivableService {
      */
     private static final DateTimeFormatter RECEIVABLE_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    private static final String DICT_RECEIVABLE_STATUS = "receivable_status";
+    private static final String DICT_DOC_DIRECTION = "doc_direction";
+    private static final String DICT_RECEIVABLE_SOURCE = "receivable_source";
+
     private final ReceivableMapper receivableMapper;
     private final ShipmentMapper shipmentMapper;
     private final ShipmentLineMapper shipmentLineMapper;
+    private final ProjectMapper projectMapper;
+    private final DictDataMapper dictDataMapper;
 
     @Autowired
     public ReceivableServiceImpl(ReceivableMapper receivableMapper,
                                 ShipmentMapper shipmentMapper,
-                                ShipmentLineMapper shipmentLineMapper) {
+                                ShipmentLineMapper shipmentLineMapper,
+                                ProjectMapper projectMapper,
+                                DictDataMapper dictDataMapper) {
         this.receivableMapper = receivableMapper;
         this.shipmentMapper = shipmentMapper;
         this.shipmentLineMapper = shipmentLineMapper;
+        this.projectMapper = projectMapper;
+        this.dictDataMapper = dictDataMapper;
     }
 
     @Override
@@ -56,6 +81,9 @@ public class ReceivableServiceImpl implements ReceivableService {
                 .eq(Receivable::getShipmentId, shipmentId));
         if (exist != null) {
             BigDecimal amount = cumulativeReceivedAmount(shipmentId);
+            // delta = 新金额 - 旧金额（避免 V59 汇总列重复累加）
+            BigDecimal old = exist.getReceivableAmount() == null ? BigDecimal.ZERO : exist.getReceivableAmount();
+            BigDecimal delta = amount.subtract(old);
             exist.setReceivableAmount(amount);
             // 已核销/已开票保持不动（可能已有后续核销/开票动作），未核销/未开票 = 应收 - 对应已发生额
             BigDecimal writtenOff = exist.getWrittenOffAmount() == null ? BigDecimal.ZERO : exist.getWrittenOffAmount();
@@ -64,6 +92,8 @@ public class ReceivableServiceImpl implements ReceivableService {
             exist.setUninvoicedAmount(amount.subtract(invoiced));
             exist.setUpdatedBy(operatorId);
             receivableMapper.updateById(exist);
+            // V59：累加项目应收汇总列（delta 可能为正/负，部分收货续收为正）
+            addToProjectReceivable(exist.getProjectId(), delta);
             log.info("[receivable] 部分收货续收，应收单金额重算 id={} no={} amount={}",
                     exist.getId(), exist.getReceivableNo(), amount);
             return exist.getId();
@@ -91,8 +121,58 @@ public class ReceivableServiceImpl implements ReceivableService {
         r.setCreatedBy(operatorId);
         receivableMapper.insert(r);
 
+        // V59：累加项目应收汇总列
+        addToProjectReceivable(r.getProjectId(), amount);
+
         log.info("[receivable] 由发货单生成应收单 id={} no={} amount={}", r.getId(), r.getReceivableNo(), amount);
         return r.getId();
+    }
+
+    @Override
+    public ReceivableVO detail(Long id) {
+        Receivable r = receivableMapper.selectById(id);
+        if (r == null) {
+            throw new IllegalArgumentException("应收单不存在：" + id);
+        }
+        Map<String, DictData> statusDict = dictMap(DICT_RECEIVABLE_STATUS);
+        Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
+        Map<String, DictData> sourceDict = dictMap(DICT_RECEIVABLE_SOURCE);
+        Map<Long, Project> projects =
+                BatchLoader.projects(projectMapper, List.of(r), Receivable::getProjectId);
+        return toVO(r, statusDict, docDict, sourceDict, projects);
+    }
+
+    @Override
+    public IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status) {
+        long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
+        long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
+        String statusEq = status == null || status.isBlank() ? null : status.trim();
+        IPage<Receivable> page = receivableMapper.selectPage(new Page<>(current, size),
+                new LambdaQueryWrapper<Receivable>()
+                        .eq(projectId != null, Receivable::getProjectId, projectId)
+                        .eq(statusEq != null, Receivable::getStatus, statusEq)
+                        .orderByDesc(Receivable::getCreatedAt));
+        Map<String, DictData> statusDict = dictMap(DICT_RECEIVABLE_STATUS);
+        Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
+        Map<String, DictData> sourceDict = dictMap(DICT_RECEIVABLE_SOURCE);
+        // 项目信息批量预取：一页最多 500 条，逐条 selectById 会放大成 500 次查询
+        Map<Long, Project> projects =
+                BatchLoader.projects(projectMapper, page.getRecords(), Receivable::getProjectId);
+        return page.convert(r -> toVO(r, statusDict, docDict, sourceDict, projects));
+    }
+
+    /** V59：累加 fin_project.receivable_amount（金额纪律：null 当 0，add） */
+    private void addToProjectReceivable(Long projectId, BigDecimal delta) {
+        if (projectId == null || delta == null || delta.compareTo(BigDecimal.ZERO) == 0) {
+            return;
+        }
+        Project p = projectMapper.selectById(projectId);
+        if (p == null) {
+            return;
+        }
+        BigDecimal base = p.getReceivableAmount() == null ? BigDecimal.ZERO : p.getReceivableAmount();
+        p.setReceivableAmount(base.add(delta));
+        projectMapper.updateById(p);
     }
 
     /** 金额 = Σ 已收数量 × 单价（决策#2：金额按 receivedQty 计算，收货确认才确认金额；首建/续收共用一份口径） */
@@ -112,5 +192,46 @@ public class ReceivableServiceImpl implements ReceivableService {
         Long count = receivableMapper.selectCount(new LambdaQueryWrapper<Receivable>()
                 .likeRight(Receivable::getReceivableNo, "YS-" + date + "-"));
         return String.format("YS-%s-%03d", date, (count == null ? 0 : count) + 1);
+    }
+
+    private ReceivableVO toVO(Receivable r, Map<String, DictData> statusDict,
+                              Map<String, DictData> docDict, Map<String, DictData> sourceDict,
+                              Map<Long, Project> projects) {
+        ReceivableVO vo = new ReceivableVO();
+        vo.setId(r.getId());
+        vo.setReceivableNo(r.getReceivableNo());
+        vo.setProjectId(r.getProjectId());
+        // 项目信息由调用方预取传入（page 批量一次查，避免逐条 selectById 的 N+1）
+        Project proj = r.getProjectId() == null ? null : projects.get(r.getProjectId());
+        vo.setProjectNo(proj != null ? proj.getProjectNo() : null);
+        vo.setProjectName(proj != null ? proj.getProjectName() : null);
+        vo.setShipmentId(r.getShipmentId());
+        vo.setDocDirection(r.getDocDirection());
+        DictData doc = docDict.get(r.getDocDirection());
+        vo.setDocDirectionName(doc != null ? doc.getDictLabel() : null);
+        vo.setReceivableAmount(r.getReceivableAmount());
+        vo.setWrittenOffAmount(r.getWrittenOffAmount());
+        vo.setUnwrittenOffAmount(r.getUnwrittenOffAmount());
+        vo.setInvoicedAmount(r.getInvoicedAmount());
+        vo.setUninvoicedAmount(r.getUninvoicedAmount());
+        vo.setReceivableDate(r.getReceivableDate());
+        vo.setStatus(r.getStatus());
+        DictData st = statusDict.get(r.getStatus());
+        vo.setStatusName(st != null ? st.getDictLabel() : null);
+        vo.setStatusStyle(st != null ? st.getStyle() : null);
+        vo.setSourceType(r.getSourceType());
+        DictData src = sourceDict.get(r.getSourceType());
+        vo.setSourceTypeName(src != null ? src.getDictLabel() : null);
+        return vo;
+    }
+
+    private Map<String, DictData> dictMap(String typeCode) {
+        List<DictData> rows = dictDataMapper.selectList(new LambdaQueryWrapper<DictData>()
+                .eq(DictData::getTypeCode, typeCode).eq(DictData::getStatus, "ENABLED"));
+        Map<String, DictData> map = new HashMap<>();
+        for (DictData d : rows) {
+            map.put(d.getDictValue(), d);
+        }
+        return map;
     }
 }

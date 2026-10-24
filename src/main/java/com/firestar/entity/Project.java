@@ -62,4 +62,13 @@ public class Project extends LogicDeleteEntity {
 
     /** Flowable 流程实例 ID */
     private String processInstanceId;
+
+    /** 已收款金额（回款审批通过累加，V59 汇总列） */
+    private BigDecimal collectedAmount;
+
+    /** 已开票金额（开票审批通过累加，V59 汇总列） */
+    private BigDecimal invoicedAmount;
+
+    /** 应收金额（应收单生成时累加，V59 汇总列） */
+    private BigDecimal receivableAmount;
 }
