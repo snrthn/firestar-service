@@ -37,8 +37,10 @@ import com.firestar.workflow.WorkflowEngineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -145,10 +147,14 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void update(Long id, ProjectRequest req) {
+    public void update(Long id, ProjectRequest req, String username, boolean isAdmin) {
         Project exist = mapper.selectById(id);
         if (exist == null) {
             throw new IllegalArgumentException("项目不存在：" + id);
+        }
+        // 归属校验（2026-10-24 安全债修复）：写类仅申请人本人或 ROLE_ADMIN，不放开审批人
+        if (!isAdmin && !Objects.equals(exist.getApplicantUsername(), username)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "项目不存在或无权操作：" + id);
         }
         // 仅草稿 / 已驳回态可编辑；审批中（APPROVING）及以后锁死，防流程进行中被改单
         if (!"DRAFT".equals(exist.getApprovalStatus()) && !"REJECTED".equals(exist.getApprovalStatus())) {
@@ -224,10 +230,15 @@ public class ProjectServiceImpl implements ProjectService {
     }
 
     @Override
-    public ProjectVO detail(Long id) {
+    public ProjectVO detail(Long id, String username, boolean isAdmin) {
         Project p = mapper.selectById(id);
         if (p == null) {
             throw new IllegalArgumentException("项目不存在：" + id);
+        }
+        // 可见性三选一（2026-10-24 安全债修复）：申请人本人 / ROLE_ADMIN / 审批任务处理人（候选人）
+        if (!isAdmin && !Objects.equals(p.getApplicantUsername(), username)
+                && !engine.isCandidate(String.valueOf(id), username)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "项目不存在或无权访问：" + id);
         }
         ProjectVO vo = toVO(p, approvalStatusDict(),
                 userDisplayNames(p.getSalesManagerId() == null
@@ -436,10 +447,14 @@ public class ProjectServiceImpl implements ProjectService {
             targetIdSpEl = "#id", entityClass = Project.class,
             fields = {"contractStatus", "contractAmount", "contractDesc"},
             remark = "项目签约")
-    public void sign(Long id, ProjectSignRequest req) {
+    public void sign(Long id, ProjectSignRequest req, String username, boolean isAdmin) {
         Project exist = mapper.selectById(id);
         if (exist == null) {
             throw new IllegalArgumentException("项目不存在：" + id);
+        }
+        // 归属校验（2026-10-24 安全债修复）：写类仅申请人本人或 ROLE_ADMIN，不放开审批人
+        if (!isAdmin && !Objects.equals(exist.getApplicantUsername(), username)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "项目不存在或无权操作：" + id);
         }
         // 签约前置（2026-10-22 虎哥拍板）：仅审批通过且未签约可签；终态不可撤销（a 拍板）
         if (!"APPROVED".equals(exist.getApprovalStatus())) {

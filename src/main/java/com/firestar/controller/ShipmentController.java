@@ -53,7 +53,8 @@ public class ShipmentController {
     /** 详情（含明细行 + 关联应收单 + 字典翻译） */
     @GetMapping("/{id}")
     public Result<ShipmentVO> detail(@PathVariable Long id) {
-        return Result.success(shipmentService.detail(id));
+        return Result.success(shipmentService.detail(id,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin()));
     }
 
     /** 审批时间线（按 businessKey=发货单 ID 聚合，含驳回/重提历史；详情页内联展示） */
@@ -71,7 +72,8 @@ public class ShipmentController {
     /** 编辑发货单（2026-10-23 虎哥要求补入口）：仅 PENDING（待发货）可改，项目不可更换 */
     @PutMapping("/{id}")
     public Result<Void> update(@PathVariable Long id, @RequestBody ShipmentCreateReq req) {
-        shipmentService.update(id, req);
+        shipmentService.update(id, req,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }
 
@@ -88,14 +90,16 @@ public class ShipmentController {
     /** 标记已发货（审批通过后；shippedById = 当前操作人，决策#2 澄清发货人=操作人自身） */
     @PostMapping("/{id}/ship")
     public Result<Void> markShipped(@PathVariable Long id) {
-        shipmentService.markShipped(id);
+        shipmentService.markShipped(id,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }
 
     /** 标记客户收货（决策#6 必传证据；支持按行部分收货；联动生成应收单） */
     @PostMapping("/{id}/confirm-receive")
     public Result<Void> confirmReceive(@PathVariable Long id, @RequestBody ShipmentConfirmReceiveReq req) {
-        shipmentService.confirmReceive(req);
+        shipmentService.confirmReceive(req,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }
 

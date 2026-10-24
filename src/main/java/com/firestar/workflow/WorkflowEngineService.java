@@ -140,6 +140,15 @@ public interface WorkflowEngineService {
     List<TaskInfo> listMyTasks(String username);
 
     /**
+     * 判断当前用户是否为指定业务单据（businessKey，如项目/发货 ID）的审批任务处理人。
+     * 命中规则同 {@link #listMyTasks(String)}：
+     *   - active 任务 assignee / candidateUser / candidateGroup（按用户角色）命中；
+     *   - 或曾作为处理人完成过该单据的任务（历史「我审批的」场景）。
+     * 用于业务单条接口「三选一」放行中的「审批人」判定（读类详情可见）。
+     */
+    boolean isCandidate(String businessKey, String username);
+
+    /**
      * 查询指定登录用户审批过的历史任务（跨流程实例，按处理时间倒序）。
      * 2026-10-22 虎哥：用户看不到自己审批过的记录 → 审批中心「我审批的」历史 Tab 数据源。
      * 命中规则：Flowable taskCompletedBy（assignee / owner / 候选人或候选组成员完成均算）；

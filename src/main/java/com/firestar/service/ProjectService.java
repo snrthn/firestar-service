@@ -20,11 +20,11 @@ public interface ProjectService {
     /** 保存立项草稿（approvalStatus = DRAFT；contractStatus 强制 UNSIGNED，不接受传入） */
     Long create(ProjectRequest req);
 
-    /** 编辑草稿（仅 DRAFT / REJECTED 态可改） */
-    void update(Long id, ProjectRequest req);
+    /** 编辑草稿（仅 DRAFT / REJECTED 态可改）；归属校验：仅申请人本人或 ROLE_ADMIN（写类不放开审批人） */
+    void update(Long id, ProjectRequest req, String username, boolean isAdmin);
 
-    /** 详情（含字典翻译） */
-    ProjectVO detail(Long id);
+    /** 详情（含字典翻译）；可见性：申请人 / ROLE_ADMIN / 审批任务处理人 三选一 */
+    ProjectVO detail(Long id, String username, boolean isAdmin);
 
     /**
      * 分页查询（projectNo / projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500）。
@@ -65,8 +65,9 @@ public interface ProjectService {
      * 签约（2026-10-22 虎哥拍板）：审批通过后的独立动作。
      * 前置：approvalStatus = APPROVED 且 contractStatus = UNSIGNED；终态不可撤销。
      * 可修正最终合同金额（建项填的是预估）+ 补录签约描述（非必填）。
+     * 归属校验：仅申请人本人或 ROLE_ADMIN（写类不放开审批人）。
      */
-    void sign(Long id, ProjectSignRequest req);
+    void sign(Long id, ProjectSignRequest req, String username, boolean isAdmin);
 
     /** 完成指定任务（审批通过；variables 可带 comment，落 Flowable 评论供时间线展示） */
     void completeTask(String taskId, java.util.Map<String, Object> variables);

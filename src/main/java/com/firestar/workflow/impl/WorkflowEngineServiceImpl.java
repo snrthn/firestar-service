@@ -466,6 +466,33 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     @Override
+    public boolean isCandidate(String businessKey, String username) {
+        if (businessKey == null || businessKey.isBlank() || username == null || username.isBlank()) {
+            return false;
+        }
+        // 线 1+线 2：active 候选（assignee/candidateUser OR role 候选组），与 listMyTasks 同口径，
+        // 必须含 taskCandidateGroup + roleCodesOf 段，否则 ROLE 审批人（如 ROLE_SALES_MANAGER）判假阴性
+        for (Task t : taskService.createTaskQuery()
+                .processInstanceBusinessKey(businessKey)
+                .taskCandidateOrAssigned(username).list()) {
+            return true;
+        }
+        for (String roleCode : roleCodesOf(username)) {
+            for (Task t : taskService.createTaskQuery()
+                    .processInstanceBusinessKey(businessKey)
+                    .taskCandidateGroup(roleCode).list()) {
+                return true;
+            }
+        }
+        // 历史审批人：曾作为处理人完成过该单据任务（覆盖「我审批的」历史场景，
+        // 任务已结束不再是 active 候选，但审批人仍应看得到自己审过的单）
+        long done = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceBusinessKey(businessKey)
+                .taskAssignee(username).finished().count();
+        return done > 0;
+    }
+
+    @Override
     public List<TimelineNodeVO> listTimeline(String processInstanceId) {
         if (processInstanceId == null || processInstanceId.isBlank()) {
             return Collections.emptyList();

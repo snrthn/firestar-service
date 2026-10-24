@@ -41,8 +41,10 @@ import com.firestar.workflow.WorkflowEngineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -261,11 +263,15 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void update(Long id, ShipmentCreateReq req) {
+    public void update(Long id, ShipmentCreateReq req, String username, boolean isAdmin) {
         Long operatorId = currentUserId();
         Shipment s = shipmentMapper.selectById(id);
         if (s == null) {
             throw new IllegalArgumentException("发货单不存在：" + id);
+        }
+        // 归属校验（2026-10-24 安全债修复）：写类仅申请人本人或 ROLE_ADMIN，不放开审批人
+        if (!isAdmin && !Objects.equals(s.getApplicantId(), operatorId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权操作：" + id);
         }
         // 仅 PENDING（待发货）可编辑：此状态下未产生实际出入库与应收，改内容不牵动下游；
         // 已发货/已收货/已驳回/已撤销的单据改内容会与库存、应收、审批结论冲突。
@@ -321,11 +327,15 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void markShipped(Long shipmentId) {
+    public void markShipped(Long shipmentId, String username, boolean isAdmin) {
         Long operatorId = currentUserId();
         Shipment s = shipmentMapper.selectById(shipmentId);
         if (s == null) {
             throw new IllegalArgumentException("发货单不存在：" + shipmentId);
+        }
+        // 归属校验（2026-10-24 安全债修复）：写类仅申请人本人或 ROLE_ADMIN，不放开审批人
+        if (!isAdmin && !Objects.equals(s.getApplicantId(), operatorId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权操作：" + shipmentId);
         }
         if (!"PENDING".equals(s.getShipmentStatus())) {
             throw new IllegalArgumentException("仅「待发货」状态可标记发货，当前：" + s.getShipmentStatus());
@@ -348,7 +358,7 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void confirmReceive(ShipmentConfirmReceiveReq req) {
+    public void confirmReceive(ShipmentConfirmReceiveReq req, String username, boolean isAdmin) {
         Long operatorId = currentUserId();
         // 证据留痕硬约束（决策#6）：内部销售代确认必须上传签收证据
         if (req.getProofFileIds() == null || req.getProofFileIds().isEmpty()) {
@@ -357,6 +367,10 @@ public class ShipmentServiceImpl implements ShipmentService {
         Shipment s = shipmentMapper.selectById(req.getShipmentId());
         if (s == null) {
             throw new IllegalArgumentException("发货单不存在：" + req.getShipmentId());
+        }
+        // 归属校验（2026-10-24 安全债修复）：写类仅申请人本人或 ROLE_ADMIN，不放开审批人
+        if (!isAdmin && !Objects.equals(s.getApplicantId(), operatorId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权操作：" + req.getShipmentId());
         }
         // 部分收货后可续收（2026-10-24 虎哥：玻璃水本次收 0，剩余量后续还要再收）
         // SHIPPED = 首次收货；PARTIAL_RECEIVED = 续收。FULL_RECEIVED/FINAL 为终态不可再收
@@ -588,10 +602,15 @@ public class ShipmentServiceImpl implements ShipmentService {
     }
 
     @Override
-    public ShipmentVO detail(Long shipmentId) {
+    public ShipmentVO detail(Long shipmentId, String username, boolean isAdmin) {
         Shipment s = shipmentMapper.selectById(shipmentId);
         if (s == null) {
             throw new IllegalArgumentException("发货单不存在：" + shipmentId);
+        }
+        // 可见性三选一（2026-10-24 安全债修复）：申请人本人 / ROLE_ADMIN / 审批任务处理人（候选人）
+        if (!isAdmin && !Objects.equals(s.getApplicantId(), currentUserId())
+                && !engine.isCandidate(String.valueOf(shipmentId), username)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权访问：" + shipmentId);
         }
         return toVO(s, dictMaps(), userNamesOf(List.of(s)));
     }

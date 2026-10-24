@@ -84,13 +84,15 @@ public class ProjectController {
     /** 详情（含字典翻译） */
     @GetMapping("/{id}")
     public Result<ProjectVO> detail(@PathVariable Long id) {
-        return Result.success(projectService.detail(id));
+        return Result.success(projectService.detail(id,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin()));
     }
 
     /** 编辑草稿（仅 DRAFT / REJECTED 态可改） */
     @PutMapping("/{id}")
     public Result<Void> update(@PathVariable Long id, @RequestBody ProjectRequest req) {
-        projectService.update(id, req);
+        projectService.update(id, req,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }
 
@@ -120,7 +122,8 @@ public class ProjectController {
     /** 签约：审批通过后的独立动作（可修正最终合同金额 + 补录签约描述；终态不可撤销） */
     @PostMapping("/{id}/sign")
     public Result<Void> sign(@PathVariable Long id, @RequestBody ProjectSignRequest req) {
-        projectService.sign(id, req);
+        projectService.sign(id, req,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }
 
