@@ -424,6 +424,85 @@ public class ReceiptServiceImpl implements ReceiptService {
         return engine.listTimelineByBusinessKey(RECEIPT_PROCESS_CODE, String.valueOf(id));
     }
 
+    /**
+     * 事后核销分配（2026-10-25 虎哥拍板 A）：全量替换 + 差额滚动，单事务。
+     *
+     * <p>执行序：① 旧行中「消失或金额变化」的置 REVERSED 留痕（不物理删，V1 范式）并
+     * 回滚应收单 received/unreceived；② 新行/金额变化行 insert NORMAL 并滚入；
+     * ③ 同步本单 written_off/unwritten_off（V1 列，V65 首次写、此处覆盖旧值）。</p>
+     *
+     * <p>取舍说明：反核销用「原行置 REVERSED」而非 V1 注释的「生成反向新行 +
+     * original_allocation_id 链」——REVERSED 行自带 amount/receivable_id/updated_at，
+     * 足以追溯「曾经分过多少、何时被收回」；完整反向链待审计需求明确后再补。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void allocate(Long id, List<AllocationItem> items) {
+        Receipt r = receiptMapper.selectById(id);
+        if (r == null) {
+            throw new IllegalArgumentException("收款单不存在：" + id);
+        }
+        if (!"RECEIVED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅已收款（审批通过）的单据可核销分配，当前状态：" + r.getApprovalStatus());
+        }
+        List<AllocationItem> list = items == null ? List.of() : items;
+        if (list.isEmpty()) {
+            throw new IllegalArgumentException("分配明细不能为空（至少保留一行；后续将提供反核销入口）");
+        }
+        validateAllocationItems(id, list, r.getProjectId(), r.getReceiptAmount(), false);
+
+        List<WriteOff> existing = writeOffMapper.selectList(new LambdaQueryWrapper<WriteOff>()
+                .eq(WriteOff::getReceiptId, id)
+                .eq(WriteOff::getStatus, "NORMAL"));
+        Map<Long, WriteOff> oldByRecv = existing.stream()
+                .collect(Collectors.toMap(WriteOff::getReceivableId, w -> w, (a, b) -> a));
+        Map<Long, BigDecimal> newByRecv = list.stream()
+                .collect(Collectors.toMap(AllocationItem::getReceivableId, AllocationItem::getAmount, (a, b) -> a));
+
+        // ① 旧行中消失或金额变化的：REVERSED 留痕 + 回滚应收单数字
+        for (WriteOff w : existing) {
+            BigDecimal newAmt = newByRecv.get(w.getReceivableId());
+            if (newAmt == null || newAmt.compareTo(w.getAmount()) != 0) {
+                rollReceivable(w.getReceivableId(), w.getAmount(), false);
+                w.setStatus("REVERSED");
+                writeOffMapper.updateById(w);
+                log.info("[receipt] 核销行反核销留痕 writeOffId={} receivableId={} amount={}",
+                        w.getId(), w.getReceivableId(), w.getAmount());
+            }
+        }
+        // ② 新行/金额变化行：insert NORMAL + 滚入应收单数字
+        for (AllocationItem it : list) {
+            WriteOff old = oldByRecv.get(it.getReceivableId());
+            if (old == null || old.getAmount().compareTo(it.getAmount()) != 0) {
+                insertAllocationRows(id, List.of(it));
+                rollReceivable(it.getReceivableId(), it.getAmount(), true);
+            }
+        }
+        // ③ 同步本单核销口径（部分分配时 unwritten 留余额）
+        BigDecimal written = list.stream()
+                .map(AllocationItem::getAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        r.setWrittenOffAmount(written);
+        r.setUnwrittenOffAmount(r.getReceiptAmount().subtract(written));
+        receiptMapper.updateById(r);
+        log.info("[receipt] 事后核销分配完成 receiptId={} rows={} written={} unwritten={}",
+                id, list.size(), written, r.getUnwrittenOffAmount());
+    }
+
+    /** 滚（add）或回滚（!add）应收单回款口径：received/unreceived 成对增减（applyWriteOffs 同范式） */
+    private void rollReceivable(Long receivableId, BigDecimal amount, boolean add) {
+        Receivable rv = receivableMapper.selectById(receivableId);
+        if (rv == null) {
+            return;
+        }
+        BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
+        BigDecimal unreceived = rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount();
+        rv.setReceivedAmount(add ? received.add(amount) : received.subtract(amount));
+        rv.setUnreceivedAmount(add ? unreceived.subtract(amount) : unreceived.add(amount));
+        receivableMapper.updateById(rv);
+    }
+
     // ===================== 私有 =====================
 
     /**
@@ -473,7 +552,7 @@ public class ReceiptServiceImpl implements ReceiptService {
     // ===================== 核销分配（V65 双向拆分，虎哥拍板 B） =====================
 
     /**
-     * 校验并落库核销分配明细（计划态，不滚数字）。
+     * 校验并落库核销分配明细（计划态，不滚数字）。create/update 口径：必须 Σ=总额。
      *
      * <p>规则：① Σ amount = 主单总额；② 每行 ≤ 该应收单未回款余额扣减在途分配
      * （审批中其他单占用；已通过单的额度已滚进 unreceived_amount，不重复扣）；
@@ -484,6 +563,20 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (items == null || items.isEmpty()) {
             return;
         }
+        validateAllocationItems(receiptId, items, projectId, total, true);
+        insertAllocationRows(receiptId, items);
+        log.info("[receipt] 核销分配落库 receiptId={} rows={} total={}", receiptId, items.size(), total);
+    }
+
+    /**
+     * 分配逐行校验（saveAllocations 计划态 / allocate 事后态共用，2026-10-25 A 方案抽出）。
+     *
+     * <p>requireFull=true（创建/编辑口径）：Σ 必须 = maxTotal；
+     * requireFull=false（事后核销口径）：允许部分分配，Σ ≤ maxTotal，
+     * 余额留在收款单 unwritten_off_amount。</p>
+     */
+    private void validateAllocationItems(Long receiptId, List<AllocationItem> items, Long projectId,
+                                         BigDecimal maxTotal, boolean requireFull) {
         Set<Long> ids = new LinkedHashSet<>();
         for (AllocationItem it : items) {
             if (it.getReceivableId() == null) {
@@ -517,10 +610,21 @@ public class ReceiptServiceImpl implements ReceiptService {
             }
             sum = sum.add(it.getAmount());
         }
-        if (sum.compareTo(total) != 0) {
-            throw new IllegalArgumentException("分配总额必须等于收款金额：分配 " + sum.toPlainString()
-                    + " ≠ 收款 " + total.toPlainString());
+        if (requireFull) {
+            if (sum.compareTo(maxTotal) != 0) {
+                throw new IllegalArgumentException("分配总额必须等于收款金额：分配 " + sum.toPlainString()
+                        + " ≠ 收款 " + maxTotal.toPlainString());
+            }
+        } else {
+            if (sum.compareTo(maxTotal) > 0) {
+                throw new IllegalArgumentException("分配总额不能超过收款金额：分配 " + sum.toPlainString()
+                        + " > 收款 " + maxTotal.toPlainString());
+            }
         }
+    }
+
+    /** 分配明细逐行 insert（计划态；状态 NORMAL，单号 WO-yyyyMMdd-NNN count+1） */
+    private void insertAllocationRows(Long receiptId, List<AllocationItem> items) {
         for (AllocationItem it : items) {
             WriteOff w = new WriteOff();
             w.setWriteOffNo(generateWriteOffNo());
@@ -532,7 +636,6 @@ public class ReceiptServiceImpl implements ReceiptService {
             w.setWriteOffMethod("MANUAL");
             writeOffMapper.insert(w);
         }
-        log.info("[receipt] 核销分配落库 receiptId={} rows={} total={}", receiptId, items.size(), total);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.firestar.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.firestar.dto.AllocationItem;
 import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.TimelineNodeVO;
@@ -47,4 +48,19 @@ public interface ReceiptService {
 
     /** 审批时间线（按 businessKey=收款单 ID 聚合） */
     List<TimelineNodeVO> timeline(Long id);
+
+    /**
+     * 事后核销分配（2026-10-25 虎哥拍板 A；V66 修复老单 unreceived 后开放）。
+     *
+     * <p>仅 RECEIVED（已收款）态可分配——修复两类历史缺口：① V65 上线前审批通过的老单
+     * （那时还没有 allocations 概念，如 SK-20261025-003）；② 创建时选「预收未指定」的
+     * 新单，钱到账后再补核销。这补上了用友/金蝶「独立核销环节」的范式：收款审批通过
+     * 只说明钱到账，分到哪张应收由财务在核销界面完成。</p>
+     *
+     * <p>语义 = 全量替换 + 差额滚动：新列表整体覆盖旧分配；消失或金额变化的旧行置
+     * REVERSED 留痕（不物理删，V1 范式）并回滚应收单 received/unreceived，新行 insert
+     * NORMAL 并滚入。与 create/update 的 saveAllocations（计划态、强制 Σ=总额）不同：
+     * 此处允许部分分配（Σ ≤ 收款金额，余额留在 unwritten_off_amount），且立即滚数字。</p>
+     */
+    void allocate(Long id, List<AllocationItem> items);
 }

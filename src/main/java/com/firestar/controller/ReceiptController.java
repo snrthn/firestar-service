@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
+import com.firestar.dto.AllocationItem;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.TimelineNodeVO;
@@ -59,6 +60,16 @@ public class ReceiptController {
     @GetMapping("/{id}/timeline")
     public Result<List<TimelineNodeVO>> timeline(@PathVariable Long id) {
         return Result.success(receiptService.timeline(id));
+    }
+
+    /**
+     * 事后核销分配（2026-10-25 虎哥拍板 A）：仅已收款态可调；全量替换 + 差额滚动，
+     * 修复 V65 前老单「无 allocations 概念」与「预收未指定新单事后补核销」两类缺口。
+     */
+    @PostMapping("/{id}/allocate")
+    public Result<Void> allocate(@PathVariable Long id, @RequestBody List<AllocationItem> items) {
+        receiptService.allocate(id, items);
+        return Result.success();
     }
 
     /** 创建收款单草稿（不拉审批） */
