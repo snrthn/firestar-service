@@ -684,6 +684,14 @@ public class ReturnServiceImpl implements ReturnService {
         for (ReturnOrder ro : p.getRecords()) {
             vos.add(toVO(ro, taskByBizKey, operatorId));
         }
+        // 空结果集直接返回：下游按 records 的 projectId/applicantId 做的批量 IN 查询
+        // 在空集上会生成 `WHERE id IN ()`，MySQL 视为语法错误（线上零退货单时必炸）。
+        // 没有记录也就无需翻译，早退即可。
+        if (p.getRecords().isEmpty()) {
+            IPage<ReturnVO> vp = new Page<>(p.getCurrent(), p.getSize(), p.getTotal());
+            vp.setRecords(vos);
+            return vp;
+        }
         // 字典与项目翻译在 toVO 内逐个查会 N+1，这里批量预热后逐单装配
         Map<Long, Project> projects = projectMapper.selectList(new LambdaQueryWrapper<Project>()
                         .in(Project::getId, p.getRecords().stream().map(ReturnOrder::getProjectId)
