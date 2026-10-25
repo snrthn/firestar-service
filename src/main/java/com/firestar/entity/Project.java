@@ -33,8 +33,23 @@ public class Project extends LogicDeleteEntity {
     /** 项目名称 */
     private String projectName;
 
-    /** 客户名称（V1 不拆客户表，见方案 §1.3） */
+    /**
+     * 客户名称（V1 原有，V68 起转为**快照冗余**）。
+     *
+     * <p>V68 引入客户主表后这里语义变了：单据上的客户名是「开票/立项当时叫什么」的
+     * 历史事实。客户主表里改名不会回头改这里 —— 否则历史单据的单位抬头被悄悄篡改，
+     * 对账时对不上（虎哥 2026-10-26 决策#2）。列表/详情继续读它可免一次联表；
+     * 看板统计则一律按 {@link #customerId} 聚合，因为文本会重名/别名分裂。</p>
+     */
     private String customerName;
+
+    /**
+     * 客户 ID → fin_customer.id（V68；0 或 null 表示未关联）。
+     *
+     * <p>与 {@link #customerName} 双写：新单据由 ProjectServiceImpl.resolveCustomer
+     * 统一维护一致性；存量由 V68 迁移按名称回填。</p>
+     */
+    private Long customerId;
 
     /** 销售经理 ID → sys_user.id */
     private Long salesManagerId;

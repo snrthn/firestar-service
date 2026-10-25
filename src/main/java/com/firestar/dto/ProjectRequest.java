@@ -19,8 +19,21 @@ public class ProjectRequest {
     /** 项目名称（必填） */
     private String projectName;
 
-    /** 客户名称（V1 不拆客户表） */
+    /**
+     * 客户名称（V68 起为快照）。
+     *
+     * <p>兼容旧客户端：允许只传名称不传 id。后端 resolveCustomer 会按名称 upsert 建客户
+     * 并回填 customerId，所以纯文本输入的老链路依然走得通。</p>
+     */
     private String customerName;
+
+    /**
+     * 客户 ID → fin_customer.id（V68，选填）。
+     *
+     * <p>与 customerName 的优先级：<b>传了 id 以 id 为准</b>（再把主表的名称快照下来，
+     * 防止前端手贱改名字时被覆盖）；没传 id 但有名称 → 按名称查/建客户。</p>
+     */
+    private Long customerId;
 
     /** 销售经理 ID → sys_user.id */
     private Long salesManagerId;

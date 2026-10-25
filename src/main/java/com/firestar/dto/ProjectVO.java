@@ -21,7 +21,15 @@ public class ProjectVO {
 
     private String projectName;
 
+    /** 客户名称（快照冗余，V68 起不再作为聚合键）—— 显示用，勿用于 GROUP BY 统计 */
     private String customerName;
+
+    /**
+     * 客户 ID → fin_customer.id（V68；0/null = 未关联）。
+     *
+     * <p>看板「按客户」维度的聚合键 —— 不要拿 customerName 做 GROUP BY，文本会重名/别名分裂。</p>
+     */
+    private Long customerId;
 
     private Long salesManagerId;
 

@@ -24,6 +24,8 @@ import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
 import com.firestar.entity.User;
 import com.firestar.mapper.DictDataMapper;
+import com.firestar.mapper.CustomerMapper;
+import com.firestar.entity.Customer;
 import com.firestar.mapper.InvoiceMapper;
 import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProcessDefMapper;
@@ -111,6 +113,8 @@ public class ProjectServiceImpl implements ProjectService {
     private final ReceivableMapper receivableMapper;
     /** 退货审批的业务标题 enrich（V67）：bizKey 是退货单 ID */
     private final ReturnOrderMapper returnOrderMapper;
+    /** 客户主表（V68）：立项/编辑时按名称 upsert，给看板提供可聚合的客户维度 */
+    private final CustomerMapper customerMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
@@ -120,7 +124,8 @@ public class ProjectServiceImpl implements ProjectService {
                               ShipmentMapper shipmentMapper, ItemMapper itemMapper,
                               ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper,
                               ReceivableMapper receivableMapper,
-                              ReturnOrderMapper returnOrderMapper) {
+                              ReturnOrderMapper returnOrderMapper,
+                              CustomerMapper customerMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -135,6 +140,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.invoiceMapper = invoiceMapper;
         this.receivableMapper = receivableMapper;
         this.returnOrderMapper = returnOrderMapper;
+        this.customerMapper = customerMapper;
     }
 
     @Override
@@ -148,7 +154,11 @@ public class ProjectServiceImpl implements ProjectService {
         }
         Project p = new Project();
         p.setProjectName(req.getProjectName().trim());
-        p.setCustomerName(req.getCustomerName());
+        // V68：客户走「主表 + 快照」双写（id 为准 / 按名称 upsert / 都没给则记 0 未关联）
+        applyCustomer(p, req);
+        if (p.getCustomerId() == null) {
+            p.setCustomerId(0L);
+        }
         p.setSalesManagerId(req.getSalesManagerId());
         // 签约后置（2026-10-22 虎哥拍板）：建项不再选合同状态，强制未签约；
         // 签约是审批通过后的独立动作（sign()），表单只认项目名称/客户/销售经理/预估金额
@@ -185,7 +195,14 @@ public class ProjectServiceImpl implements ProjectService {
         if (req.getProjectName() != null && !req.getProjectName().isBlank()) {
             exist.setProjectName(req.getProjectName().trim());
         }
-        if (req.getCustomerName() != null) exist.setCustomerName(req.getCustomerName());
+        // V68：客户同样保持「传了才改」的语义，与上面 projectName / salesManagerId 一致。
+        // 注意 applyCustomer 内部会写 exist.customerId + exist.customerName 两个字段，
+        // 所以不能再跟一句无条件的 setCustomerName(req.getCustomerName()) —— 那会把
+        // 「按 id 查出来的主表名称」又改回前端可能随手编辑过的文本，双写就裂了。
+        if ((req.getCustomerId() != null && req.getCustomerId() > 0)
+                || (req.getCustomerName() != null && !req.getCustomerName().isBlank())) {
+            applyCustomer(exist, req);
+        }
         if (req.getSalesManagerId() != null) exist.setSalesManagerId(req.getSalesManagerId());
         // contractStatus 不再随编辑变更（V46 起由 sign() 独占驱动）
         if (req.getContractAmount() != null) exist.setContractAmount(req.getContractAmount());
@@ -193,6 +210,82 @@ public class ProjectServiceImpl implements ProjectService {
         deleteItems(exist.getId());
         persistItems(exist.getId(), req.getItems());
         mapper.updateById(exist);
+    }
+
+    // ===== V68：客户主表解析（主表 + 快照双写） =====
+
+    /**
+     * 把请求里的客户信息解析成 {@code Project.customerId + customerName} 双写。
+     *
+     * <p><b>优先级（与 ProjectRequest 注释一致）：customerId &gt; customerName。</b>
+     * <ol>
+     *   <li>传了合法 customerId → 以主表为准，把主表客户名快照下来
+     *       （防止前端改了文本、id 却没动，导致两个字段对不上）；</li>
+     *   <li>没传 id 但有名称 → 按名称查主表，查到就复用，
+     *       查不到就<b>当场建档</b>（upsert）；</li>
+     *   <li>都没有 → 一个字段都不写（调用方负责默认值）。</li>
+     * </ol></p>
+     *
+     * <p><b>为什么允许「按名称当场建档」：</b>一期不做客户独立 CRUD 页面（虎哥决策#1），
+     * 若不允许自动建档，下拉就没法新增客户，功能直接残废。因此拿名称当自然主键做 upsert。
+     * 这依赖 fin_customer 上的 uk_customer_name 唯一约束 —— 这里是先用 selectOne 兜一层
+     * 而不是硬撞唯一键，是为了拿到既有 id；真并发下两人同时新建同名客户时，唯一键会兜底
+     * 报错，属于可接受的小概率失败。</p>
+     *
+     * <p>⚠️ 租户：本库当前单租户（tenant_id 全 0），查询与建档均未加 tenant 条件，
+     * 与 V68 迁移回填口径一致。将来启用多租户时这里必须补 eq(Customer::getTenantId, ...)。</p>
+     */
+    private void applyCustomer(Project p, ProjectRequest req) {
+        Long cid = req.getCustomerId();
+        String name = (req.getCustomerName() == null) ? null : req.getCustomerName().trim();
+
+        // 1) id 优先
+        if (cid != null && cid > 0) {
+            Customer c = customerMapper.selectById(cid);
+            if (c == null || !"ENABLED".equals(c.getStatus())) {
+                throw new IllegalArgumentException("客户不存在或已停用：" + cid);
+            }
+            p.setCustomerId(c.getId());
+            p.setCustomerName(c.getCustomerName());
+            return;
+        }
+
+        // 2) 名称兜底（兼容旧客户端，也支持下拉 allow-create 手输新客户）
+        if (name == null || name.isEmpty()) {
+            return;
+        }
+        Customer exists = customerMapper.selectOne(new LambdaQueryWrapper<Customer>()
+                .eq(Customer::getCustomerName, name)
+                .last("LIMIT 1"));
+        if (exists != null) {
+            p.setCustomerId(exists.getId());
+            p.setCustomerName(exists.getCustomerName());
+            return;
+        }
+        Customer created = new Customer();
+        created.setCustomerName(name);
+        created.setStatus("ENABLED");
+        created.setRemark("立项时按名称自动建档（V68）");
+        customerMapper.insert(created);
+        // 编号要带自增 id，故必须 insert 之后再 update 一次
+        created.setCustomerNo(generateCustomerNo(created.getId()));
+        customerMapper.updateById(created);
+        log.info("[project] 客户自动建档 id={} no={} name={}",
+                created.getId(), created.getCustomerNo(), created.getCustomerName());
+        p.setCustomerId(created.getId());
+        p.setCustomerName(name);
+    }
+
+    /**
+     * 生成客户编号：CUS-{yyyyMMdd}-{id 四位补齐}。
+     *
+     * <p>与 {@link #generateProjectNo(Long)} 完全同构，只是前缀不同 ——
+     * 虎哥 2026-10-26 决策#3「沿用项目号的近似格式」。改编号规则请连同
+     * V68 迁移里的 UPDATE 语句一起改，否则回填数据与新增数据会对不上。</p>
+     */
+    private String generateCustomerNo(Long customerId) {
+        return String.format("CUS-%s-%04d",
+                LocalDateTime.now().format(PROJECT_NO_DATE_FMT), customerId);
     }
 
     // ===== 方案2：立项带行 明细持久化辅助 =====
@@ -1059,6 +1152,7 @@ public class ProjectServiceImpl implements ProjectService {
         vo.setProjectNo(p.getProjectNo());
         vo.setProjectName(p.getProjectName());
         vo.setCustomerName(p.getCustomerName());
+        vo.setCustomerId(p.getCustomerId());
         vo.setSalesManagerId(p.getSalesManagerId());
         vo.setSalesManagerName(p.getSalesManagerId() != null
                 ? userNames.get(p.getSalesManagerId()) : null);
