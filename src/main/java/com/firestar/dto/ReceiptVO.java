@@ -45,6 +45,12 @@ public class ReceiptVO {
     /** 单据方向标签色 */
     private String docDirectionStyle;
 
+    /** 红冲原单 ID（docDirection=RED 时非空，指向被冲销的蓝字收款单） */
+    private Long originalReceiptId;
+
+    /** 红冲原单号（detail 回填，展示「原单：SK-xxx」；list 不回填避免 N+1） */
+    private String originalReceiptNo;
+
     /** 款项类型（字典 receipt_type） */
     private String receiptType;
 
@@ -95,4 +101,12 @@ public class ReceiptVO {
 
     /** 当前登录用户在流程实例上的待办任务 ID（详情页据此直接通过/驳回；无则 null） */
     private String myPendingTaskId;
+
+    /**
+     * 核销分配明细（2026-10-25 V65，仅 detail 接口回填，避免列表 N+1）。
+     *
+     * <p>来源：fin_write_off where receipt_id = 本单 and status = 'NORMAL'
+     * （撤回产生的 REVERSED 行不透出）。空列表 = 预收未指定应收单。</p>
+     */
+    private List<AllocationVO> allocations;
 }

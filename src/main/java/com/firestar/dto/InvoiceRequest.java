@@ -23,7 +23,12 @@ public class InvoiceRequest {
     /** 项目 ID → fin_project.id */
     private Long projectId;
 
-    /** 应收单 ID → fin_receivable.id（NOT NULL，创建必须传且校验存在） */
+    /**
+     * 应收单 ID → fin_receivable.id（NOT NULL）。
+     *
+     * <p>2026-10-25 V65 双向拆分后语义调整为「主应收单」：单张开票时即目标应收单；
+     * 多张拆分（合并开）时取 allocations 第一行对应的应收单，保持主表列非空。</p>
+     */
     private Long receivableId;
 
     /** 开票金额 */
@@ -66,4 +71,29 @@ public class InvoiceRequest {
 
     /** 备注（可选） */
     private String remark;
+
+    /**
+     * 核销分配明细（2026-10-25 V65 双向拆分，虎哥拍板 B）。
+     *
+     * <p>非空时强制 Σ amount = invoiceAmount 且每行 ≤ 该应收单 uninvoicedAmount（防超开）；
+     * 空列表兜底为「主应收单独享」（{@link #receivableId}，兼容旧前端请求体）。
+     * 审批通过时按明细滚各应收单 invoiced/uninvoiced，撤回反核销回滚。</p>
+     */
+    private List<AllocationItem> allocations;
+
+    /**
+     * 单据方向（2026-10-25 红冲入口，虎哥拍板「正数+RED 方向」）。
+     *
+     * <p>BLUE=蓝字（默认，普通发票）；RED=红字（红冲单，必须配 originalInvoiceId，
+     * 金额仍存正数，审批通过时对应收单/项目汇总做减法，与税务「销项负数」对应）。</p>
+     */
+    private String docDirection;
+
+    /**
+     * 红冲原单 ID（docDirection=RED 时必填）。
+     *
+     * <p>约束：原单必须存在且已审批通过（ISSUED）、同项目、金额 ≤ 原单金额（支持部分红冲）。
+     * BLUE 单传了也忽略。</p>
+     */
+    private Long originalInvoiceId;
 }

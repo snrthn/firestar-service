@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.annotation.Auditable;
 import com.firestar.common.BatchLoader;
 import com.firestar.common.DataScopeHelper;
+import com.firestar.dto.AllocationItem;
+import com.firestar.dto.AllocationVO;
 import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.NotifyCommand;
@@ -14,6 +16,7 @@ import com.firestar.dto.TimelineNodeVO;
 import com.firestar.entity.DictData;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.Invoice;
+import com.firestar.entity.InvoiceAllocation;
 import com.firestar.entity.ProcessDef;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receivable;
@@ -26,6 +29,7 @@ import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.InvoiceMapper;
+import com.firestar.mapper.InvoiceAllocationMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.mapper.UserRoleMapper;
@@ -41,7 +45,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -73,6 +80,9 @@ public class InvoiceServiceImpl implements InvoiceService {
     private static final String DICT_INVOICE_TYPE = "invoice_type";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
+    /** 核销单号日期格式（IA-yyyyMMdd-NNN，同 ReceiptServiceImpl.generateReceiptNo 范式） */
+    private static final DateTimeFormatter ALLOCATION_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
     /**
      * 附件软关联业务类型（2026-10-25 V62 真上传）。
      *
@@ -92,6 +102,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     private final UserMapper userMapper;
     private final RoleMapper roleMapper;
     private final UserRoleMapper userRoleMapper;
+    private final InvoiceAllocationMapper invoiceAllocationMapper;
 
     @Autowired
     public InvoiceServiceImpl(InvoiceMapper invoiceMapper, FileStorageMapper fileStorageMapper,
@@ -99,7 +110,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                              ProjectMapper projectMapper, DictDataMapper dictDataMapper,
                              ProcessDefMapper processDefMapper, WorkflowEngineService engine,
                              NotificationService notificationService, UserMapper userMapper,
-                             RoleMapper roleMapper, UserRoleMapper userRoleMapper) {
+                             RoleMapper roleMapper, UserRoleMapper userRoleMapper,
+                             InvoiceAllocationMapper invoiceAllocationMapper) {
         this.invoiceMapper = invoiceMapper;
         this.fileStorageMapper = fileStorageMapper;
         this.receivableMapper = receivableMapper;
@@ -111,6 +123,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         this.userMapper = userMapper;
         this.roleMapper = roleMapper;
         this.userRoleMapper = userRoleMapper;
+        this.invoiceAllocationMapper = invoiceAllocationMapper;
     }
 
     // ===================== 创建（草稿，不拉审批） =====================
@@ -123,12 +136,16 @@ public class InvoiceServiceImpl implements InvoiceService {
                     "invoiceType", "invoiceDate", "docDirection"})
     public Long create(InvoiceRequest req) {
         Long operatorId = currentUserId();
-        if (req.getReceivableId() == null) {
+        // V65 双向拆分：allocations 非空时以第一行为主应收单（主表列 NOT NULL）；
+        // 空时沿用旧请求体的 receivableId（单张开票，兼容历史前端）
+        Long mainReceivableId = req.getAllocations() != null && !req.getAllocations().isEmpty()
+                ? req.getAllocations().get(0).getReceivableId() : req.getReceivableId();
+        if (mainReceivableId == null) {
             throw new IllegalArgumentException("应收单不能为空");
         }
-        Receivable receivable = receivableMapper.selectById(req.getReceivableId());
+        Receivable receivable = receivableMapper.selectById(mainReceivableId);
         if (receivable == null) {
-            throw new IllegalArgumentException("应收单不存在：" + req.getReceivableId());
+            throw new IllegalArgumentException("应收单不存在：" + mainReceivableId);
         }
         if (req.getProjectId() == null) {
             throw new IllegalArgumentException("项目不能为空");
@@ -155,8 +172,13 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setInvoiceType(req.getInvoiceType());
         invoice.setInvoiceDate(req.getInvoiceDate());
         // invoice_file_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
-        // 单据方向默认蓝字（红字发票为后续扩展，本期仅蓝字）
-        invoice.setDocDirection("BLUE");
+        // 单据方向：默认 BLUE（蓝字）；RED（红字）= 红冲单，须挂已审批通过的原单
+        // （2026-10-25 红冲入口：正数金额+方向标记，汇总/核销时按方向代数运算）
+        String direction = "RED".equals(req.getDocDirection()) ? "RED" : "BLUE";
+        invoice.setDocDirection(direction);
+        if ("RED".equals(direction)) {
+            invoice.setOriginalInvoiceId(validateRedFlush(req, project).getId());
+        }
         // 创建即草稿，待提交再拉审批
         invoice.setInvoiceStatus("PENDING");
         // 归属人 = 当前用户（申请人）
@@ -165,9 +187,12 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoiceMapper.insert(invoice);
         // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
         bindAttachments(invoice.getId(), req.getAttachmentFileIds());
+        // 核销分配明细落库（V65 双向拆分）：计划态不滚数字，completeTask 审批通过才生效
+        saveAllocations(invoice.getId(), req.getAllocations(), req.getInvoiceAmount(), project.getId());
 
-        log.info("[invoice] 创建发票草稿 id={} projectId={} receivableId={} amount={}",
-                invoice.getId(), project.getId(), receivable.getId(), req.getInvoiceAmount());
+        log.info("[invoice] 创建发票草稿 id={} projectId={} receivableId={} amount={} allocations={}",
+                invoice.getId(), project.getId(), receivable.getId(), req.getInvoiceAmount(),
+                req.getAllocations() == null ? 0 : req.getAllocations().size());
         return invoice.getId();
     }
 
@@ -182,8 +207,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (r == null) {
             throw new IllegalArgumentException("发票不存在：" + id);
         }
-        if (!"PENDING".equals(r.getInvoiceStatus())) {
-            throw new IllegalArgumentException("仅草稿态可提交审批，当前：" + r.getInvoiceStatus());
+        // 草稿态 + 已驳回态可提交（2026-10-25 抄用友作业：驳回=回到编写中，可改后重提）
+        if (!"PENDING".equals(r.getInvoiceStatus()) && !"REJECTED".equals(r.getInvoiceStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可提交审批，当前：" + r.getInvoiceStatus());
         }
         ProcessDef def = processDefMapper.selectOne(new LambdaQueryWrapper<ProcessDef>()
                 .eq(ProcessDef::getProcessCode, INVOICE_PROCESS_CODE)
@@ -221,8 +247,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (!isAdmin && !Objects.equals(r.getApplicantId(), operatorId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发票不存在或无权操作：" + id);
         }
-        if (!"PENDING".equals(r.getInvoiceStatus())) {
-            throw new IllegalArgumentException("仅草稿态可编辑，当前：" + r.getInvoiceStatus());
+        // 草稿态 + 已驳回态可编辑（用友范式：驳回=回到编写中；ISSUING 在审批链中不可改）
+        if (!"PENDING".equals(r.getInvoiceStatus()) && !"REJECTED".equals(r.getInvoiceStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可编辑，当前：" + r.getInvoiceStatus());
         }
         if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须为正");
@@ -239,7 +266,18 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoiceMapper.updateById(r);
         // 附件以本次提交的全量列表为准：新上传的挂上，前端删掉的会被解绑（bizId 置 NULL）
         rebindAttachments(id, req.getAttachmentFileIds());
-        log.info("[invoice] 编辑发票 id={} amount={} user={}", id, req.getInvoiceAmount(), currentUsername());
+        // V65：主应收单锁定不可换（主表列语义 = allocations 首行；换单等于换合同，应新建）
+        if (req.getAllocations() != null && !req.getAllocations().isEmpty()
+                && !Objects.equals(req.getAllocations().get(0).getReceivableId(), r.getReceivableId())) {
+            throw new IllegalArgumentException("主应收单不可更换，请新建发票");
+        }
+        // 分配明细同口径全量替换：计划态未生效，硬删重插无痕（V65）
+        invoiceAllocationMapper.delete(new LambdaQueryWrapper<InvoiceAllocation>()
+                .eq(InvoiceAllocation::getInvoiceId, id));
+        saveAllocations(id, req.getAllocations(), req.getInvoiceAmount(), r.getProjectId());
+        log.info("[invoice] 编辑发票 id={} amount={} allocations={} user={}",
+                id, req.getInvoiceAmount(), req.getAllocations() == null ? 0 : req.getAllocations().size(),
+                currentUsername());
     }
 
     // ===================== 撤回（仅本人+admin） =====================
@@ -264,6 +302,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         r.setInvoiceStatus("CANCELLED");
         r.setUpdatedBy(currentUserId());
         invoiceMapper.updateById(r);
+        // 分配明细硬删（V65）：withdraw 只可能发生在审批中（引擎挡已结束流程），
+        // 此时 completeTask 尚未跑过、应收单/项目数字未滚 → 删计划行即守恒，无需反核销
+        invoiceAllocationMapper.delete(new LambdaQueryWrapper<InvoiceAllocation>()
+                .eq(InvoiceAllocation::getInvoiceId, id));
         log.info("[invoice] 申请人撤回 id={} user={} 已审批人={}", id, currentUsername(), approvedUserIds);
         notifyWithdrawn(r, approvedUserIds);
     }
@@ -292,7 +334,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                 r.setUpdatedBy(currentUserId());
                 invoiceMapper.updateById(r);
                 // 累加 fin_project.invoiced_amount（金额纪律：null 当 0，add）
-                accumulateProjectInvoiced(r.getProjectId(), r.getInvoiceAmount());
+                accumulateProjectInvoiced(r.getProjectId(), r.getInvoiceAmount(), r.getDocDirection());
+                // 核销生效（V65）：按分配明细滚各应收单已开票/未开票
+                applyInvoiceAllocations(r);
                 log.info("[invoice] 审批通过回写 id={} amount={}", r.getId(), r.getInvoiceAmount());
                 notifyResult(r, "INVOICE_DONE", "已开具", null);
             } else {
@@ -386,6 +430,15 @@ public class InvoiceServiceImpl implements InvoiceService {
         InvoiceVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects, receivables);
         // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
         vo.setAttachmentFileIds(loadAttachmentIds(id));
+        // 核销分配明细仅详情回填（同附件口径，V65）
+        vo.setAllocations(allocationVOs(id));
+        // 红冲原单号仅详情回填（N+1 防护同附件口径）
+        if (r.getOriginalInvoiceId() != null) {
+            Invoice original = invoiceMapper.selectById(r.getOriginalInvoiceId());
+            if (original != null) {
+                vo.setOriginalInvoiceNo(original.getInvoiceNo());
+            }
+        }
         return vo;
     }
 
@@ -398,7 +451,13 @@ public class InvoiceServiceImpl implements InvoiceService {
     // ===================== 私有 =====================
 
     /** 累加项目已开票（fin_project.invoiced_amount）；金额纪律：null 当 0，add */
-    private void accumulateProjectInvoiced(Long projectId, BigDecimal amount) {
+    /**
+     * 累加/扣减项目已开票（fin_project.invoiced_amount）；金额纪律：null 当 0。
+     *
+     * <p>docDirection=RED（红冲单）时做减法，保持冗余字段守恒可对账
+     * （2026-10-25 红冲入口；实时聚合口径在 ProjectServiceImpl，此处仅维护冗余列）。</p>
+     */
+    private void accumulateProjectInvoiced(Long projectId, BigDecimal amount, String docDirection) {
         if (projectId == null || amount == null) {
             return;
         }
@@ -406,9 +465,186 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (p == null) {
             return;
         }
+        boolean red = "RED".equals(docDirection);
         BigDecimal base = p.getInvoicedAmount() == null ? BigDecimal.ZERO : p.getInvoicedAmount();
-        p.setInvoicedAmount(base.add(amount));
+        p.setInvoicedAmount(red ? base.subtract(amount) : base.add(amount));
         projectMapper.updateById(p);
+    }
+
+    /**
+     * 红冲单校验（2026-10-25 红冲入口）：原单必须存在、已审批通过（ISSUED）、
+     * 同项目、本单金额 ≤ 原单金额（支持部分红冲，税务同口径）。
+     */
+    private Invoice validateRedFlush(InvoiceRequest req, Project project) {
+        if (req.getOriginalInvoiceId() == null) {
+            throw new IllegalArgumentException("红冲单必须指定原发票（originalInvoiceId）");
+        }
+        Invoice original = invoiceMapper.selectById(req.getOriginalInvoiceId());
+        if (original == null) {
+            throw new IllegalArgumentException("原发票不存在：" + req.getOriginalInvoiceId());
+        }
+        if (!"ISSUED".equals(original.getInvoiceStatus())) {
+            throw new IllegalArgumentException("仅已完成开票（审批通过）的发票可红冲，原单当前状态：" + original.getInvoiceStatus());
+        }
+        if (!Objects.equals(original.getProjectId(), project.getId())) {
+            throw new IllegalArgumentException("红冲单必须与原单同项目，请新建");
+        }
+        if (req.getInvoiceAmount().compareTo(original.getInvoiceAmount()) > 0) {
+            throw new IllegalArgumentException("红冲金额不能超过原单金额（" + original.getInvoiceAmount().toPlainString() + "），支持部分红冲");
+        }
+        return original;
+    }
+
+    // ===================== 核销分配（V65 双向拆分，虎哥拍板 B） =====================
+
+    /**
+     * 校验并落库开票分配明细（计划态，不滚数字）。
+     *
+     * <p>规则：① Σ amount = 主单总额；② 每行 ≤ 该应收单未开票余额扣减在途分配
+     * （审批中其他发票占用；已通过单的额度已滚进 uninvoiced_amount，不重复扣）；
+     * ③ 同一应收单合并一行；④ 分配必须落在本项目下。空列表兜底为主应收单独享
+     * （不插明细，兼容 V65 前历史数据）。</p>
+     */
+    private void saveAllocations(Long invoiceId, List<AllocationItem> items, BigDecimal total, Long projectId) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        Set<Long> ids = new LinkedHashSet<>();
+        for (AllocationItem it : items) {
+            if (it.getReceivableId() == null) {
+                throw new IllegalArgumentException("分配明细缺少应收单");
+            }
+            if (!ids.add(it.getReceivableId())) {
+                throw new IllegalArgumentException("同一应收单重复分配，请合并为一行：" + it.getReceivableId());
+            }
+        }
+        List<Receivable> receivables = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                .in(Receivable::getId, ids));
+        if (receivables.size() != ids.size()) {
+            throw new IllegalArgumentException("分配明细中包含不存在的应收单");
+        }
+        Map<Long, Receivable> byId = receivables.stream()
+                .collect(Collectors.toMap(Receivable::getId, rv -> rv));
+        BigDecimal sum = BigDecimal.ZERO;
+        for (AllocationItem it : items) {
+            Receivable rv = byId.get(it.getReceivableId());
+            if (!Objects.equals(rv.getProjectId(), projectId)) {
+                throw new IllegalArgumentException("应收单不属于本项目：" + rv.getReceivableNo());
+            }
+            if (it.getAmount() == null || it.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("分配金额必须为正：" + rv.getReceivableNo());
+            }
+            BigDecimal available = (rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount())
+                    .subtract(sumInFlightAllocations(rv.getId(), invoiceId));
+            if (it.getAmount().compareTo(available) > 0) {
+                throw new IllegalArgumentException("超出应收单未开票余额：" + rv.getReceivableNo()
+                        + "，可用 " + available.toPlainString());
+            }
+            sum = sum.add(it.getAmount());
+        }
+        if (sum.compareTo(total) != 0) {
+            throw new IllegalArgumentException("分配总额必须等于开票金额：分配 " + sum.toPlainString()
+                    + " ≠ 开票 " + total.toPlainString());
+        }
+        for (AllocationItem it : items) {
+            InvoiceAllocation a = new InvoiceAllocation();
+            a.setAllocationNo(generateAllocationNo());
+            a.setInvoiceId(invoiceId);
+            a.setReceivableId(it.getReceivableId());
+            a.setAmount(it.getAmount());
+            a.setStatus("NORMAL");
+            invoiceAllocationMapper.insert(a);
+        }
+        log.info("[invoice] 开票分配落库 invoiceId={} rows={} total={}", invoiceId, items.size(), total);
+    }
+
+    /**
+     * 指定应收单的「在途分配」合计：其他发票已提交审批（ISSUING）占用但尚未生效
+     * （completeTask 未跑）的额度。已通过单的额度已滚进 uninvoiced_amount，不重复扣。
+     */
+    private BigDecimal sumInFlightAllocations(Long receivableId, Long excludeInvoiceId) {
+        List<InvoiceAllocation> rows = invoiceAllocationMapper.selectList(new LambdaQueryWrapper<InvoiceAllocation>()
+                .eq(InvoiceAllocation::getReceivableId, receivableId)
+                .eq(InvoiceAllocation::getStatus, "NORMAL"));
+        Set<Long> otherInvoiceIds = rows.stream()
+                .map(InvoiceAllocation::getInvoiceId)
+                .filter(iid -> !Objects.equals(iid, excludeInvoiceId))
+                .collect(Collectors.toSet());
+        if (otherInvoiceIds.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        List<Invoice> inFlight = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
+                .in(Invoice::getId, otherInvoiceIds)
+                .eq(Invoice::getInvoiceStatus, "ISSUING"));
+        Set<Long> inFlightIds = inFlight.stream().map(Invoice::getId).collect(Collectors.toSet());
+        return rows.stream()
+                .filter(a -> inFlightIds.contains(a.getInvoiceId()))
+                .map(InvoiceAllocation::getAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * 审批通过：核销生效。单事务内滚各应收单 invoiced/uninvoiced
+     * （fin_invoice.receivable_id 为主应收单，多张拆分时以明细为准）。
+     */
+    private void applyInvoiceAllocations(Invoice r) {
+        List<InvoiceAllocation> rows = invoiceAllocationMapper.selectList(new LambdaQueryWrapper<InvoiceAllocation>()
+                .eq(InvoiceAllocation::getInvoiceId, r.getId())
+                .eq(InvoiceAllocation::getStatus, "NORMAL"));
+        if (rows.isEmpty()) {
+            return;
+        }
+        // RED（红冲单）反向：扣回应收单已开票、加回未开票（2026-10-25 红冲入口）
+        boolean red = "RED".equals(r.getDocDirection());
+        for (InvoiceAllocation a : rows) {
+            Receivable rv = receivableMapper.selectById(a.getReceivableId());
+            if (rv == null) {
+                continue;
+            }
+            BigDecimal invoiced = rv.getInvoicedAmount() == null ? BigDecimal.ZERO : rv.getInvoicedAmount();
+            BigDecimal uninvoiced = rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount();
+            rv.setInvoicedAmount(red ? invoiced.subtract(a.getAmount()) : invoiced.add(a.getAmount()));
+            rv.setUninvoicedAmount(red ? uninvoiced.add(a.getAmount()) : uninvoiced.subtract(a.getAmount()));
+            receivableMapper.updateById(rv);
+        }
+        log.info("[invoice] 核销生效 invoiceId={} rows={}", r.getId(), rows.size());
+    }
+
+    /** 分配明细 → VO（detail 回填，含应收单号） */
+    private List<AllocationVO> allocationVOs(Long invoiceId) {
+        List<InvoiceAllocation> rows = invoiceAllocationMapper.selectList(new LambdaQueryWrapper<InvoiceAllocation>()
+                .eq(InvoiceAllocation::getInvoiceId, invoiceId)
+                .eq(InvoiceAllocation::getStatus, "NORMAL"));
+        if (rows.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<Long, String> nos = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                        .in(Receivable::getId,
+                                rows.stream().map(InvoiceAllocation::getReceivableId).collect(Collectors.toSet())))
+                .stream().collect(Collectors.toMap(Receivable::getId, Receivable::getReceivableNo));
+        List<AllocationVO> vos = new ArrayList<>(rows.size());
+        for (InvoiceAllocation a : rows) {
+            AllocationVO vo = new AllocationVO();
+            vo.setReceivableId(a.getReceivableId());
+            vo.setReceivableNo(nos.get(a.getReceivableId()));
+            vo.setAmount(a.getAmount());
+            vos.add(vo);
+        }
+        return vos;
+    }
+
+    /**
+     * 核销单号：IA-yyyyMMdd-NNN。
+     *
+     * <p>与收款侧 WO- 前缀分开：两张明细表各自 count+1，共用前缀会撞号混淆
+     * （uk 都是各表内 unique，不跨表）。</p>
+     */
+    private String generateAllocationNo() {
+        String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
+        Long count = invoiceAllocationMapper.selectCount(new LambdaQueryWrapper<InvoiceAllocation>()
+                .likeRight(InvoiceAllocation::getAllocationNo, "IA-" + date + "-"));
+        return String.format("IA-%s-%03d", date, (count == null ? 0 : count) + 1);
     }
 
     private InvoiceVO toVO(Invoice r, Map<String, DictData> statusDict, Map<String, DictData> typeDict,

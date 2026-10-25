@@ -53,6 +53,12 @@ public class ReceivableVO {
     /** 未开票金额 */
     private BigDecimal uninvoicedAmount;
 
+    /** 已回款金额（V65：按 fin_write_off 明细累加） */
+    private BigDecimal receivedAmount;
+
+    /** 未回款金额（V65：应收金额 - 已回款） */
+    private BigDecimal unreceivedAmount;
+
     /** 应收日期 */
     private LocalDate receivableDate;
 

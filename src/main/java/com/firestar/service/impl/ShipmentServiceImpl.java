@@ -723,6 +723,8 @@ public class ShipmentServiceImpl implements ShipmentService {
         rv.setUnwrittenOffAmount(r.getUnwrittenOffAmount());
         rv.setInvoicedAmount(r.getInvoicedAmount());
         rv.setUninvoicedAmount(r.getUninvoicedAmount());
+        rv.setReceivedAmount(r.getReceivedAmount());
+        rv.setUnreceivedAmount(r.getUnreceivedAmount());
         rv.setReceivableDate(r.getReceivableDate());
         rv.setStatus(r.getStatus());
         DictData smeta = dicts.receivableStatus.get(r.getStatus());

@@ -60,6 +60,12 @@ public class InvoiceVO {
     /** 单据方向中文名 */
     private String docDirectionName;
 
+    /** 红冲原单 ID（docDirection=RED 时非空，指向被冲销的蓝字发票） */
+    private Long originalInvoiceId;
+
+    /** 红冲原单号（detail 回填，展示「原单：YS-xxx」；list 不回填避免 N+1） */
+    private String originalInvoiceNo;
+
     /** 开票日期 */
     private LocalDate invoiceDate;
 
@@ -107,4 +113,13 @@ public class InvoiceVO {
 
     /** 当前登录用户在流程实例上的待办任务 ID（无则 null） */
     private String myPendingTaskId;
+
+    /**
+     * 核销分配明细（2026-10-25 V65，仅 detail 接口回填，避免列表 N+1）。
+     *
+     * <p>来源：fin_invoice_allocation where invoice_id = 本单 and status = 'NORMAL'
+     * （撤回产生的 REVERSED 行不透出）。空列表兜底为主应收单独享
+     * （{@link #receivableId}，兼容 V65 前的历史数据）。</p>
+     */
+    private List<AllocationVO> allocations;
 }

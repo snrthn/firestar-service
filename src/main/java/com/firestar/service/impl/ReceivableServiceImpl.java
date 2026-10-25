@@ -115,6 +115,8 @@ public class ReceivableServiceImpl implements ReceivableService {
         r.setUnwrittenOffAmount(amount);
         r.setInvoicedAmount(BigDecimal.ZERO);
         r.setUninvoicedAmount(amount);
+        r.setReceivedAmount(BigDecimal.ZERO);   // V65 回款侧核销列，与开票侧对称初始化
+        r.setUnreceivedAmount(amount);
         r.setReceivableDate(LocalDate.now());
         r.setStatus("CONFIRMED");          // 客户已收货 = 金额已确认（V2 字典 receivable_status=CONFIRMED）
         r.setReceivableNo(generateReceivableNo()); // NOT NULL 无默认列：插入前必须算好
@@ -214,6 +216,8 @@ public class ReceivableServiceImpl implements ReceivableService {
         vo.setUnwrittenOffAmount(r.getUnwrittenOffAmount());
         vo.setInvoicedAmount(r.getInvoicedAmount());
         vo.setUninvoicedAmount(r.getUninvoicedAmount());
+        vo.setReceivedAmount(r.getReceivedAmount());
+        vo.setUnreceivedAmount(r.getUnreceivedAmount());
         vo.setReceivableDate(r.getReceivableDate());
         vo.setStatus(r.getStatus());
         DictData st = statusDict.get(r.getStatus());

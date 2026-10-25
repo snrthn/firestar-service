@@ -50,6 +50,12 @@ public class Receivable extends LogicDeleteEntity {
     /** 未开票金额 */
     private BigDecimal uninvoicedAmount;
 
+    /** 已回款金额（V65：收款核销审批通过时按 fin_write_off 明细累加） */
+    private BigDecimal receivedAmount;
+
+    /** 未回款金额（V65：receivableAmount - receivedAmount） */
+    private BigDecimal unreceivedAmount;
+
     /** 应收日期 */
     private LocalDate receivableDate;
 

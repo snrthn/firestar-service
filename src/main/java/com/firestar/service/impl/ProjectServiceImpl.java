@@ -21,6 +21,7 @@ import com.firestar.entity.Item;
 import com.firestar.entity.ProcessDef;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
+import com.firestar.entity.Receivable;
 import com.firestar.entity.User;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.InvoiceMapper;
@@ -28,6 +29,7 @@ import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
+import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.ShipmentMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.entity.Role;
@@ -103,6 +105,8 @@ public class ProjectServiceImpl implements ProjectService {
     /** 收款/发票审批的业务标题 enrich（V63）：bizKey 是收款单/发票单 ID，与项目 ID 空间独立 */
     private final ReceiptMapper receiptMapper;
     private final InvoiceMapper invoiceMapper;
+    /** 项目金额汇总预聚合（V65）：应收单口径 */
+    private final ReceivableMapper receivableMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
@@ -110,7 +114,8 @@ public class ProjectServiceImpl implements ProjectService {
                               NotificationService notificationService, UserMapper userMapper,
                               RoleMapper roleMapper, UserRoleMapper userRoleMapper,
                               ShipmentMapper shipmentMapper, ItemMapper itemMapper,
-                              ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper) {
+                              ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper,
+                              ReceivableMapper receivableMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -123,6 +128,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.itemMapper = itemMapper;
         this.receiptMapper = receiptMapper;
         this.invoiceMapper = invoiceMapper;
+        this.receivableMapper = receivableMapper;
     }
 
     @Override
@@ -281,7 +287,10 @@ public class ProjectServiceImpl implements ProjectService {
                 .flatMap(p -> java.util.stream.Stream.of(p.getSalesManagerId(), p.getContractSignedBy()))
                 .filter(Objects::nonNull).collect(Collectors.toSet());
         Map<Long, String> userNames = userDisplayNames(userIds);
-        return page.convert(p -> toVO(p, approvalDict, userNames));
+        // 金额汇总批量预聚合（V65）：一页一次三表聚合，避免逐项目 N+1
+        ProjectAmounts amounts = amountsOf(page.getRecords().stream()
+                .map(Project::getId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts));
     }
 
     @Override
@@ -311,7 +320,10 @@ public class ProjectServiceImpl implements ProjectService {
                 .flatMap(p -> java.util.stream.Stream.of(p.getSalesManagerId(), p.getContractSignedBy()))
                 .filter(Objects::nonNull).collect(Collectors.toSet());
         Map<Long, String> userNames = userDisplayNames(userIds);
-        return page.convert(p -> toVO(p, approvalDict, userNames));
+        // 金额汇总批量预聚合（V65）：一页一次三表聚合，避免逐项目 N+1
+        ProjectAmounts amounts = amountsOf(page.getRecords().stream()
+                .map(Project::getId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts));
     }
 
     @Override
@@ -926,8 +938,82 @@ public class ProjectServiceImpl implements ProjectService {
 
     // ===================== 私有 =====================
 
+    /**
+     * 项目金额汇总预聚合载体（V65）。三张口径一页一次查完（selectList + 内存累加，
+     * 同 toVO shipment 聚合范式，零手写 SQL），避免逐项目 N+1。
+     */
+    private static final class ProjectAmounts {
+        private final Map<Long, BigDecimal> received = new HashMap<>();
+        private final Map<Long, BigDecimal> invoiced = new HashMap<>();
+        private final Map<Long, BigDecimal> receivable = new HashMap<>();
+
+        BigDecimal receivedOf(Long projectId) {
+            return received.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+
+        BigDecimal invoicedOf(Long projectId) {
+            return invoiced.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+
+        BigDecimal receivableOf(Long projectId) {
+            return receivable.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+    }
+
+    /** 金额纪律：null 当 0 */
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /**
+     * 批量聚合项目三口径（V65，虎哥拍板 A 实时聚合）：
+     * ① 累计已收 = Σ approval_status='RECEIVED' 的收款单，按方向代数求和（BLUE 加、RED 红冲减）；
+     * ② 累计开票 = Σ invoice_status='ISSUED' 的发票，同方向口径；
+     * ③ 应收 = Σ 有效应收单 receivable_amount。
+     * 空集合直接返回空载体不发 SQL。
+     */
+    private ProjectAmounts amountsOf(List<Long> projectIds) {
+        ProjectAmounts a = new ProjectAmounts();
+        if (projectIds == null || projectIds.isEmpty()) {
+            return a;
+        }
+        for (Receipt r : receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
+                .select(Receipt::getProjectId, Receipt::getReceiptAmount, Receipt::getDocDirection)
+                .in(Receipt::getProjectId, projectIds)
+                .eq(Receipt::getApprovalStatus, "RECEIVED"))) {
+            // 红冲单（RED）审批通过后状态同 RECEIVED，金额取负参与聚合（2026-10-25 红冲入口）
+            BigDecimal amt = "RED".equals(r.getDocDirection())
+                    ? nz(r.getReceiptAmount()).negate() : nz(r.getReceiptAmount());
+            a.received.merge(r.getProjectId(), amt, BigDecimal::add);
+        }
+        for (Invoice iv : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
+                .select(Invoice::getProjectId, Invoice::getInvoiceAmount, Invoice::getDocDirection)
+                .in(Invoice::getProjectId, projectIds)
+                .eq(Invoice::getInvoiceStatus, "ISSUED"))) {
+            BigDecimal amt = "RED".equals(iv.getDocDirection())
+                    ? nz(iv.getInvoiceAmount()).negate() : nz(iv.getInvoiceAmount());
+            a.invoiced.merge(iv.getProjectId(), amt, BigDecimal::add);
+        }
+        for (Receivable rv : receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                .select(Receivable::getProjectId, Receivable::getReceivableAmount)
+                .in(Receivable::getProjectId, projectIds))) {
+            a.receivable.merge(rv.getProjectId(), nz(rv.getReceivableAmount()), BigDecimal::add);
+        }
+        return a;
+    }
+
     private ProjectVO toVO(Project p, Map<String, DictData> approvalDict,
                            Map<Long, String> userNames) {
+        // 单项目场景（detail）自助聚合；列表走预聚合重载，避免逐项目 N+1
+        return toVO(p, approvalDict, userNames, amountsOf(List.of(p.getId())));
+    }
+
+    /**
+     * V65 实时聚合口径（虎哥拍板 A）：累计已收/已开票/应收按项目一页一次聚合。
+     * 列表预聚合传入，detail 单项目自助。
+     */
+    private ProjectVO toVO(Project p, Map<String, DictData> approvalDict,
+                           Map<Long, String> userNames, ProjectAmounts amounts) {
         ProjectVO vo = new ProjectVO();
         vo.setId(p.getId());
         vo.setProjectNo(p.getProjectNo());
@@ -938,21 +1024,24 @@ public class ProjectServiceImpl implements ProjectService {
                 ? userNames.get(p.getSalesManagerId()) : null);
         vo.setContractStatus(p.getContractStatus());
         vo.setContractAmount(p.getContractAmount());
-        // 项目数据六件套之一：累计发货 / 已收 / 退货金额（按项目聚合 fin_shipment，决策#7）
+        // 项目数据六件套之一：累计发货 / 退货金额（按项目聚合 fin_shipment，决策#7）；
+        // 已收口径 2026-10-25 V65 改实时聚合（见下），不再读 shipment.received_amount 死口袋
         List<Shipment> shippings = shipmentMapper.selectList(
                 new LambdaQueryWrapper<Shipment>()
                         .eq(Shipment::getProjectId, p.getId())
                         .select(Shipment::getShipmentAmount,
-                                Shipment::getReceivedAmount,
                                 Shipment::getReturnedAmount));
-        BigDecimal shipped = BigDecimal.ZERO, received = BigDecimal.ZERO, returned = BigDecimal.ZERO;
+        BigDecimal shipped = BigDecimal.ZERO, returned = BigDecimal.ZERO;
         for (Shipment s : shippings) {
             if (s.getShipmentAmount() != null) shipped = shipped.add(s.getShipmentAmount());
-            if (s.getReceivedAmount() != null) received = received.add(s.getReceivedAmount());
             if (s.getReturnedAmount() != null) returned = returned.add(s.getReturnedAmount());
         }
         vo.setShippedAmount(shipped);
-        vo.setReceivedAmount(received);
+        // V65：已收改回款口径（Σ RECEIVED 收款单）；receivedAmount 暂留同值兼容旧前端
+        vo.setReceivedAmount(amounts.receivedOf(p.getId()));
+        vo.setCollectedAmount(amounts.receivedOf(p.getId()));
+        vo.setInvoicedAmount(amounts.invoicedOf(p.getId()));
+        vo.setReceivableAmount(amounts.receivableOf(p.getId()));
         vo.setReturnedAmount(returned);
         vo.setContractDesc(p.getContractDesc());
         vo.setContractSignedAt(p.getContractSignedAt());

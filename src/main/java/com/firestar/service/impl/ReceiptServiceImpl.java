@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.annotation.Auditable;
 import com.firestar.common.BatchLoader;
 import com.firestar.common.DataScopeHelper;
+import com.firestar.dto.AllocationItem;
+import com.firestar.dto.AllocationVO;
 import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ReceiptVO;
@@ -15,18 +17,22 @@ import com.firestar.entity.DictData;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
+import com.firestar.entity.Receivable;
 import com.firestar.entity.Role;
 import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.entity.ProcessDef;
+import com.firestar.entity.WriteOff;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
+import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.mapper.UserRoleMapper;
+import com.firestar.mapper.WriteOffMapper;
 import com.firestar.service.NotificationService;
 import com.firestar.service.ReceiptService;
 import com.firestar.workflow.WorkflowEngineService;
@@ -39,8 +45,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -93,12 +101,15 @@ public class ReceiptServiceImpl implements ReceiptService {
     private final UserMapper userMapper;
     private final RoleMapper roleMapper;
     private final UserRoleMapper userRoleMapper;
+    private final WriteOffMapper writeOffMapper;
+    private final ReceivableMapper receivableMapper;
 
     @Autowired
     public ReceiptServiceImpl(ReceiptMapper receiptMapper, FileStorageMapper fileStorageMapper,
                               ProjectMapper projectMapper,                               DictDataMapper dictDataMapper, ProcessDefMapper processDefMapper,
                               WorkflowEngineService engine, NotificationService notificationService,
-                              UserMapper userMapper, RoleMapper roleMapper, UserRoleMapper userRoleMapper) {
+                              UserMapper userMapper, RoleMapper roleMapper, UserRoleMapper userRoleMapper,
+                              WriteOffMapper writeOffMapper, ReceivableMapper receivableMapper) {
         this.receiptMapper = receiptMapper;
         this.fileStorageMapper = fileStorageMapper;
         this.projectMapper = projectMapper;
@@ -109,6 +120,8 @@ public class ReceiptServiceImpl implements ReceiptService {
         this.userMapper = userMapper;
         this.roleMapper = roleMapper;
         this.userRoleMapper = userRoleMapper;
+        this.writeOffMapper = writeOffMapper;
+        this.receivableMapper = receivableMapper;
     }
 
     // ===================== 创建（草稿，不拉审批） =====================
@@ -137,8 +150,13 @@ public class ReceiptServiceImpl implements ReceiptService {
         receipt.setReceiptType(req.getReceiptType());
         receipt.setReceiptDate(req.getReceiptDate());
         // 注意：bank_receipt_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
-        // docDirection 默认 BLUE（蓝字）
-        receipt.setDocDirection("BLUE");
+        // docDirection：默认 BLUE（蓝字）；RED（红字）= 红冲单，须挂已审批通过的原单
+        // （2026-10-25 红冲入口：正数金额+方向标记，汇总/核销时按方向代数运算）
+        String direction = "RED".equals(req.getDocDirection()) ? "RED" : "BLUE";
+        receipt.setDocDirection(direction);
+        if ("RED".equals(direction)) {
+            receipt.setOriginalReceiptId(validateRedFlush(req, project).getId());
+        }
         // 创建即草稿，待提交再拉审批
         receipt.setApprovalStatus("PENDING_APPROVAL");
         receipt.setReceiptNo(generateReceiptNo());
@@ -147,6 +165,8 @@ public class ReceiptServiceImpl implements ReceiptService {
         receiptMapper.insert(receipt);
         // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
         bindAttachments(receipt.getId(), req.getAttachmentFileIds());
+        // 核销分配明细落库（V65 双向拆分）：计划态不滚数字，completeTask 审批通过才生效
+        saveAllocations(receipt.getId(), req.getAllocations(), req.getReceiptAmount(), project.getId());
 
         log.info("[receipt] 创建收款单草稿 id={} no={} projectId={} amount={}",
                 receipt.getId(), receipt.getReceiptNo(), project.getId(), req.getReceiptAmount());
@@ -164,9 +184,10 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (r == null) {
             throw new IllegalArgumentException("收款单不存在：" + id);
         }
-        // 仅草稿态可提交
-        if (!"PENDING_APPROVAL".equals(r.getApprovalStatus())) {
-            throw new IllegalArgumentException("仅草稿态可提交审批，当前：" + r.getApprovalStatus());
+        // 草稿态 + 已驳回态可提交（2026-10-25 抄用友作业：被驳回单据回到制单人，
+        // 状态等同「编写中」，可修改后再次提交；驳回非终态，撤回才是终态）
+        if (!"PENDING_APPROVAL".equals(r.getApprovalStatus()) && !"REJECTED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可提交审批，当前：" + r.getApprovalStatus());
         }
         // 流程定义必须存在且启用
         ProcessDef def = processDefMapperSafe();
@@ -203,9 +224,9 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (!isAdmin && !Objects.equals(r.getCreatedBy(), operatorId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收款单不存在或无权操作：" + id);
         }
-        // 仅草稿态可编辑；提交后进入审批链，不可改金额
-        if (!"PENDING_APPROVAL".equals(r.getApprovalStatus())) {
-            throw new IllegalArgumentException("仅草稿态可编辑，当前：" + r.getApprovalStatus());
+        // 草稿态 + 已驳回态可编辑（用友范式：驳回=回到编写中，可改后重提；CASHIER_APPROVING 在审批链中不可改）
+        if (!"PENDING_APPROVAL".equals(r.getApprovalStatus()) && !"REJECTED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可编辑，当前：" + r.getApprovalStatus());
         }
         if (req.getProjectId() == null) {
             throw new IllegalArgumentException("项目不能为空");
@@ -229,7 +250,12 @@ public class ReceiptServiceImpl implements ReceiptService {
         receiptMapper.updateById(r);
         // 附件以本次提交的全量列表为准：新上传的挂上，前端删掉的会被解绑（bizId 置 NULL）
         rebindAttachments(id, req.getAttachmentFileIds());
-        log.info("[receipt] 编辑收款单 id={} amount={} user={}", id, req.getReceiptAmount(), currentUsername());
+        // 分配明细同口径全量替换：计划态未生效，硬删重插无痕（V65）
+        writeOffMapper.delete(new LambdaQueryWrapper<WriteOff>().eq(WriteOff::getReceiptId, id));
+        saveAllocations(id, req.getAllocations(), req.getReceiptAmount(), r.getProjectId());
+        log.info("[receipt] 编辑收款单 id={} amount={} allocations={} user={}",
+                id, req.getReceiptAmount(), req.getAllocations() == null ? 0 : req.getAllocations().size(),
+                currentUsername());
     }
 
     // ===================== 撤回（仅本人+admin） =====================
@@ -255,6 +281,9 @@ public class ReceiptServiceImpl implements ReceiptService {
         r.setApprovalStatus("CANCELLED");
         r.setUpdatedBy(currentUserId());
         receiptMapper.updateById(r);
+        // 分配明细硬删（V65）：withdraw 只可能发生在审批中（引擎挡已结束流程），
+        // 此时 completeTask 尚未跑过、应收单/项目数字未滚 → 删计划行即守恒，无需反核销
+        writeOffMapper.delete(new LambdaQueryWrapper<WriteOff>().eq(WriteOff::getReceiptId, id));
         log.info("[receipt] 申请人撤回 id={} user={} 已审批人={}", id, currentUsername(), approvedUserIds);
         notifyWithdrawn(r, approvedUserIds);
     }
@@ -282,7 +311,9 @@ public class ReceiptServiceImpl implements ReceiptService {
                 r.setApprovalStatus("RECEIVED");
                 receiptMapper.updateById(r);
                 // 累加 fin_project.collected_amount（金额纪律：null 当 0，add）
-                accumulateProjectCollected(r.getProjectId(), r.getReceiptAmount());
+                accumulateProjectCollected(r.getProjectId(), r.getReceiptAmount(), r.getDocDirection());
+                // 核销生效（V65）：按分配明细滚各应收单已回款 + 本单已核销列
+                applyWriteOffs(r);
                 log.info("[receipt] 审批通过回写 id={} amount={}", r.getId(), r.getReceiptAmount());
                 notifyResult(r, "RECEIPT_AUDIT", "已通过", null);
             } else {
@@ -375,6 +406,15 @@ public class ReceiptServiceImpl implements ReceiptService {
         ReceiptVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects);
         // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
         vo.setAttachmentFileIds(loadAttachmentIds(id));
+        // 核销分配明细仅详情回填（同附件口径，V65）
+        vo.setAllocations(allocationVOs(id));
+        // 红冲原单号仅详情回填（N+1 防护同附件口径）
+        if (r.getOriginalReceiptId() != null) {
+            Receipt original = receiptMapper.selectById(r.getOriginalReceiptId());
+            if (original != null) {
+                vo.setOriginalReceiptNo(original.getReceiptNo());
+            }
+        }
         return vo;
     }
 
@@ -386,8 +426,13 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     // ===================== 私有 =====================
 
-    /** 累加项目已收款（fin_project.collected_amount）；金额纪律：null 当 0，add */
-    private void accumulateProjectCollected(Long projectId, BigDecimal amount) {
+    /**
+     * 累加/扣减项目已收款（fin_project.collected_amount）；金额纪律：null 当 0。
+     *
+     * <p>docDirection=RED（红冲单）时做减法，保持冗余字段守恒可对账
+     * （2026-10-25 红冲入口；实时聚合口径在 ProjectServiceImpl，此处仅维护冗余列）。</p>
+     */
+    private void accumulateProjectCollected(Long projectId, BigDecimal amount, String docDirection) {
         if (projectId == null || amount == null) {
             return;
         }
@@ -395,9 +440,188 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (p == null) {
             return;
         }
+        boolean red = "RED".equals(docDirection);
         BigDecimal base = p.getCollectedAmount() == null ? BigDecimal.ZERO : p.getCollectedAmount();
-        p.setCollectedAmount(base.add(amount));
+        p.setCollectedAmount(red ? base.subtract(amount) : base.add(amount));
         projectMapper.updateById(p);
+    }
+
+    /**
+     * 红冲单校验（2026-10-25 红冲入口）：原单必须存在、已审批通过（RECEIVED）、
+     * 同项目、本单金额 ≤ 原单金额（支持部分红冲，税务同口径）。
+     */
+    private Receipt validateRedFlush(ReceiptRequest req, Project project) {
+        if (req.getOriginalReceiptId() == null) {
+            throw new IllegalArgumentException("红冲单必须指定原收款单（originalReceiptId）");
+        }
+        Receipt original = receiptMapper.selectById(req.getOriginalReceiptId());
+        if (original == null) {
+            throw new IllegalArgumentException("原收款单不存在：" + req.getOriginalReceiptId());
+        }
+        if (!"RECEIVED".equals(original.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅已收款（审批通过）的单据可红冲，原单当前状态：" + original.getApprovalStatus());
+        }
+        if (!Objects.equals(original.getProjectId(), project.getId())) {
+            throw new IllegalArgumentException("红冲单必须与原单同项目，请新建");
+        }
+        if (req.getReceiptAmount().compareTo(original.getReceiptAmount()) > 0) {
+            throw new IllegalArgumentException("红冲金额不能超过原单金额（" + original.getReceiptAmount().toPlainString() + "），支持部分红冲");
+        }
+        return original;
+    }
+
+    // ===================== 核销分配（V65 双向拆分，虎哥拍板 B） =====================
+
+    /**
+     * 校验并落库核销分配明细（计划态，不滚数字）。
+     *
+     * <p>规则：① Σ amount = 主单总额；② 每行 ≤ 该应收单未回款余额扣减在途分配
+     * （审批中其他单占用；已通过单的额度已滚进 unreceived_amount，不重复扣）；
+     * ③ 同一应收单合并一行；④ 分配必须落在本项目下（防跨项目错配）。
+     * 空列表 = 预收未指定，合法。</p>
+     */
+    private void saveAllocations(Long receiptId, List<AllocationItem> items, BigDecimal total, Long projectId) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        Set<Long> ids = new LinkedHashSet<>();
+        for (AllocationItem it : items) {
+            if (it.getReceivableId() == null) {
+                throw new IllegalArgumentException("分配明细缺少应收单");
+            }
+            if (!ids.add(it.getReceivableId())) {
+                throw new IllegalArgumentException("同一应收单重复分配，请合并为一行：" + it.getReceivableId());
+            }
+        }
+        List<Receivable> receivables = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                .in(Receivable::getId, ids));
+        if (receivables.size() != ids.size()) {
+            throw new IllegalArgumentException("分配明细中包含不存在的应收单");
+        }
+        Map<Long, Receivable> byId = receivables.stream()
+                .collect(Collectors.toMap(Receivable::getId, rv -> rv));
+        BigDecimal sum = BigDecimal.ZERO;
+        for (AllocationItem it : items) {
+            Receivable rv = byId.get(it.getReceivableId());
+            if (!Objects.equals(rv.getProjectId(), projectId)) {
+                throw new IllegalArgumentException("应收单不属于本项目：" + rv.getReceivableNo());
+            }
+            if (it.getAmount() == null || it.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("分配金额必须为正：" + rv.getReceivableNo());
+            }
+            BigDecimal available = (rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount())
+                    .subtract(sumInFlightAllocations(rv.getId(), receiptId));
+            if (it.getAmount().compareTo(available) > 0) {
+                throw new IllegalArgumentException("超出应收单未回款余额：" + rv.getReceivableNo()
+                        + "，可用 " + available.toPlainString());
+            }
+            sum = sum.add(it.getAmount());
+        }
+        if (sum.compareTo(total) != 0) {
+            throw new IllegalArgumentException("分配总额必须等于收款金额：分配 " + sum.toPlainString()
+                    + " ≠ 收款 " + total.toPlainString());
+        }
+        for (AllocationItem it : items) {
+            WriteOff w = new WriteOff();
+            w.setWriteOffNo(generateWriteOffNo());
+            w.setReceiptId(receiptId);
+            w.setReceivableId(it.getReceivableId());
+            w.setAmount(it.getAmount());
+            w.setStatus("NORMAL");
+            w.setWriteOffDate(LocalDate.now());
+            w.setWriteOffMethod("MANUAL");
+            writeOffMapper.insert(w);
+        }
+        log.info("[receipt] 核销分配落库 receiptId={} rows={} total={}", receiptId, items.size(), total);
+    }
+
+    /**
+     * 指定应收单的「在途分配」合计：其他收款单已提交审批（CASHIER_APPROVING）占用但尚未
+     * 生效（completeTask 未跑）的额度。已通过单的额度已滚进 unreceived_amount，不重复扣。
+     */
+    private BigDecimal sumInFlightAllocations(Long receivableId, Long excludeReceiptId) {
+        List<WriteOff> rows = writeOffMapper.selectList(new LambdaQueryWrapper<WriteOff>()
+                .eq(WriteOff::getReceivableId, receivableId)
+                .eq(WriteOff::getStatus, "NORMAL"));
+        Set<Long> otherReceiptIds = rows.stream()
+                .map(WriteOff::getReceiptId)
+                .filter(rid -> !Objects.equals(rid, excludeReceiptId))
+                .collect(Collectors.toSet());
+        if (otherReceiptIds.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        List<Receipt> inFlight = receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
+                .in(Receipt::getId, otherReceiptIds)
+                .eq(Receipt::getApprovalStatus, "CASHIER_APPROVING"));
+        Set<Long> inFlightIds = inFlight.stream().map(Receipt::getId).collect(Collectors.toSet());
+        return rows.stream()
+                .filter(w -> inFlightIds.contains(w.getReceiptId()))
+                .map(WriteOff::getAmount)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * 审批通过：核销生效。单事务内滚 ① 各应收单 received/unreceived；
+     * ② 本单 written_off/unwritten_off（V1 列，V65 首次写）。
+     */
+    private void applyWriteOffs(Receipt r) {
+        List<WriteOff> rows = writeOffMapper.selectList(new LambdaQueryWrapper<WriteOff>()
+                .eq(WriteOff::getReceiptId, r.getId())
+                .eq(WriteOff::getStatus, "NORMAL"));
+        if (rows.isEmpty()) {
+            return;
+        }
+        BigDecimal written = BigDecimal.ZERO;
+        // RED（红冲单）反向：扣回应收单已回款、加回未回款（2026-10-25 红冲入口）
+        boolean red = "RED".equals(r.getDocDirection());
+        for (WriteOff w : rows) {
+            Receivable rv = receivableMapper.selectById(w.getReceivableId());
+            if (rv == null) {
+                continue;
+            }
+            BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
+            BigDecimal unreceived = rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount();
+            rv.setReceivedAmount(red ? received.subtract(w.getAmount()) : received.add(w.getAmount()));
+            rv.setUnreceivedAmount(red ? unreceived.add(w.getAmount()) : unreceived.subtract(w.getAmount()));
+            receivableMapper.updateById(rv);
+            written = written.add(w.getAmount());
+        }
+        r.setWrittenOffAmount(written);
+        r.setUnwrittenOffAmount(r.getReceiptAmount().subtract(written));
+        receiptMapper.updateById(r);
+        log.info("[receipt] 核销生效 receiptId={} rows={} writtenOff={}", r.getId(), rows.size(), written);
+    }
+
+    /** 分配明细 → VO（detail 回填，含应收单号） */
+    private List<AllocationVO> allocationVOs(Long receiptId) {
+        List<WriteOff> rows = writeOffMapper.selectList(new LambdaQueryWrapper<WriteOff>()
+                .eq(WriteOff::getReceiptId, receiptId)
+                .eq(WriteOff::getStatus, "NORMAL"));
+        if (rows.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<Long, String> nos = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                        .in(Receivable::getId,
+                                rows.stream().map(WriteOff::getReceivableId).collect(Collectors.toSet())))
+                .stream().collect(Collectors.toMap(Receivable::getId, Receivable::getReceivableNo));
+        List<AllocationVO> vos = new ArrayList<>(rows.size());
+        for (WriteOff w : rows) {
+            AllocationVO vo = new AllocationVO();
+            vo.setReceivableId(w.getReceivableId());
+            vo.setReceivableNo(nos.get(w.getReceivableId()));
+            vo.setAmount(w.getAmount());
+            vos.add(vo);
+        }
+        return vos;
+    }
+
+    /** 核销单号：WO-yyyyMMdd-NNN（同 generateReceiptNo 的 count+1 范式） */
+    private String generateWriteOffNo() {
+        String date = LocalDateTime.now().format(RECEIPT_NO_DATE_FMT);
+        Long count = writeOffMapper.selectCount(new LambdaQueryWrapper<WriteOff>()
+                .likeRight(WriteOff::getWriteOffNo, "WO-" + date + "-"));
+        return String.format("WO-%s-%03d", date, (count == null ? 0 : count) + 1);
     }
 
     /** 查 ENABLED 的收款审批流程定义（与 ProjectServiceImpl.submit 同范式） */

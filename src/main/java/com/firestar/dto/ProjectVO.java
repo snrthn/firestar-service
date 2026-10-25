@@ -35,8 +35,30 @@ public class ProjectVO {
     /** 累计发货金额（Σ fin_shipment.shipment_amount，按项目聚合；发货流程 V50 起有数，需求「项目六件套」之一） */
     private BigDecimal shippedAmount;
 
-    /** 累计已收货金额（Σ fin_shipment.received_amount） */
+    /**
+     * 累计已收货金额（Σ fin_shipment.received_amount）。
+     *
+     * <p>⚠️ 2026-10-25 V65 起该口径废弃：fin_shipment.received_amount 全库无写入方
+     * （唯一写点是发货单创建时置 0），恒为 0。页面「累计已收」请改读
+     * {@link #collectedAmount}（Σ RECEIVED 收款单，实时聚合）。本字段暂时保留同值
+     * 兼容旧前端，后续版本移除。</p>
+     */
     private BigDecimal receivedAmount;
+
+    /**
+     * 累计已收金额（Σ 审批通过的收款单 receipt_amount，按项目实时聚合，V65）。
+     *
+     * <p>虎哥 2026-10-25 拍板 A「按回款口径走」：不再读 shipment.received_amount
+     * （死口袋），也不再依赖冗余字段 fin_project.collected_amount（撤回不扣会虚高），
+     * 详情/列表一页一次 GROUP 语义聚合，天然只算 RECEIVED 态。</p>
+     */
+    private BigDecimal collectedAmount;
+
+    /** 累计开票金额（Σ 审批通过的发票 invoice_amount，按项目实时聚合，V65） */
+    private BigDecimal invoicedAmount;
+
+    /** 应收金额合计（Σ 有效应收单 receivable_amount，按项目聚合，V65） */
+    private BigDecimal receivableAmount;
 
     /** 累计退货金额（Σ fin_shipment.returned_amount） */
     private BigDecimal returnedAmount;

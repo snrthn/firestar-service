@@ -31,6 +31,14 @@ public class ReceiptRequest {
     /** 收款日期 */
     private LocalDate receiptDate;
 
+    /**
+     * 单据方向（2026-10-25 红冲入口，虎哥拍板「正数+RED 方向」）。
+     *
+     * <p>BLUE=蓝字（默认，普通收款单）；RED=红字（红冲单，必须配 originalReceiptId，
+     * 金额仍存正数，审批通过时对应收单/项目汇总做减法）。</p>
+     */
+    private String docDirection;
+
     /** 银行回单路径（只存路径，不存文件） */
     /**
      * 历史残留列（2026-10-25 起不再使用）：原「银行回单路径」，真上传改造后弃用。
@@ -50,4 +58,22 @@ public class ReceiptRequest {
 
     /** 备注（可选） */
     private String remark;
+
+    /**
+     * 核销分配明细（2026-10-25 V65 双向拆分，虎哥拍板 B）。
+     *
+     * <p>空列表 = 预收/未指定（允许先收钱后核销，此时仅滚项目已收，不动应收单回款口径）；
+     * 非空时强制 Σ amount = receiptAmount 且每行 ≤ 该应收单 unreceivedAmount。
+     * 提交审批时随主单落库 fin_write_off；审批通过滚应收单数字；撤回反核销回滚。</p>
+     */
+    private List<AllocationItem> allocations;
+
+    /**
+     * 红冲原单 ID（2026-10-25 红冲入口，虎哥拍板「正数+RED 方向、走完整审批」）。
+     *
+     * <p>docDirection=RED（红字）时必填：本单为原单的反向冲销单，金额仍存正数，
+     * 审批通过时对应收单/项目汇总做减法。约束：原单必须存在且已审批通过（RECEIVED）、
+     * 同项目、金额 ≤ 原单金额（支持部分红冲）。BLUE 单传了也忽略。</p>
+     */
+    private Long originalReceiptId;
 }
