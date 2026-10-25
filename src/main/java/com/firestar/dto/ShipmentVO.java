@@ -39,7 +39,10 @@ public class ShipmentVO {
     /** 发货金额（Σ 行金额） */
     private BigDecimal shipmentAmount;
 
-    /** 已收金额（客户已收货累计） */
+    /**
+     * 已收金额（V65 虎哥拍板「按回款口径走」：实时读关联应收单的 received_amount，
+     * 即该批次钱的实际回款；fin_shipment.received_amount 废弃列恒 0，不再读）
+     */
     private BigDecimal receivedAmount;
 
     /** 退货金额 */

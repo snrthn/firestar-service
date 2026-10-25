@@ -630,7 +630,6 @@ public class ShipmentServiceImpl implements ShipmentService {
         vo.setBatchNo(s.getBatchNo());
         vo.setShipmentDate(s.getShipmentDate());
         vo.setShipmentAmount(s.getShipmentAmount());
-        vo.setReceivedAmount(s.getReceivedAmount());
         vo.setReturnedAmount(s.getReturnedAmount());
         vo.setShipmentStatus(s.getShipmentStatus());
         DictData st = dicts.shipmentStatus.get(s.getShipmentStatus());
@@ -686,6 +685,9 @@ public class ShipmentServiceImpl implements ShipmentService {
             Receivable r = receivableMapper.selectById(s.getReceivableId());
             if (r != null) {
                 vo.setReceivable(toReceivableVO(r, dicts));
+                // V65：已收改回款口径——fin_shipment.received_amount 是废弃列（创建置 0 后无写方，
+                // 项目级已于 ProjectServiceImpl 切实时聚合，此处补上：发货详情实时读关联应收单已回款
+                vo.setReceivedAmount(r.getReceivedAmount() != null ? r.getReceivedAmount() : BigDecimal.ZERO);
             }
         }
         // 当前登录用户在流程实例上的待办任务（审批中才有；审批通过/驳回后实例结束 → 无 → 详情页据此切换「通过/驳回」与「标记发货」）
