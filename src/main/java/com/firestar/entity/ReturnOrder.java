@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
  */
 @Getter
 @Setter
-@TableName(value = "fin_return_order")
+@TableName(value = "fin_return_order", autoResultMap = true)
 public class ReturnOrder extends LogicDeleteEntity {
 
     private static final long serialVersionUID = 1L;

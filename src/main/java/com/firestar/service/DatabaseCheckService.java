@@ -43,7 +43,7 @@ public class DatabaseCheckService {
      * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 38;
+    private static final int EXPECTED_TABLE_COUNT = 39;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");

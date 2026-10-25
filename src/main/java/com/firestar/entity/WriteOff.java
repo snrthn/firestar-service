@@ -1,5 +1,6 @@
 package com.firestar.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
@@ -12,7 +13,9 @@ import java.time.LocalDate;
  */
 @Getter
 @Setter
-@TableName(value = "fin_write_off")
+// autoResultMap：ext（JSON）列的 JacksonTypeHandler 读写依赖它（BaseEntity 注释口径，
+// 2026-10-25 反核销原因落 ext.reverseReason 必须开启）
+@TableName(value = "fin_write_off", autoResultMap = true)
 public class WriteOff extends LogicDeleteEntity {
 
     private static final long serialVersionUID = 1L;

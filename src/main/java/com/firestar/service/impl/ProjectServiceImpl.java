@@ -30,10 +30,12 @@ import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
+import com.firestar.mapper.ReturnOrderMapper;
 import com.firestar.mapper.ShipmentMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.entity.Role;
 import com.firestar.entity.Shipment;
+import com.firestar.entity.ReturnOrder;
 import com.firestar.entity.UserRole;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.UserRoleMapper;
@@ -107,6 +109,8 @@ public class ProjectServiceImpl implements ProjectService {
     private final InvoiceMapper invoiceMapper;
     /** 项目金额汇总预聚合（V65）：应收单口径 */
     private final ReceivableMapper receivableMapper;
+    /** 退货审批的业务标题 enrich（V67）：bizKey 是退货单 ID */
+    private final ReturnOrderMapper returnOrderMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
@@ -115,7 +119,8 @@ public class ProjectServiceImpl implements ProjectService {
                               RoleMapper roleMapper, UserRoleMapper userRoleMapper,
                               ShipmentMapper shipmentMapper, ItemMapper itemMapper,
                               ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper,
-                              ReceivableMapper receivableMapper) {
+                              ReceivableMapper receivableMapper,
+                              ReturnOrderMapper returnOrderMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -129,6 +134,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.receiptMapper = receiptMapper;
         this.invoiceMapper = invoiceMapper;
         this.receivableMapper = receivableMapper;
+        this.returnOrderMapper = returnOrderMapper;
     }
 
     @Override
@@ -665,6 +671,21 @@ public class ProjectServiceImpl implements ProjectService {
                 titleMap.put(String.valueOf(iv.getId()), pn == null ? title : title + " · " + pn);
             }
         }
+        // 退货审批（V67）：bizKey = 退货单 ID，标题「退货单号 · 项目名」
+        Set<String> returnKeys = keysOf(tasks, ReturnServiceImpl.RETURN_PROCESS_CODE);
+        if (!returnKeys.isEmpty()) {
+            List<Long> ids = returnKeys.stream().map(Long::parseLong).collect(Collectors.toList());
+            List<ReturnOrder> returns = returnOrderMapper.selectList(new LambdaQueryWrapper<ReturnOrder>()
+                    .in(ReturnOrder::getId, ids)
+                    .select(ReturnOrder::getId, ReturnOrder::getReturnNo, ReturnOrder::getProjectId));
+            Map<Long, String> projectNames = projectNamesOf(
+                    returns.stream().map(ReturnOrder::getProjectId).filter(Objects::nonNull).collect(Collectors.toSet()));
+            for (ReturnOrder ro : returns) {
+                String title = ro.getReturnNo() == null ? "退货单" : ro.getReturnNo();
+                String pn = projectNames.get(ro.getProjectId());
+                titleMap.put(String.valueOf(ro.getId()), pn == null ? title : title + " · " + pn);
+            }
+        }
         return titleMap;
     }
 
@@ -802,6 +823,20 @@ public class ProjectServiceImpl implements ProjectService {
             }
             Project p = s.getProjectId() == null ? null : mapper.selectById(s.getProjectId());
             String title = s.getBatchNo() == null ? "发货申请" : s.getBatchNo();
+            return p == null ? title : title + " · " + p.getProjectName();
+        }
+        if (ReturnServiceImpl.RETURN_PROCESS_CODE.equals(processCode)) {
+            ReturnOrder ro;
+            try {
+                ro = returnOrderMapper.selectById(Long.parseLong(bizKey));
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            if (ro == null) {
+                return null;
+            }
+            Project p = ro.getProjectId() == null ? null : mapper.selectById(ro.getProjectId());
+            String title = ro.getReturnNo() == null ? "退货单" : ro.getReturnNo();
             return p == null ? title : title + " · " + p.getProjectName();
         }
         Project p = safeSelectProject(bizKey);
@@ -995,9 +1030,14 @@ public class ProjectServiceImpl implements ProjectService {
             a.invoiced.merge(iv.getProjectId(), amt, BigDecimal::add);
         }
         for (Receivable rv : receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
-                .select(Receivable::getProjectId, Receivable::getReceivableAmount)
+                .select(Receivable::getProjectId, Receivable::getReceivableAmount,
+                        Receivable::getDocDirection)
                 .in(Receivable::getProjectId, projectIds))) {
-            a.receivable.merge(rv.getProjectId(), nz(rv.getReceivableAmount()), BigDecimal::add);
+            // 红字应收单（V67 退货冲减生成）金额取负参与聚合，与 receipt/invoice 的 RED 口径一致；
+            // 金额恒正存储 + 方向标记（V65 约定），聚合时按方向代数求和
+            BigDecimal amt = "RED".equals(rv.getDocDirection())
+                    ? nz(rv.getReceivableAmount()).negate() : nz(rv.getReceivableAmount());
+            a.receivable.merge(rv.getProjectId(), amt, BigDecimal::add);
         }
         return a;
     }

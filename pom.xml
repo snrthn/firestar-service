@@ -196,6 +196,14 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!-- 锁 maven-jar-plugin：3.4.x 要求 Maven 3.6.3+，开发机 Maven 3.5.4 直接
+                 PluginIncompatibleException（2026-10-25 package 阶段实锤，与 compiler-plugin
+                 3.13.0 同坑）。3.3.0 在 Maven 3.5.4 / 3.6.3+（CI）均可用，向后向前兼容。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+            </plugin>
         </plugins>
     </build>
 </project>

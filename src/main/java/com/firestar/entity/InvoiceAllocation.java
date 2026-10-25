@@ -18,7 +18,8 @@ import java.math.BigDecimal;
  */
 @Getter
 @Setter
-@TableName(value = "fin_invoice_allocation")
+// autoResultMap：ext（JSON）列的 JacksonTypeHandler 读写依赖它（2026-10-25 反核销原因落 ext）
+@TableName(value = "fin_invoice_allocation", autoResultMap = true)
 public class InvoiceAllocation extends LogicDeleteEntity {
 
     private static final long serialVersionUID = 1L;

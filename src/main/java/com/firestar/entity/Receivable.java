@@ -62,6 +62,6 @@ public class Receivable extends LogicDeleteEntity {
     /** 状态（字典 receivable_status） */
     private String status;
 
-    /** 来源类型（字典 receivable_source） */
+    /** 来源类型（字典 receivable_source：FROM_SHIPMENT/FROM_RETURN） */
     private String sourceType;
 }
