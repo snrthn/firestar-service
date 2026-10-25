@@ -180,11 +180,18 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <!-- 锁 3.10.1：不锁时本地仓库元数据解析到 3.13.0，其要求 Maven 3.6.3+，
+                     而开发机 Maven 3.5.4 直接报 PluginIncompatibleException（2026-10-25 实锤）。
+                     3.10.1 在 Maven 3.5.4 / 3.6.3+（CI）均可用，向后向前兼容。
+                     lombok 必须显式版本：annotationProcessorPath 是 plugin 依赖，
+                     不继承项目 dependencyManagement 的版本，缺版本报 lombok:null:jar。 -->
+                <version>3.10.1</version>
                 <configuration>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
+                            <version>1.18.34</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

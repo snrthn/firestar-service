@@ -247,7 +247,7 @@ public class ProjectServiceImpl implements ProjectService {
         }
         // 可见性三选一（2026-10-24 安全债修复）：申请人本人 / ROLE_ADMIN / 审批任务处理人（候选人）
         if (!isAdmin && !Objects.equals(p.getApplicantUsername(), username)
-                && !engine.isCandidate(String.valueOf(id), username)) {
+                && !engine.isCandidate(INITIATE_PROCESS_CODE, String.valueOf(id), username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "项目不存在或无权访问：" + id);
         }
         ProjectVO vo = toVO(p, approvalStatusDict(),
@@ -379,7 +379,7 @@ public class ProjectServiceImpl implements ProjectService {
         }
         // 引擎三道闸：发起人身份（admin 不代撤）+ 流程仍在运行；返回已审批人 userId
         List<Long> approvedUserIds = engine.withdraw(exist.getProcessInstanceId(), currentUsername(),
-                "申请人撤回立项审批，项目 id=" + exist.getId());
+                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "立项审批，项目 id=" + exist.getId());
         // CANCELLED = 终态只读（方案 B）：要再来就新建，不回草稿——已有人审过的内容再改会污染审计链
         exist.setApprovalStatus("CANCELLED");
         exist.setUpdatedBy(currentUserId());
@@ -421,7 +421,9 @@ public class ProjectServiceImpl implements ProjectService {
         if (exist.getProcessInstanceId() == null || exist.getProcessInstanceId().isBlank()) {
             return Collections.emptyList();
         }
-        return appendEndNode(engine.listTimelineByBusinessKey(String.valueOf(exist.getId())), exist.getApprovalStatus());
+        // processKey 必传：businessKey 跨表相撞（项目 #2 = 发货单 #2），不带类型过滤会串台
+        return appendEndNode(engine.listTimelineByBusinessKey(
+                INITIATE_PROCESS_CODE, String.valueOf(exist.getId())), exist.getApprovalStatus());
     }
 
     /**

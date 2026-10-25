@@ -58,6 +58,14 @@ import java.util.stream.Collectors;
  * 与 {@link TaskService}（待办查询 / 完成任务）。</p>
  *
  * <p>BPMN 生成严禁手拼 XML 字符串 —— 一律走 {@link BpmnModel} API（P3 方案纪律，可避免命名空间/转义类低级 bug）。</p>
+ *
+ * <p><b>businessKey 唯一性不变量（2026-10-25 虎哥线上问题后立规）</b>：businessKey 只是字符串，
+ * 项目/发货/收款/发票/应收五张业务表各自自增，ID 必然相撞（发票 #2 = 发货单 #2 = 收款单 #2）。
+ * 因此本引擎内<b>所有按 businessKey 的跨实例查询（时间线 union、候选人判定）必须同时带
+ * processDefinitionKey 过滤</b>——businessKey 的唯一性仅在「同一流程类型内」成立。
+ * 新增查询面时若无类型过滤，等于复刻 2026-10-25 的串台事故（发票时间线混入收款单撤回记录）。
+ * 曾评估「businessKey 加前缀（invoice:2）」方案：需回填 ACT_RU_EXECUTION / ACT_HI_PROCINST
+ * 双表、改造全部 Long.parseLong(bizKey) 消费方，收益与类型过滤相同而风险高数倍，已否决。</p>
  */
 @Slf4j
 @Service
@@ -362,6 +370,26 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (processInstanceId == null || processInstanceId.isBlank()) {
             return;
         }
+        // 删实例前先把活跃任务「认领 + 留评论」落上实际操作人（2026-10-25 虎哥线上问题：
+        // 撤回/驳回走 terminate 终结实例时，ROLE 候选组任务从未被 claim，ACT_HI_TASKINST
+        // .ASSIGNEE_ 恒 NULL，时间线渲染成「已驳回 · 处理人 —」，看着像脏数据）。
+        // 撤回（申请人）/ 驳回（审批人）/ 重新提交（申请人）三条路径都经此收敛：
+        // 评论内容 = reason（撤回原因 / 驳回理由 / 重提说明），USER_ID_ 由
+        // setAuthenticatedUser 保证非空（时间线处理人兜底链第二级）。
+        try {
+            setAuthenticatedUser();
+            for (Task t : taskService.createTaskQuery()
+                    .processInstanceId(processInstanceId).list()) {
+                claimAsCurrentUser(t);
+                if (reason != null && !reason.isBlank()) {
+                    taskService.addComment(t.getId(), processInstanceId, reason.trim());
+                }
+            }
+        } catch (Exception e) {
+            // 留痕失败不阻断终结主流程（历史表仍会有 deleteReason，只是处理人为空）
+            log.warn("[workflow] terminate 前留痕失败（不影响终结）instanceId={} err={}",
+                    processInstanceId, e.getMessage());
+        }
         // 实例已自然结束（审批通过后走完）时 deleteProcessInstance 会抛，
         // 属预期场景（重新提交只可能发生在 REJECTED，但防御性处理不报错）
         try {
@@ -466,20 +494,25 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     @Override
-    public boolean isCandidate(String businessKey, String username) {
-        if (businessKey == null || businessKey.isBlank() || username == null || username.isBlank()) {
+    public boolean isCandidate(String processKey, String businessKey, String username) {
+        if (processKey == null || processKey.isBlank()
+                || businessKey == null || businessKey.isBlank() || username == null || username.isBlank()) {
             return false;
         }
         // 线 1+线 2：active 候选（assignee/candidateUser OR role 候选组），与 listMyTasks 同口径，
-        // 必须含 taskCandidateGroup + roleCodesOf 段，否则 ROLE 审批人（如 ROLE_SALES_MANAGER）判假阴性
+        // 必须含 taskCandidateGroup + roleCodesOf 段，否则 ROLE 审批人（如 ROLE_SALES_MANAGER）判假阴性。
+        // 2026-10-25 修（虎哥线上问题）：businessKey 跨表相撞（发票 #2 vs 收款单 #2），
+        // 三处查询全部加 processDefinitionKey 收敛到本流程类型，杜绝「出纳看到别人的发票详情」。
         for (Task t : taskService.createTaskQuery()
                 .processInstanceBusinessKey(businessKey)
+                .processDefinitionKey(processKey)
                 .taskCandidateOrAssigned(username).list()) {
             return true;
         }
         for (String roleCode : roleCodesOf(username)) {
             for (Task t : taskService.createTaskQuery()
                     .processInstanceBusinessKey(businessKey)
+                    .processDefinitionKey(processKey)
                     .taskCandidateGroup(roleCode).list()) {
                 return true;
             }
@@ -488,6 +521,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         // 任务已结束不再是 active 候选，但审批人仍应看得到自己审过的单）
         long done = historyService.createHistoricTaskInstanceQuery()
                 .processInstanceBusinessKey(businessKey)
+                .processDefinitionKey(processKey)
                 .taskAssignee(username).finished().count();
         return done > 0;
     }
@@ -505,19 +539,26 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
     }
 
     /**
-     * 按业务单据标识（businessKey，如项目 ID）聚合该单据的全部历史审批时间线。
-     * <p>重提会 terminate 旧流程实例并 start 新实例，二者 businessKey 同为项目 ID
-     * （{@code submit} 时 businessKey = String.valueOf(projectId)），故可 union 出
-     * 重提前后的完整时间线——2026-10-23 虎哥：驳回/重提后历史必须完整，不可只从最后一次实例开始。</p>
+     * 按业务单据标识（businessKey，如发票 ID）+ 流程类型聚合该单据的全部历史审批时间线。
+     * <p>重提会 terminate 旧流程实例并 start 新实例，二者 businessKey 同为单据 ID
+     * （{@code submit} 时 businessKey = String.valueOf(id)），故可 union 出重提前后的
+     * 完整时间线——2026-10-23 虎哥：驳回/重提后历史必须完整，不可只从最后一次实例开始。</p>
+     *
+     * <p>2026-10-25 修（虎哥线上问题实锤）：发票 #2 的时间线曾混入发货单 #2、收款单 #2 的
+     * 审批历史——businessKey 只是字符串，五张业务表各自自增 ID 必然相撞，只按
+     * BUSINESS_KEY_ 过滤 = 串台。现在强制带 processDefinitionKey：businessKey 的唯一性
+     * 仅在「同一流程类型内」成立，这是本引擎的不变量（见类注释）。</p>
      */
     @Override
-    public List<TimelineNodeVO> listTimelineByBusinessKey(String businessKey) {
-        if (businessKey == null || businessKey.isBlank()) {
+    public List<TimelineNodeVO> listTimelineByBusinessKey(String processKey, String businessKey) {
+        if (processKey == null || processKey.isBlank() || businessKey == null || businessKey.isBlank()) {
             return Collections.emptyList();
         }
-        // 聚合该 businessKey 下的所有流程实例（含已 terminate 的旧实例，其 ACT_HI_PROCINST 仍在）
+        // 聚合该 businessKey 下、且同流程类型的全部历史实例（含已 terminate 的旧实例，
+        // 其 ACT_HI_PROCINST 仍在）；不同流程类型的同号实例（发货 #2 / 收款 #2）在此被排除
         List<HistoricProcessInstance> procInsts = historyService.createHistoricProcessInstanceQuery()
                 .processInstanceBusinessKey(businessKey)
+                .processDefinitionKey(processKey)
                 .list();
         List<HistoricTaskInstance> allTasks = new ArrayList<>();
         for (HistoricProcessInstance pi : procInsts) {
@@ -536,8 +577,9 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     /**
      * 由历史任务列表构建时间线节点。ACT_HI_TASKINST 单源：已完成 / 已驳回删除
-     * （deleteReason 非空）/ 进行中（endTime = null）三类同表。被 skipNodeIds 条件流
-     * 绕过的节点不会创建任务实例，天然不出现在时间线里。调用方需保证入参按开始时间升序。
+     * （deleteReason 非空）/ 撤回（deleteReason 以 {@link WorkflowEngineService#WITHDRAW_REASON_PREFIX}
+     * 开头）/ 进行中（endTime = null）四类同表。被 skipNodeIds 条件流绕过的节点不会创建
+     * 任务实例，天然不出现在时间线里。调用方需保证入参按开始时间升序。
      */
     private List<TimelineNodeVO> buildTimelineFromTasks(List<HistoricTaskInstance> his) {
         List<TimelineNodeVO> result = new ArrayList<>();
@@ -547,8 +589,20 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             vo.setNodeName(h.getName());
             vo.setStartTime(toLocalDateTime(h.getStartTime()));
             vo.setEndTime(toLocalDateTime(h.getEndTime()));
-            vo.setResult(h.getEndTime() == null ? "ACTIVE"
-                    : (h.getDeleteReason() != null && !h.getDeleteReason().isEmpty() ? "REJECTED" : "DONE"));
+            // 结果四态（2026-10-25 修，虎哥线上问题：撤回被渲染成「已驳回」误导）：
+            //   ACTIVE  进行中（endTime = null）
+            //   DONE    正常完成（无 deleteReason）
+            //   REJECTED 被驳回/跳过（deleteReason 非空，非撤回前缀）
+            //   WITHDRAWN 申请人撤回（deleteReason 以 WITHDRAW_REASON_PREFIX 开头）
+            String deleteReason = h.getDeleteReason();
+            if (h.getEndTime() == null) {
+                vo.setResult("ACTIVE");
+            } else if (deleteReason != null && !deleteReason.isEmpty()) {
+                vo.setResult(deleteReason.startsWith(WorkflowEngineService.WITHDRAW_REASON_PREFIX)
+                        ? "WITHDRAWN" : "REJECTED");
+            } else {
+                vo.setResult("DONE");
+            }
             // 审批留言：ACT_HI_COMMENT 按 taskId 读回；一次审批一条，多条取最后
             // （HistoricTaskInstance.getId() 即 taskId，历史任务实例 id = 原任务 id）。
             // 先读评论再定处理人——历史节点的处理人兜底链要用到评论的 userId
@@ -609,6 +663,12 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
                 .list();
         List<ApprovalHistoryVO> result = new ArrayList<>();
         for (HistoricTaskInstance h : his) {
+            // 撤回不是审批动作（2026-10-25 修）：terminate 现在会把活跃任务 claim 给申请人，
+            // 若不排除，申请人撤回后「我已审批」会多出一条自己撤回的记录——语义错误。
+            String dr = h.getDeleteReason();
+            if (dr != null && dr.startsWith(WorkflowEngineService.WITHDRAW_REASON_PREFIX)) {
+                continue;
+            }
             ApprovalHistoryVO vo = new ApprovalHistoryVO();
             vo.setTaskId(h.getId());
             vo.setTaskName(h.getName());
@@ -622,8 +682,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             vo.setBizKey(getBusinessKey(h.getProcessInstanceId()));
             vo.setEndTime(toLocalDateTime(h.getEndTime()));
             // 结果列判据同时间线：deleteReason 非空 = 该任务被 moveActivityIdTo 删除 = 我在此节点驳回
-            vo.setResult(h.getDeleteReason() != null && !h.getDeleteReason().isEmpty()
-                    ? "REJECTED" : "DONE");
+            vo.setResult(dr != null && !dr.isEmpty() ? "REJECTED" : "DONE");
             // 审批留言 + 处理人兜底链同 listTimeline（assignee → 评论 userId）
             List<Comment> comments = taskService.getTaskComments(h.getId());
             if (comments != null && !comments.isEmpty()) {

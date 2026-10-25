@@ -20,6 +20,16 @@ import java.util.Map;
 public interface WorkflowEngineService {
 
     /**
+     * 申请人撤回原因的固定前缀（deleteReason / 评论文案均以此开头）。
+     *
+     * <p>2026-10-25 虎哥两个线上问题修复：时间线据此前缀把终止节点渲染为「已撤回」
+     * （WITHDRAWN）而非「已驳回」（REJECTED）。各业务 Service 拼撤回原因时必须
+     * 复用本常量（如 {@code WITHDRAW_REASON_PREFIX + "发票申请，发票 id=" + id}），
+     * 保证「引擎写的 reason」与「引擎读的 reason」单一出处，防止拼写漂移误判。</p>
+     */
+    String WITHDRAW_REASON_PREFIX = "申请人撤回";
+
+    /**
      * 用节点配置动态生成 BPMN 模型（线性 userTask 链）。
      * <p>Step 2 范围映射：
      * <ul>
@@ -101,8 +111,13 @@ public interface WorkflowEngineService {
     void moveTo(String processInstanceId, String fromNode, String toNode);
 
     /**
-     * 终结流程实例（删除）：驳回后重新提交时调用，防止旧实例继续产生待办/通知。
+     * 终结流程实例（删除）：撤回 / 驳回 / 重新提交时调用，防止旧实例继续产生待办/通知。
      * 实例不存在（已自然结束）时静默返回，不报错。
+     *
+     * <p>2026-10-25 修（虎哥线上问题：时间线「已驳回·处理人—」）：删除前会把实例下所有
+     * 活跃任务 claim 给当前登录用户并落一条评论（内容 = reason）——否则 ROLE 候选组任务
+     * 的 ACT_HI_TASKINST.ASSIGNEE_ 恒为 NULL，时间线拿不到实际操作人。评论 USER_ID_
+     * 由 setAuthenticatedUser 保证非空（处理人兜底链第二级）。</p>
      */
     void terminate(String processInstanceId, String reason);
 
@@ -123,12 +138,21 @@ public interface WorkflowEngineService {
     List<TimelineNodeVO> listTimeline(String processInstanceId);
 
     /**
-     * 按业务单据标识（businessKey，如项目 ID）聚合该单据的全部历史审批时间线。
+     * 按业务单据标识（businessKey，如项目 ID）聚合该单据指定流程类型下的全部历史审批时间线。
+     *
      * <p>与 {@link #listTimeline(String)} 的区别：重提会终结旧流程实例并起新实例，
      * 二者 businessKey 相同（submit 时 businessKey = 项目 ID），此方法 union 出重提前后的
      * 完整时间线——2026-10-23 虎哥：驳回/重提后历史必须完整，不可只从最后一次实例开始。</p>
+     *
+     * <p>2026-10-25 修（虎哥线上问题：发票时间线混入发货单/收款单历史）：businessKey 只是
+     * 字符串，项目/发货/收款/发票/应收五张表各自自增，ID 必然相撞（如发票 #2 与发货单 #2、
+     * 收款单 #2）。只按 BUSINESS_KEY_ 过滤会把别的单据审批历史 union 进来——必须同时传
+     * processKey 按 PROC_DEF_KEY_ 收敛，businessKey 只在同一流程类型内保证唯一。</p>
+     *
+     * @param processKey  流程定义 key（调用方传自己的 PROCESS_CODE，如 invoice_approval）
+     * @param businessKey 业务单据标识（如发票 ID）
      */
-    List<TimelineNodeVO> listTimelineByBusinessKey(String businessKey);
+    List<TimelineNodeVO> listTimelineByBusinessKey(String processKey, String businessKey);
 
     /** 取流程实例的 businessKey（业务单据标识，如项目 ID）；实例不存在返回 null */
     String getBusinessKey(String instanceId);
@@ -140,13 +164,21 @@ public interface WorkflowEngineService {
     List<TaskInfo> listMyTasks(String username);
 
     /**
-     * 判断当前用户是否为指定业务单据（businessKey，如项目/发货 ID）的审批任务处理人。
+     * 判断当前用户是否为指定业务单据（businessKey，如项目/发货 ID）指定流程类型下审批任务的处理人。
      * 命中规则同 {@link #listMyTasks(String)}：
      *   - active 任务 assignee / candidateUser / candidateGroup（按用户角色）命中；
      *   - 或曾作为处理人完成过该单据的任务（历史「我审批的」场景）。
      * 用于业务单条接口「三选一」放行中的「审批人」判定（读类详情可见）。
+     *
+     * <p>2026-10-25 修（同 listTimelineByBusinessKey 的 ID 相撞问题）：不传 processKey 时，
+     * businessKey='2' 会同时命中发票 #2 与收款单 #2 的任务——出纳能看到不属于自己的发票详情。
+     * 三处查询（active assignee / active 候选组 / 历史 assignee）全部按 PROC_DEF_KEY_ 收敛。</p>
+     *
+     * @param processKey  流程定义 key（调用方传自己的 PROCESS_CODE）
+     * @param businessKey 业务单据标识（如发票 ID）
+     * @param username    当前登录用户名
      */
-    boolean isCandidate(String businessKey, String username);
+    boolean isCandidate(String processKey, String businessKey, String username);
 
     /**
      * 查询指定登录用户审批过的历史任务（跨流程实例，按处理时间倒序）。

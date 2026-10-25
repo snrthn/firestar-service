@@ -251,7 +251,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         }
         // 引擎三道闸：发起人身份（admin 不代撤）+ 流程仍在运行；返回已审批人 userId
         List<Long> approvedUserIds = engine.withdraw(r.getProcessInstanceId(), currentUsername(),
-                "申请人撤回收款申请，收款单 id=" + id);
+                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "收款申请，收款单 id=" + id);
         r.setApprovalStatus("CANCELLED");
         r.setUpdatedBy(currentUserId());
         receiptMapper.updateById(r);
@@ -363,7 +363,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         }
         // 可见性三选一：申请人本人（createdBy）/ ROLE_ADMIN / 审批任务处理人（候选人）
         if (!isAdmin && !Objects.equals(r.getCreatedBy(), currentUserId())
-                && !engine.isCandidate(String.valueOf(id), username)) {
+                && !engine.isCandidate(RECEIPT_PROCESS_CODE, String.valueOf(id), username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收款单不存在或无权访问：" + id);
         }
         Map<String, DictData> statusDict = dictMap(DICT_RECEIPT_STATUS);
@@ -380,7 +380,8 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     @Override
     public List<TimelineNodeVO> timeline(Long id) {
-        return engine.listTimelineByBusinessKey(String.valueOf(id));
+        // processKey 必传：businessKey 跨表相撞（收款单 #2 = 发票 #2），不带类型过滤会串台
+        return engine.listTimelineByBusinessKey(RECEIPT_PROCESS_CODE, String.valueOf(id));
     }
 
     // ===================== 私有 =====================

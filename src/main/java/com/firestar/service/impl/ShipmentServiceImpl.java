@@ -521,7 +521,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         }
         // 引擎三道闸：发起人身份（admin 不代撤）+ 流程仍在运行；返回已审批人 userId
         List<Long> approvedUserIds = engine.withdraw(s.getProcessInstanceId(), currentUsername(),
-                "申请人撤回发货申请，发货单 id=" + s.getId());
+                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "发货申请，发货单 id=" + s.getId());
         // 退还货物额度：create 时已累加 item.shippedQty（占用），撤回必须退还，
         // 否则额度被永久占用（后续发货会误判超发）。
         releaseItemOccupancy(s.getId());
@@ -609,7 +609,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         }
         // 可见性三选一（2026-10-24 安全债修复）：申请人本人 / ROLE_ADMIN / 审批任务处理人（候选人）
         if (!isAdmin && !Objects.equals(s.getApplicantId(), currentUserId())
-                && !engine.isCandidate(String.valueOf(shipmentId), username)) {
+                && !engine.isCandidate(SHIPMENT_PROCESS_CODE, String.valueOf(shipmentId), username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权访问：" + shipmentId);
         }
         return toVO(s, dictMaps(), userNamesOf(List.of(s)));
@@ -617,7 +617,8 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     public List<TimelineNodeVO> timeline(Long shipmentId) {
-        return engine.listTimelineByBusinessKey(String.valueOf(shipmentId));
+        // processKey 必传：businessKey 跨表相撞（发货单 #2 = 收款单 #2），不带类型过滤会串台
+        return engine.listTimelineByBusinessKey(SHIPMENT_PROCESS_CODE, String.valueOf(shipmentId));
     }
 
     // ===================== 私有 =====================

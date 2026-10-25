@@ -260,7 +260,7 @@ public class InvoiceServiceImpl implements InvoiceService {
             throw new IllegalArgumentException("该发票没有进行中的审批流程，无需撤回");
         }
         List<Long> approvedUserIds = engine.withdraw(r.getProcessInstanceId(), currentUsername(),
-                "申请人撤回发票申请，发票 id=" + id);
+                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "发票申请，发票 id=" + id);
         r.setInvoiceStatus("CANCELLED");
         r.setUpdatedBy(currentUserId());
         invoiceMapper.updateById(r);
@@ -372,7 +372,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
         // 可见性三选一：申请人本人（applicantId）/ ROLE_ADMIN / 审批任务处理人（候选人）
         if (!isAdmin && !Objects.equals(r.getApplicantId(), currentUserId())
-                && !engine.isCandidate(String.valueOf(id), username)) {
+                && !engine.isCandidate(INVOICE_PROCESS_CODE, String.valueOf(id), username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发票不存在或无权访问：" + id);
         }
         Map<String, DictData> statusDict = dictMap(DICT_INVOICE_STATUS);
@@ -391,7 +391,8 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public List<TimelineNodeVO> timeline(Long id) {
-        return engine.listTimelineByBusinessKey(String.valueOf(id));
+        // processKey 必传：businessKey 跨表相撞（发票 #2 = 收款单 #2），不带类型过滤会串台
+        return engine.listTimelineByBusinessKey(INVOICE_PROCESS_CODE, String.valueOf(id));
     }
 
     // ===================== 私有 =====================
