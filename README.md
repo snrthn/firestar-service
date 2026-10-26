@@ -37,16 +37,16 @@ src/main/java/com/firestar/
     DatabaseCheckController.java      # 运维自检 /system/db-check（返回库名 / 表名 / 行数）
   service/                            # 业务 Service（当前 1 个，均为非业务运维类）
     DatabaseCheckService.java
-  mapper/                             # 25 个 MyBatis-Plus Mapper 接口（零手写 SQL）
-  entity/                             # 28 个实体（由 DDL 脚本生成，字段与库严格对齐）
+  mapper/                             # 41 个 MyBatis-Plus Mapper 接口（零手写 SQL）
+  entity/                             # 44 个实体（由 DDL 脚本生成，字段与库严格对齐；含 3 个抽象基类 BaseEntity/AuditedEntity/LogicDeleteEntity）
 src/main/resources/
-  db/migration/                       # 3 个 Flyway 迁移
-    V1__baseline.sql                  # 25 张业务表 DDL（含红线 / 金额公式注释）
-    V2__init_dict_data.sql            # 22 类字典种子数据
+  db/migration/                       # 72 个 Flyway 迁移（V1–V72，持续累积）
+    V1__baseline.sql                  # V1 基线：25 张业务表 DDL（含红线 / 金额公式注释）
+    V2__init_dict_data.sql            # 33 类字典种子数据（sys_dict_data 共 144 条字典项）
     V3__flowable_schema.sql           # Flowable 审批引擎表
   application.properties              # 基础（端口 2025 / 应用名 / actuator）
   application-{dev,test,pre,prod}.properties
-src/test/java/com/firestar/          # 5 个测试类（冒烟 / 自检 / 实体映射一致性等）
+src/test/java/com/firestar/          # 9 个测试类（冒烟 / 自检 / 实体映射一致性 / 安全暴露等）
 .env/example.env                     # 本地凭据模板（真实 .env/<profile>.env 不入库）
 bin/start.sh stop.sh deploy.sh       # 跨平台运维脚本（复用参考项目实现）
 docs/云效率流水线配置.yaml            # 阿里云效 Flow CI/CD（PaC）
@@ -55,7 +55,7 @@ docs/git-workflow.md                 # 分支同步 SOP
 
 ## 当前进度（截至 2026-10-21）
 
-- **数据层 / 基础设施：已就绪** —— 25 张表 DDL 全落地、28 实体、25 Mapper、多个 Flyway 迁移（含字典种子与 V36 初始化/重置菜单种子）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
+- **数据层 / 基础设施：已就绪** —— 41 张业务表 DDL 全落地（V1 基线 25 + V5/V10/V19/V25/V30/V32/V39/V65/V67/V68/V71 累计新增 16）、44 实体、41 Mapper、72 个 Flyway 迁移（含字典种子与 V36 初始化/重置菜单种子）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
 - **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及**系统初始化与重置向导**（`InitResetController` + `InitResetServiceImpl` + V36 菜单/权限种子；轻度重置清业务表 + Flowable 运行/历史 + 上传文件，完整重置走 Flyway `clean()+migrate()` 恢复出厂）。
 - **财务业务域（`fin_*`）仅有表结构与空壳 Service，待开发**；Flowable 仅建表，流程定义 / 任务处理未动。
 - ⚠️ **路径前缀约定**：前端经 vite proxy / 生产 nginx 以 `/api` 转发并去前缀；**后端真实路径不含 `/api`**（如 `/system/init/status`），白名单与安全配置一律按后端真实路径书写。

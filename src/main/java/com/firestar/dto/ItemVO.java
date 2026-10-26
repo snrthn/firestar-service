@@ -17,6 +17,8 @@ public class ItemVO {
 
     private Long id;
     private Long projectId;
+    /** 货物 ID → fin_goods.id（V71；0 = 未关联；看板按此聚合） */
+    private Long goodsId;
     private String itemName;
     private String specModel;
     private String unit;

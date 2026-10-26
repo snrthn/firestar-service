@@ -1,7 +1,9 @@
 package com.firestar.common;
 
+import com.firestar.entity.Customer;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receivable;
+import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 
@@ -69,5 +71,23 @@ public final class BatchLoader {
 
     private static <E> Map<Long, E> byId(List<E> list, Function<E, Long> idOf) {
         return list.stream().collect(Collectors.toMap(idOf, Function.identity()));
+    }
+
+    /**
+     * 批量取客户名（V72 起 fin_project 不再存 customer_name，展示名需按 customer_id 联 fin_customer 翻译）。
+     *
+     * @param projects 已批量取回的 Project（含 customerId），去重后走一次 selectBatchIds
+     * @return customerId → customerName；无 id 或空集时返回空 Map（不可变）
+     */
+    public static Map<Long, String> customerNames(CustomerMapper mapper, Collection<Project> projects) {
+        Set<Long> ids = projects.stream()
+                .map(Project::getCustomerId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return mapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(Customer::getId, Customer::getCustomerName));
     }
 }

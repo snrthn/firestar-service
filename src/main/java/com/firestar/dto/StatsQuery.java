@@ -36,4 +36,8 @@ public class StatsQuery {
 
     /** 销售经理过滤（sys_user.id；null 表示全部） */
     private Long managerId;
+
+    /** 货物过滤（V71 主表 id；null 表示全部货物）。在明细层 fin_item.goods_id 反查项目集合后再下推，
+     *  与 customerId/managerId 求交——见 StatsServiceImpl.resolveProjectIds。 */
+    private Long goodsId;
 }

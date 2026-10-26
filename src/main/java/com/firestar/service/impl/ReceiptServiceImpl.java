@@ -13,6 +13,7 @@ import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
+import com.firestar.entity.Customer;
 import com.firestar.entity.DictData;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.Project;
@@ -23,6 +24,7 @@ import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
 import com.firestar.entity.ProcessDef;
 import com.firestar.entity.WriteOff;
+import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ProcessDefMapper;
@@ -103,13 +105,16 @@ public class ReceiptServiceImpl implements ReceiptService {
     private final UserRoleMapper userRoleMapper;
     private final WriteOffMapper writeOffMapper;
     private final ReceivableMapper receivableMapper;
+    /** 客户主表（V68）：V72 起 fin_project 不再存客户名，展示名需按 customer_id 联表翻译 */
+    private final CustomerMapper customerMapper;
 
     @Autowired
     public ReceiptServiceImpl(ReceiptMapper receiptMapper, FileStorageMapper fileStorageMapper,
                               ProjectMapper projectMapper,                               DictDataMapper dictDataMapper, ProcessDefMapper processDefMapper,
                               WorkflowEngineService engine, NotificationService notificationService,
                               UserMapper userMapper, RoleMapper roleMapper, UserRoleMapper userRoleMapper,
-                              WriteOffMapper writeOffMapper, ReceivableMapper receivableMapper) {
+                              WriteOffMapper writeOffMapper, ReceivableMapper receivableMapper,
+                              CustomerMapper customerMapper) {
         this.receiptMapper = receiptMapper;
         this.fileStorageMapper = fileStorageMapper;
         this.projectMapper = projectMapper;
@@ -122,6 +127,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         this.userRoleMapper = userRoleMapper;
         this.writeOffMapper = writeOffMapper;
         this.receivableMapper = receivableMapper;
+        this.customerMapper = customerMapper;
     }
 
     // ===================== 创建（草稿，不拉审批） =====================
@@ -383,7 +389,9 @@ public class ReceiptServiceImpl implements ReceiptService {
         // 项目信息批量预取：一页最多 500 条，逐条 selectById 会放大成 500 次查询
         Map<Long, Project> projects =
                 BatchLoader.projects(projectMapper, page.getRecords(), Receipt::getProjectId);
-        return page.convert(r -> toVO(r, statusDict, typeDict, docDict, userNames, projects));
+        // V72：客户名按 customer_id 批量翻译（fin_project 已删该列）
+        Map<Long, String> customerNames = BatchLoader.customerNames(customerMapper, projects.values());
+        return page.convert(r -> toVO(r, statusDict, typeDict, docDict, userNames, projects, customerNames));
     }
 
     @Override
@@ -403,7 +411,9 @@ public class ReceiptServiceImpl implements ReceiptService {
         Map<Long, String> userNames = userNamesOf(List.of(r));
         Map<Long, Project> projects =
                 BatchLoader.projects(projectMapper, List.of(r), Receipt::getProjectId);
-        ReceiptVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects);
+        // V72：客户名按 customer_id 批量翻译（fin_project 已删该列）
+        Map<Long, String> customerNames = BatchLoader.customerNames(customerMapper, projects.values());
+        ReceiptVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects, customerNames);
         // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
         vo.setAttachmentFileIds(loadAttachmentIds(id));
         // 核销分配明细仅详情回填（同附件口径，V65）
@@ -736,7 +746,7 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     private ReceiptVO toVO(Receipt r, Map<String, DictData> statusDict, Map<String, DictData> typeDict,
                            Map<String, DictData> docDict, Map<Long, String> userNames,
-                           Map<Long, Project> projects) {
+                           Map<Long, Project> projects, Map<Long, String> customerNames) {
         ReceiptVO vo = new ReceiptVO();
         vo.setId(r.getId());
         vo.setReceiptNo(r.getReceiptNo());
@@ -766,7 +776,8 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (p != null) {
             vo.setProjectNo(p.getProjectNo());
             vo.setProjectName(p.getProjectName());
-            vo.setCustomerName(p.getCustomerName());
+            // V72：客户名按 customer_id 翻译（fin_project 已删该列）
+            vo.setCustomerName(customerNames.get(p.getCustomerId()));
         }
         // 详情页「通过/驳回」切换：审批中才有待办任务
         if (r.getProcessInstanceId() != null && "CASHIER_APPROVING".equals(r.getApprovalStatus())) {

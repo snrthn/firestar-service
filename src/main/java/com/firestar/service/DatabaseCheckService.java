@@ -30,23 +30,28 @@ import java.util.*;
 public class DatabaseCheckService {
 
     /**
-     * V1 基线应该存在的业务表总数（与 docs/建表方案.md 附录 A 一致）。
+     * 运行期业务表总数（与 docs/建表方案.md 附录 A 一致）。
      *
-     * 33 = 原 25 张业务表（V1） + V5 的 sys_token_blacklist（JWT 登出黑名单）
-     *      + V10 的 sys_post（岗位管理）
-     *      + V19 的 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）
-     *      + V25 的 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）
-     *      + V30 的 sys_notification / sys_notification_template（P2 通知两表）
-     *      + V39 的 sys_level（职级管理，P3 LEVEL 节点数据层）。
-     *      + V65 的 fin_invoice_allocation（发票↔应收单双向核销明细）。
-     *      + V67 的 fin_return_line（退货明细行，按行退）与 V68 的 fin_customer（客户主表）。
+     * 41 = 原 25 张业务表（V1）
+     *      + V5  sys_token_blacklist（JWT 登出黑名单）
+     *      + V10 sys_post（岗位管理）
+     *      + V19 sys_login_log（登录日志，与 sys_audit_log 操作日志区分）
+     *      + V25 sys_agreement / sys_agreement_version / sys_agreement_consent（P1 协议三表）
+     *      + V30 sys_notification / sys_notification_template（P2 通知两表）
+     *      + V32 sys_feedback / sys_feedback_message / sys_help_article（反馈 + 帮助中心）
+     *      + V39 sys_level（职级管理，P3）
+     *      + V65 fin_invoice_allocation（发票↔应收单核销明细）
+     *      + V67 fin_return_line（退货明细行，按行退）
+     *      + V68 fin_customer（客户主表，V68 引入客户维度唯一事实源）
+     *      + V71 fin_goods（货物主表，V71 引入货物维度唯一事实源；fin_item 同时挂 goods_id）
      * 后续每次 Flyway 新增业务表，此常量必须同步 +1，否则自检误报
      * "业务表数量应为 N，实际 N+1" 导致 /system/db-check 返回 503、
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      *
-     * 计数变更账：V67 新增 fin_return_line，38→39；V68 新增 fin_customer，39→40。
+     * 计数变更账：V67 新增 fin_return_line，38→39；V68 新增 fin_customer，39→40；
+     *            V71 新增 fin_goods，40→41（V32 三表此前漏记，已补正）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 40;
+    private static final int EXPECTED_TABLE_COUNT = 41;
 
     /** 本项目业务表前缀 */
     private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");
@@ -267,6 +272,13 @@ public class DatabaseCheckService {
          *       （当时 label 叫「退货红冲」），V67 同一 (type_code, dict_value) 再插一次被
          *       ON DUPLICATE KEY UPDATE 命中 → 只把 label 改成「退货生成」，**未新增行**（+0）。
          *    → dictTypeCount 保持 33、dictDataCount 138→140（实测值 140 已验）。
+         * V69（audit_target_type 补齐 INVOICE/APPROVAL/RECEIPT/PROJECT 4 项，对齐
+         *    @Auditable 真实落库的 10 个目标类型）→ 不新增字典类型，
+         *    dictDataCount 140→144（dictTypeCount 保持 33）。
+         * V70（core_business_status_styles）仅为字典项 `style` 列配色，纯 UPDATE、
+         *   无任何 INSERT/DELETE/CREATE，**不新增/不删除任何行**，故所有计数常量均不变
+         *   （dictTypeCount 保持 33、dictDataCount 保持 144；config/role 等亦不变）。
+         *   此类「只改已有行属性」的迁移无需同步本段常量，仅当计数基线与实际不符时排查。
          *    ⚠️ 计数口径提示：本类按「实际行数」校验，而 V67 迁移注释曾按「INSERT 语句数」
          *       记 +3——凡迁移里出现 ON DUPLICATE KEY UPDATE，行数增量 ≠ 语句行数，
          *       必须以 SELECT COUNT(*) 实测为准，不能数 INSERT。
@@ -277,7 +289,7 @@ public class DatabaseCheckService {
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 33, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 140, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 144, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

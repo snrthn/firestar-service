@@ -63,4 +63,7 @@ public class OverviewVO {
 
     /** 客户总数（ENABLED） */
     private Long customerCount = 0L;
+
+    /** 货物总数（ENABLED，V71 主表） */
+    private Long goodsCount = 0L;
 }

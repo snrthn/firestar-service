@@ -1,5 +1,6 @@
 package com.firestar.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
@@ -34,13 +35,13 @@ public class Project extends LogicDeleteEntity {
     private String projectName;
 
     /**
-     * 客户名称（V1 原有，V68 起转为**快照冗余**）。
-     *
-     * <p>V68 引入客户主表后这里语义变了：单据上的客户名是「开票/立项当时叫什么」的
-     * 历史事实。客户主表里改名不会回头改这里 —— 否则历史单据的单位抬头被悄悄篡改，
-     * 对账时对不上（虎哥 2026-10-26 决策#2）。列表/详情继续读它可免一次联表；
-     * 看板统计则一律按 {@link #customerId} 聚合，因为文本会重名/别名分裂。</p>
+     * 客户名称（V1 原有；V68 曾作为「快照冗余」保留，但实现上每次保存被主表当前名覆盖，
+     * 并非真快照）。<b>V72 起该列已从 fin_project 删除，本字段改为非表字段（exist=false），
+     * 仅作「下拉 allow-create 手输新客户」的临时入参，不参与持久化。</b>
+     * 展示用的客户名由 ProjectServiceImpl.toVO 按 {@link #customerId} 联 fin_customer 翻译回填，
+     * 前端 ProjectVO.customerName 字段与展示逻辑均不变。
      */
+    @TableField(exist = false)
     private String customerName;
 
     /**

@@ -9,7 +9,9 @@ import com.firestar.dto.ProjectRankingRowVO;
 import com.firestar.dto.ProjectRankingVO;
 import com.firestar.dto.StatsQuery;
 import com.firestar.entity.Customer;
+import com.firestar.entity.Goods;
 import com.firestar.entity.Invoice;
+import com.firestar.entity.Item;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
@@ -18,7 +20,9 @@ import com.firestar.entity.Shipment;
 import com.firestar.entity.User;
 import com.firestar.entity.WriteOff;
 import com.firestar.mapper.CustomerMapper;
+import com.firestar.mapper.GoodsMapper;
 import com.firestar.mapper.InvoiceMapper;
+import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
@@ -72,6 +76,7 @@ public class StatsServiceImpl implements StatsService {
 
     private final ProjectMapper projectMapper;
     private final CustomerMapper customerMapper;
+    private final GoodsMapper goodsMapper;
     private final UserMapper userMapper;
     private final ReceivableMapper receivableMapper;
     private final ReceiptMapper receiptMapper;
@@ -79,6 +84,7 @@ public class StatsServiceImpl implements StatsService {
     private final ShipmentMapper shipmentMapper;
     private final WriteOffMapper writeOffMapper;
     private final ReturnOrderMapper returnOrderMapper;
+    private final ItemMapper itemMapper;
 
     // ===================== 工具 =====================
 
@@ -132,18 +138,51 @@ public class StatsServiceImpl implements StatsService {
      * 收敛 projectId 集合：
      * - 指定 projectId → [id]
      * - 指定 customerId/managerId → 查 fin_project 收敛
+     * - 指定 goodsId（V71）→ 在明细层 fin_item.goods_id 反查 distinct projectId 收敛
+     * - 多过滤并存时求交（例如"某客户 + 某货物"）
      * - 都未指定 → null（表示不做项目级过滤）
      * 返回空集合表示"过滤后无匹配项目"，调用方应早退返回零值。
      */
     private List<Long> resolveProjectIds(StatsQuery q) {
-        if (q.getProjectId() != null) return List.of(q.getProjectId());
+        // 货物过滤在明细层：先按货物反查项目集合
+        List<Long> byGoods = null;
+        if (q.getGoodsId() != null) {
+            byGoods = itemMapper.selectList(new LambdaQueryWrapper<Item>()
+                            .select(Item::getProjectId)
+                            .eq(Item::getGoodsId, q.getGoodsId()))
+                    .stream()
+                    .map(Item::getProjectId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+        }
+
+        // 指定单项目：若同时指定货物且单项目不在货物集合内 → 空集早退
+        if (q.getProjectId() != null) {
+            if (byGoods != null && !byGoods.contains(q.getProjectId())) return List.of();
+            return List.of(q.getProjectId());
+        }
+
         boolean needFilter = q.getCustomerId() != null || q.getManagerId() != null;
-        if (!needFilter) return null;
-        LambdaQueryWrapper<Project> w = new LambdaQueryWrapper<>();
-        if (q.getCustomerId() != null) w.eq(Project::getCustomerId, q.getCustomerId());
-        if (q.getManagerId() != null) w.eq(Project::getSalesManagerId, q.getManagerId());
-        return projectMapper.selectList(w.select(Project::getId)).stream()
-                .map(Project::getId).collect(Collectors.toList());
+        List<Long> pids = null;
+        if (needFilter) {
+            LambdaQueryWrapper<Project> w = new LambdaQueryWrapper<>();
+            if (q.getCustomerId() != null) w.eq(Project::getCustomerId, q.getCustomerId());
+            if (q.getManagerId() != null) w.eq(Project::getSalesManagerId, q.getManagerId());
+            pids = projectMapper.selectList(w.select(Project::getId)).stream()
+                    .map(Project::getId).collect(Collectors.toList());
+        }
+
+        // 与货物集合求交：pids==null（不过滤）→ 直接取货物集合；否则取交集
+        if (byGoods != null) {
+            if (pids == null) {
+                pids = byGoods;
+            } else {
+                Set<Long> gset = new java.util.HashSet<>(byGoods);
+                pids = pids.stream().filter(gset::contains).collect(Collectors.toList());
+            }
+        }
+        return pids; // null = 不做过滤；空列表 = 过滤后无匹配
     }
 
     /** 项目级过滤下推；pids 为 null 或空则不加（空集合 IN() 会炸 SQL） */
@@ -173,6 +212,7 @@ public class StatsServiceImpl implements StatsService {
         if (pids != null && pids.isEmpty()) {
             v.setProjectCount(0L);
             v.setCustomerCount(customerEnabledCount());
+            v.setGoodsCount(goodsEnabledCount());
             return v;
         }
 
@@ -276,6 +316,7 @@ public class StatsServiceImpl implements StatsService {
         v.setDiffPool(v.getReceiptAmount().subtract(v.getWriteOffAmount()));
         v.setProjectCount(pids != null ? (long) pids.size() : projectMapper.selectCount(new LambdaQueryWrapper<>()));
         v.setCustomerCount(customerEnabledCount());
+        v.setGoodsCount(goodsEnabledCount());
         return v;
     }
 
@@ -432,7 +473,7 @@ public class StatsServiceImpl implements StatsService {
 
         LambdaQueryWrapper<Project> pw = new LambdaQueryWrapper<Project>()
                 .select(Project::getId, Project::getProjectNo, Project::getProjectName,
-                        Project::getCustomerName, Project::getSalesManagerId, Project::getContractAmount)
+                        Project::getCustomerId, Project::getSalesManagerId, Project::getContractAmount)
                 // 拍板：Tab④ 仅排「已签合同」(APPROVED)，与 F-01 合同签约额口径对齐
                 .eq(Project::getApprovalStatus, "APPROVED");
         if (q.getCustomerId() != null) pw.eq(Project::getCustomerId, q.getCustomerId());
@@ -443,6 +484,17 @@ public class StatsServiceImpl implements StatsService {
             vo.setRows(new ArrayList<>());
             vo.setTotal(0L);
             return vo;
+        }
+
+        // V72：客户名不再存 fin_project，按 customerId 批量联 fin_customer 翻译（免 N+1），与 ProjectServiceImpl.toVO 同范式
+        Map<Long, String> custNames = new LinkedHashMap<>();
+        {
+            Set<Long> cids = projects.stream().map(Project::getCustomerId)
+                    .filter(Objects::nonNull).collect(Collectors.toSet());
+            if (!cids.isEmpty()) {
+                customerMapper.selectList(new LambdaQueryWrapper<Customer>().in(Customer::getId, cids))
+                        .forEach(c -> custNames.put(c.getId(), c.getCustomerName()));
+            }
         }
 
         // 一次性分组聚合（避免逐项目 N+1），与 ProjectServiceImpl.amountsOf 同构
@@ -473,7 +525,7 @@ public class StatsServiceImpl implements StatsService {
             row.setProjectId(pr.getId());
             row.setProjectNo(pr.getProjectNo());
             row.setProjectName(pr.getProjectName());
-            row.setCustomerName(pr.getCustomerName());
+            row.setCustomerName(custNames.get(pr.getCustomerId()));
             Long mgr = pr.getSalesManagerId();
             if (mgr != null) {
                 row.setManagerName(mgrNames.computeIfAbsent(mgr, id -> {
@@ -726,5 +778,10 @@ public class StatsServiceImpl implements StatsService {
 
     private long customerEnabledCount() {
         return customerMapper.selectCount(new LambdaQueryWrapper<Customer>().eq(Customer::getStatus, "ENABLED"));
+    }
+
+    /** 货物总数（ENABLED，V71 主表）——与 customerEnabledCount 同范式，给总览提供可聚合的货物维度计数 */
+    private long goodsEnabledCount() {
+        return goodsMapper.selectCount(new LambdaQueryWrapper<Goods>().eq(Goods::getStatus, "ENABLED"));
     }
 }

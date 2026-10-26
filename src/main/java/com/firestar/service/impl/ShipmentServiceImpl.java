@@ -14,6 +14,7 @@ import com.firestar.dto.ShipmentLineVO;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.dto.TaskInfo;
+import com.firestar.entity.Customer;
 import com.firestar.entity.DictData;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.Item;
@@ -24,6 +25,7 @@ import com.firestar.entity.Shipment;
 import com.firestar.entity.ShipmentLine;
 import com.firestar.entity.User;
 import com.firestar.entity.UserRole;
+import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ItemMapper;
@@ -94,6 +96,8 @@ public class ShipmentServiceImpl implements ShipmentService {
     private final RoleMapper roleMapper;
     private final UserRoleMapper userRoleMapper;
     private final ReceivableService receivableService;
+    /** 客户主表（V68）：V72 起 fin_project 不再存客户名，展示名需按 customer_id 联表翻译 */
+    private final CustomerMapper customerMapper;
 
     @Autowired
     public ShipmentServiceImpl(ShipmentMapper shipmentMapper, ShipmentLineMapper shipmentLineMapper,
@@ -102,7 +106,8 @@ public class ShipmentServiceImpl implements ShipmentService {
                                FileStorageMapper fileStorageMapper,
                                WorkflowEngineService engine, NotificationService notificationService,
                                UserMapper userMapper, RoleMapper roleMapper,
-                               UserRoleMapper userRoleMapper, ReceivableService receivableService) {
+                               UserRoleMapper userRoleMapper, ReceivableService receivableService,
+                               CustomerMapper customerMapper) {
         this.shipmentMapper = shipmentMapper;
         this.shipmentLineMapper = shipmentLineMapper;
         this.itemMapper = itemMapper;
@@ -116,6 +121,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         this.roleMapper = roleMapper;
         this.userRoleMapper = userRoleMapper;
         this.receivableService = receivableService;
+        this.customerMapper = customerMapper;
     }
 
     // ===================== 创建 + 发起审批（决策#1） =====================
@@ -651,7 +657,9 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (p != null) {
             vo.setProjectNo(p.getProjectNo());
             vo.setProjectName(p.getProjectName());
-            vo.setCustomerName(p.getCustomerName());
+            // V72：客户名按 customer_id 翻译（fin_project 已删该列）；与项目 N+1 同范式
+            Customer c = p.getCustomerId() != null ? customerMapper.selectById(p.getCustomerId()) : null;
+            vo.setCustomerName(c != null ? c.getCustomerName() : null);
         }
         // 明细行
         List<ShipmentLine> lines = shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()

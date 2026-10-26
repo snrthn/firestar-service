@@ -25,7 +25,9 @@ import com.firestar.entity.Receivable;
 import com.firestar.entity.User;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.CustomerMapper;
+import com.firestar.mapper.GoodsMapper;
 import com.firestar.entity.Customer;
+import com.firestar.entity.Goods;
 import com.firestar.mapper.InvoiceMapper;
 import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProcessDefMapper;
@@ -115,6 +117,8 @@ public class ProjectServiceImpl implements ProjectService {
     private final ReturnOrderMapper returnOrderMapper;
     /** 客户主表（V68）：立项/编辑时按名称 upsert，给看板提供可聚合的客户维度 */
     private final CustomerMapper customerMapper;
+    /** 货物主表（V71）：立项/编辑时按货物名 upsert，给看板提供可聚合的货物维度 */
+    private final GoodsMapper goodsMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
@@ -125,7 +129,7 @@ public class ProjectServiceImpl implements ProjectService {
                               ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper,
                               ReceivableMapper receivableMapper,
                               ReturnOrderMapper returnOrderMapper,
-                              CustomerMapper customerMapper) {
+                              CustomerMapper customerMapper, GoodsMapper goodsMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -141,6 +145,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.receivableMapper = receivableMapper;
         this.returnOrderMapper = returnOrderMapper;
         this.customerMapper = customerMapper;
+        this.goodsMapper = goodsMapper;
     }
 
     @Override
@@ -154,7 +159,7 @@ public class ProjectServiceImpl implements ProjectService {
         }
         Project p = new Project();
         p.setProjectName(req.getProjectName().trim());
-        // V68：客户走「主表 + 快照」双写（id 为准 / 按名称 upsert / 都没给则记 0 未关联）
+        // V68→V72：客户以 customer_id 落库（按名称 upsert 建档）；customerName 为非表字段，仅手输建档临时入参，展示由 toVO 按 id 翻译
         applyCustomer(p, req);
         if (p.getCustomerId() == null) {
             p.setCustomerId(0L);
@@ -195,10 +200,9 @@ public class ProjectServiceImpl implements ProjectService {
         if (req.getProjectName() != null && !req.getProjectName().isBlank()) {
             exist.setProjectName(req.getProjectName().trim());
         }
-        // V68：客户同样保持「传了才改」的语义，与上面 projectName / salesManagerId 一致。
-        // 注意 applyCustomer 内部会写 exist.customerId + exist.customerName 两个字段，
-        // 所以不能再跟一句无条件的 setCustomerName(req.getCustomerName()) —— 那会把
-        // 「按 id 查出来的主表名称」又改回前端可能随手编辑过的文本，双写就裂了。
+        // V68→V72：客户保持「传了才改」的语义，与 projectName / salesManagerId 一致。
+        // applyCustomer 解析出 customer_id 落库（Project.customerName 已标记 exist=false，
+        // 仅手输建档临时入参、不持久化），故无需也不能再 setCustomerName(req.getCustomerName())。
         if ((req.getCustomerId() != null && req.getCustomerId() > 0)
                 || (req.getCustomerName() != null && !req.getCustomerName().isBlank())) {
             applyCustomer(exist, req);
@@ -215,7 +219,8 @@ public class ProjectServiceImpl implements ProjectService {
     // ===== V68：客户主表解析（主表 + 快照双写） =====
 
     /**
-     * 把请求里的客户信息解析成 {@code Project.customerId + customerName} 双写。
+     * 把请求里的客户信息解析出 {@code customer_id} 落库（customerName 仅为手输建档的临时入参，不持久化；
+     * 展示名由 toVO 按 id 联 fin_customer 翻译，V72 起 fin_project 不再存该列）。
      *
      * <p><b>优先级（与 ProjectRequest 注释一致）：customerId &gt; customerName。</b>
      * <ol>
@@ -283,6 +288,38 @@ public class ProjectServiceImpl implements ProjectService {
      * 虎哥 2026-10-26 决策#3「沿用项目号的近似格式」。改编号规则请连同
      * V68 迁移里的 UPDATE 语句一起改，否则回填数据与新增数据会对不上。</p>
      */
+    /**
+     * V71：把货物名解析出 goods_id 落库（同 applyCustomer 范式，但货物行只传名称）。
+     * 允许「按名称当场建档」：一期不做货物独立 CRUD 页面，下拉 allow-create 手输新货物名必须能建档。
+     * 依赖 fin_goods 上 uk_goods_name 唯一约束兜底并发（同客户）。
+     */
+    private Long resolveGoods(String name) {
+        if (name == null || name.isEmpty()) {
+            return 0L;
+        }
+        Goods exists = goodsMapper.selectOne(new LambdaQueryWrapper<Goods>()
+                .eq(Goods::getGoodsName, name).last("LIMIT 1"));
+        if (exists != null) {
+            return exists.getId();
+        }
+        Goods created = new Goods();
+        created.setGoodsName(name);
+        created.setStatus("ENABLED");
+        created.setRemark("立项/编辑时按名称自动建档（V71）");
+        goodsMapper.insert(created);
+        created.setGoodsNo(generateGoodsNo(created.getId()));
+        goodsMapper.updateById(created);
+        return created.getId();
+    }
+
+    /**
+     * 生成货物编号：GOODS-{yyyyMMdd}-{id 四位补齐}（与 generateCustomerNo 同构，V71）。
+     */
+    private String generateGoodsNo(Long goodsId) {
+        return String.format("GOODS-%s-%04d",
+                LocalDateTime.now().format(PROJECT_NO_DATE_FMT), goodsId);
+    }
+
     private String generateCustomerNo(Long customerId) {
         return String.format("CUS-%s-%04d",
                 LocalDateTime.now().format(PROJECT_NO_DATE_FMT), customerId);
@@ -310,6 +347,7 @@ public class ProjectServiceImpl implements ProjectService {
             Item entity = new Item();
             entity.setProjectId(projectId);
             entity.setItemName(it.getItemName().trim());
+            entity.setGoodsId(resolveGoods(it.getItemName().trim()));
             entity.setSpecModel(it.getSpecModel());
             entity.setUnit(it.getUnit());
             entity.setQuantity(it.getQuantity());
@@ -332,6 +370,7 @@ public class ProjectServiceImpl implements ProjectService {
             ItemVO v = new ItemVO();
             v.setId(r.getId());
             v.setProjectId(r.getProjectId());
+            v.setGoodsId(r.getGoodsId());
             v.setItemName(r.getItemName());
             v.setSpecModel(r.getSpecModel());
             v.setUnit(r.getUnit());
@@ -389,7 +428,10 @@ public class ProjectServiceImpl implements ProjectService {
         // 金额汇总批量预聚合（V65）：一页一次三表聚合，避免逐项目 N+1
         ProjectAmounts amounts = amountsOf(page.getRecords().stream()
                 .map(Project::getId).collect(Collectors.toList()));
-        return page.convert(p -> toVO(p, approvalDict, userNames, amounts));
+        // V72：客户名按 id 批量翻译（与 userNames 同范式，免 N+1）
+        Map<Long, String> customerNames = customerDisplayNames(page.getRecords().stream()
+                .map(Project::getCustomerId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames));
     }
 
     @Override
@@ -422,7 +464,10 @@ public class ProjectServiceImpl implements ProjectService {
         // 金额汇总批量预聚合（V65）：一页一次三表聚合，避免逐项目 N+1
         ProjectAmounts amounts = amountsOf(page.getRecords().stream()
                 .map(Project::getId).collect(Collectors.toList()));
-        return page.convert(p -> toVO(p, approvalDict, userNames, amounts));
+        // V72：客户名按 id 批量翻译（与 userNames 同范式，免 N+1）
+        Map<Long, String> customerNames = customerDisplayNames(page.getRecords().stream()
+                .map(Project::getCustomerId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames));
     }
 
     @Override
@@ -1138,20 +1183,36 @@ public class ProjectServiceImpl implements ProjectService {
     private ProjectVO toVO(Project p, Map<String, DictData> approvalDict,
                            Map<Long, String> userNames) {
         // 单项目场景（detail）自助聚合；列表走预聚合重载，避免逐项目 N+1
-        return toVO(p, approvalDict, userNames, amountsOf(List.of(p.getId())));
+        Map<Long, String> customerNames = customerDisplayNames(
+                p.getCustomerId() == null ? List.of() : List.of(p.getCustomerId()));
+        return toVO(p, approvalDict, userNames, amountsOf(List.of(p.getId())), customerNames);
     }
 
     /**
      * V65 实时聚合口径（虎哥拍板 A）：累计已收/已开票/应收按项目一页一次聚合。
      * 列表预聚合传入，detail 单项目自助。
      */
+    /** V72：按客户 id 批量翻译客户名（id<=0 或 null 跳过），一页一次查询避免 N+1 */
+    private Map<Long, String> customerDisplayNames(List<Long> ids) {
+        Set<Long> set = ids.stream().filter(Objects::nonNull).filter(id -> id > 0)
+                .collect(Collectors.toSet());
+        if (set.isEmpty()) return Collections.emptyMap();
+        List<Customer> list = customerMapper.selectList(
+                new LambdaQueryWrapper<Customer>().in(Customer::getId, set));
+        Map<Long, String> m = new HashMap<>(list.size());
+        for (Customer c : list) m.put(c.getId(), c.getCustomerName());
+        return m;
+    }
+
     private ProjectVO toVO(Project p, Map<String, DictData> approvalDict,
-                           Map<Long, String> userNames, ProjectAmounts amounts) {
+                           Map<Long, String> userNames, ProjectAmounts amounts,
+                           Map<Long, String> customerNames) {
         ProjectVO vo = new ProjectVO();
         vo.setId(p.getId());
         vo.setProjectNo(p.getProjectNo());
         vo.setProjectName(p.getProjectName());
-        vo.setCustomerName(p.getCustomerName());
+        // V72：客户名不再存 fin_project，按 customer_id 联 fin_customer 翻译（批量传入免 N+1）
+        vo.setCustomerName(p.getCustomerId() != null ? customerNames.get(p.getCustomerId()) : null);
         vo.setCustomerId(p.getCustomerId());
         vo.setSalesManagerId(p.getSalesManagerId());
         vo.setSalesManagerName(p.getSalesManagerId() != null
