@@ -85,14 +85,17 @@ public class InvoiceVO {
      */
     private List<Long> attachmentFileIds;
 
-    /** 开票状态（字典 invoice_status：PENDING/APPROVING/ISSUED/REJECTED） */
-    private String invoiceStatus;
+    /** 开票状态（字典 approval_status：PENDING/APPROVING/ISSUED/REJECTED） */
+    private String approvalStatus;
 
     /** 开票状态中文名 */
-    private String invoiceStatusName;
+    private String approvalStatusName;
 
     /** 开票状态标签色 */
-    private String invoiceStatusStyle;
+    private String approvalStatusStyle;
+
+    /** 当前审批节点名（审批中时由 Flowable 当前活跃任务名填充；非审批中为空） */
+    private String currentNodeName;
 
     /** Flowable 流程实例 ID（提交审批后非空） */
     private String processInstanceId;

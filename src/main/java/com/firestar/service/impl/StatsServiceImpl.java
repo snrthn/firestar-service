@@ -250,7 +250,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Invoice> w = new LambdaQueryWrapper<Invoice>()
                     .select(Invoice::getInvoiceAmount, Invoice::getTaxAmount, Invoice::getDocDirection)
-                    .eq(Invoice::getInvoiceStatus, "ISSUED");
+                    .eq(Invoice::getApprovalStatus, "APPROVED");
             inProject(w, Invoice::getProjectId, pids);
             betweenDate(w, Invoice::getInvoiceDate, p);
             for (Invoice iv : invoiceMapper.selectList(w)) {
@@ -263,7 +263,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Receipt> w = new LambdaQueryWrapper<Receipt>()
                     .select(Receipt::getReceiptAmount, Receipt::getDocDirection, Receipt::getReceiptType)
-                    .eq(Receipt::getApprovalStatus, "RECEIVED");
+                    .eq(Receipt::getReceiptStatus, "RECEIVED");
             inProject(w, Receipt::getProjectId, pids);
             betweenDate(w, Receipt::getReceiptDate, p);
             for (Receipt rc : receiptMapper.selectList(w)) {
@@ -354,7 +354,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Receipt> w = new LambdaQueryWrapper<Receipt>()
                     .select(Receipt::getReceiptAmount, Receipt::getDocDirection, Receipt::getReceiptType)
-                    .eq(Receipt::getApprovalStatus, "RECEIVED");
+                    .eq(Receipt::getReceiptStatus, "RECEIVED");
             inProject(w, Receipt::getProjectId, pids);
             betweenDate(w, Receipt::getReceiptDate, p);
             for (Receipt rc : receiptMapper.selectList(w)) {
@@ -401,7 +401,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Invoice> w = new LambdaQueryWrapper<Invoice>()
                     .select(Invoice::getInvoiceAmount, Invoice::getTaxAmount, Invoice::getDocDirection)
-                    .eq(Invoice::getInvoiceStatus, "ISSUED");
+                    .eq(Invoice::getApprovalStatus, "APPROVED");
             inProject(w, Invoice::getProjectId, pids);
             betweenDate(w, Invoice::getInvoiceDate, p);
             for (Invoice iv : invoiceMapper.selectList(w)) {
@@ -429,7 +429,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Invoice> w = new LambdaQueryWrapper<Invoice>()
                     .select(Invoice::getInvoiceAmount, Invoice::getDocDirection)
-                    .eq(Invoice::getInvoiceStatus, "ISSUED");
+                    .eq(Invoice::getApprovalStatus, "APPROVED");
             inProject(w, Invoice::getProjectId, pids);
             for (Invoice iv : invoiceMapper.selectList(w)) {
                 invAll = invAll.add(signed(iv.getInvoiceAmount(), iv.getDocDirection()));
@@ -449,7 +449,7 @@ public class StatsServiceImpl implements StatsService {
         {
             LambdaQueryWrapper<Receipt> w = new LambdaQueryWrapper<Receipt>()
                     .select(Receipt::getReceiptAmount, Receipt::getDocDirection, Receipt::getReceiptType)
-                    .eq(Receipt::getApprovalStatus, "RECEIVED");
+                    .eq(Receipt::getReceiptStatus, "RECEIVED");
             inProject(w, Receipt::getProjectId, pids);
             betweenDate(w, Receipt::getReceiptDate, p);
             for (Receipt rc : receiptMapper.selectList(w)) {
@@ -510,12 +510,12 @@ public class StatsServiceImpl implements StatsService {
         Map<Long, BigDecimal> invMap = sumByProject(
                 invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                         .select(Invoice::getProjectId, Invoice::getInvoiceAmount, Invoice::getDocDirection)
-                        .eq(Invoice::getInvoiceStatus, "ISSUED")),
+                        .eq(Invoice::getApprovalStatus, "APPROVED")),
                 Invoice::getProjectId, i -> signed(i.getInvoiceAmount(), i.getDocDirection()), null);
         Map<Long, BigDecimal> receiptMap = sumByProject(
                 receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                         .select(Receipt::getProjectId, Receipt::getReceiptAmount, Receipt::getDocDirection, Receipt::getReceiptType)
-                        .eq(Receipt::getApprovalStatus, "RECEIVED")),
+                        .eq(Receipt::getReceiptStatus, "RECEIVED")),
                 Receipt::getProjectId, r -> receiptSigned(r.getReceiptAmount(), r.getDocDirection(), r.getReceiptType()), null);
 
         Map<Long, String> mgrNames = new LinkedHashMap<>();
@@ -609,13 +609,13 @@ public class StatsServiceImpl implements StatsService {
         BigDecimal blue = BigDecimal.ZERO, red = BigDecimal.ZERO;
         for (Receipt rc : receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                 .select(Receipt::getReceiptAmount, Receipt::getDocDirection)
-                .eq(Receipt::getApprovalStatus, "RECEIVED"))) {
+                .eq(Receipt::getReceiptStatus, "RECEIVED"))) {
             if ("RED".equals(rc.getDocDirection())) red = red.add(nz(rc.getReceiptAmount()));
             else blue = blue.add(nz(rc.getReceiptAmount()));
         }
         for (Invoice iv : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                 .select(Invoice::getInvoiceAmount, Invoice::getDocDirection)
-                .eq(Invoice::getInvoiceStatus, "ISSUED"))) {
+                .eq(Invoice::getApprovalStatus, "APPROVED"))) {
             if ("RED".equals(iv.getDocDirection())) red = red.add(nz(iv.getInvoiceAmount()));
             else blue = blue.add(nz(iv.getInvoiceAmount()));
         }

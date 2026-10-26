@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 发票（开票）创建/编辑请求。
  *
- * <p>创建即草稿（invoiceStatus = PENDING），不拉审批；提交时由 submit 拉起
+ * <p>创建即草稿（approvalStatus = PENDING），不拉审批；提交时由 submit 拉起
  * invoice_approval 流程（一步 ROLE_INVOICER 节点，与立项/发货一致）。</p>
  *
  * <p>receivableId 必填且校验存在（发票必须挂在应收单上）。applicantId（归属人）由业务层

@@ -185,7 +185,7 @@ public class WriteOffServiceImpl implements WriteOffService {
         // 收款单侧：已收款 + 有未核销余额（红冲单内存过滤——docDirection 老数据可能 NULL，
         // .ne 会把 NULL 行也误排除，与 amountsOf 的 RED 判断保持内存过滤）
         LambdaQueryWrapper<Receipt> pq = new LambdaQueryWrapper<Receipt>()
-                .eq(Receipt::getApprovalStatus, "RECEIVED")
+                .eq(Receipt::getReceiptStatus, "RECEIVED")
                 .gt(Receipt::getUnwrittenOffAmount, BigDecimal.ZERO)
                 .orderByAsc(Receipt::getReceiptDate)
                 .orderByAsc(Receipt::getId);
@@ -256,7 +256,7 @@ public class WriteOffServiceImpl implements WriteOffService {
         // 收款单：已收款 + 非红冲 + 有未核销余额，日期早优先
         List<Receipt> receipts = receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                         .eq(Receipt::getProjectId, projectId)
-                        .eq(Receipt::getApprovalStatus, "RECEIVED")
+                        .eq(Receipt::getReceiptStatus, "RECEIVED")
                         .gt(Receipt::getUnwrittenOffAmount, BigDecimal.ZERO)
                         .orderByAsc(Receipt::getReceiptDate)
                         .orderByAsc(Receipt::getId))

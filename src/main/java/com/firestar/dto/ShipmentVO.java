@@ -66,11 +66,14 @@ public class ShipmentVO {
     /** 审批状态（DRAFT/APPROVING/APPROVED/REJECTED/CANCELLED；前端据此判断「审批通过」以隐藏编辑入口） */
     private String approvalStatus;
 
-    /** 审批状态中文名（字典 shipment_approval_status 翻译） */
+    /** 审批状态中文名（字典 approval_status 翻译） */
     private String approvalStatusName;
 
     /** 审批状态标签色 */
     private String approvalStatusStyle;
+
+    /** 当前审批节点名（审批中时由 Flowable 当前活跃任务名填充；非审批中为空） */
+    private String currentNodeName;
 
     /** 申请人 ID */
     private Long applicantId;

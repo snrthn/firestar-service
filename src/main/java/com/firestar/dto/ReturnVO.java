@@ -36,7 +36,7 @@ public class ReturnVO {
     /** 退货原因 */
     private String returnReason;
 
-    /** 审批状态（字典 return_approval_status） */
+    /** 审批状态（字典 approval_status） */
     private String approvalStatus;
 
     private String approvalStatusName;
@@ -49,6 +49,9 @@ public class ReturnVO {
     private String executeStatusName;
 
     private String executeStatusStyle;
+
+    /** 当前审批节点名（审批中时由 Flowable 当前活跃任务名填充；非审批中为空） */
+    private String currentNodeName;
 
     /** Flowable 流程实例 ID */
     private String processInstanceId;

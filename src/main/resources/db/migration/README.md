@@ -12,7 +12,7 @@
 
 在 `DatabaseCheckService` 里（不同步会让 `/system/db-check` 报警）：
 
-1. `readSeedData()` → `dictTypeCount` / `dictDataCount`（当前 **34 / 150**）
+1. `readSeedData()` → `dictTypeCount` / `dictDataCount`（当前 **32 / 127**）
 2. `EXPECTED_TABLE_COUNT`（当前 **41**，仅新增表时才动）
 
 账目（每次改字典都往下记一笔）：
@@ -25,6 +25,7 @@
 | V35 | help_category（+1 类型 / +5 项） | **31** | **122** |
 | V73 | shipment_approval_status（+1 类型 / +6 项，镜像 project_approval_status） | 34 | 150 |
 | V74 | shipment_approval_status 状态归一（纯 UPDATE，无计数变化） | 34 | 150 |
+| V75 | approval_status 通用化：删 4 审批类型（project/shipment/return/invoice）+ 删 receipt_status 4 项（CASHIER_APPROVING/RECEIVED/PARTIAL_WRITEOFF/FULL_WRITEOFF）；建 approval_status（1 类型 / 6 项）与 receipt_business_status（1 类型 / 1 项）；receipt_status 仅留审批骨架（PENDING_APPROVAL/REJECTED/CANCELLED） | 32 | 127 |
 
 > V38–V72 各次字典计数变更（V38/V50/V54/V56/V59/V62/V63/V64/V67/V69/V70 等）见
 > `DatabaseCheckService.readSeedData` 的注释流水账；本表仅列首尾与最新，避免重复维护。

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.annotation.Auditable;
+import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.ApprovalHistoryVO;
 import com.firestar.dto.ItemVO;
 import com.firestar.dto.NodeCfg;
@@ -70,7 +71,7 @@ import java.util.stream.Collectors;
 /**
  * 项目立项服务实现（Step 3 流程编排入口）。
  *
- * <p>状态机（字典 project_approval_status）：
+ * <p>状态机（字典 approval_status）：
  * DRAFT --submit--> APPROVING --(③④ 审批动作)--> APPROVED / REJECTED --submit--> APPROVING。
  * projectNo 仅在审批通过时赋予（需求文档 §立项审批规则）。</p>
  */
@@ -88,7 +89,7 @@ public class ProjectServiceImpl implements ProjectService {
     private static final String END_NODE_ID = "__END__";
 
     /** 审批状态字典类型（V1 基线已预置 6 项） */
-    private static final String DICT_APPROVAL_STATUS = "project_approval_status";
+    private static final String DICT_APPROVAL_STATUS = "approval_status";
 
     /** 分页默认每页条数（同 RoleServiceImpl / ProcessDefServiceImpl 范式） */
     private static final long DEFAULT_PAGE_SIZE = 10L;
@@ -1153,7 +1154,7 @@ public class ProjectServiceImpl implements ProjectService {
         for (Receipt r : receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                 .select(Receipt::getProjectId, Receipt::getReceiptAmount, Receipt::getDocDirection)
                 .in(Receipt::getProjectId, projectIds)
-                .eq(Receipt::getApprovalStatus, "RECEIVED"))) {
+                .eq(Receipt::getReceiptStatus, "RECEIVED"))) {
             // 红冲单（RED）审批通过后状态同 RECEIVED，金额取负参与聚合（2026-10-25 红冲入口）
             BigDecimal amt = "RED".equals(r.getDocDirection())
                     ? nz(r.getReceiptAmount()).negate() : nz(r.getReceiptAmount());
@@ -1162,7 +1163,7 @@ public class ProjectServiceImpl implements ProjectService {
         for (Invoice iv : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                 .select(Invoice::getProjectId, Invoice::getInvoiceAmount, Invoice::getDocDirection)
                 .in(Invoice::getProjectId, projectIds)
-                .eq(Invoice::getInvoiceStatus, "ISSUED"))) {
+                .eq(Invoice::getApprovalStatus, "APPROVED"))) {
             BigDecimal amt = "RED".equals(iv.getDocDirection())
                     ? nz(iv.getInvoiceAmount()).negate() : nz(iv.getInvoiceAmount());
             a.invoiced.merge(iv.getProjectId(), amt, BigDecimal::add);
@@ -1248,6 +1249,17 @@ public class ProjectServiceImpl implements ProjectService {
         vo.setApprovalStatusName(approvalMeta != null ? approvalMeta.getDictLabel() : null);
         vo.setApprovalStatusStyle(approvalMeta != null ? approvalMeta.getStyle() : null);
         vo.setProcessInstanceId(p.getProcessInstanceId());
+        // 审批中回填当前节点名（Flowable 当前活跃任务名），供列表「卡在第几级」展示
+        if (p.getProcessInstanceId() != null && "APPROVING".equals(p.getApprovalStatus())) {
+            List<TaskInfo> tasks = engine.listTasks(p.getProcessInstanceId());
+            if (tasks != null && !tasks.isEmpty()) {
+                // V75：只有多节点流程才回填「当前节点名」——单节点流程（发货/收款/发票）
+                // 没有「第几级」概念，回填的 taskName 恒等于流程名，纯噪音
+                if (FlowNodeUtil.isMultiNode(processDefMapper, INITIATE_PROCESS_CODE)) {
+                    vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                }
+            }
+        }
         vo.setCreatedAt(p.getCreatedAt());
         return vo;
     }

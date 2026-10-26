@@ -32,7 +32,7 @@ public class ReturnOrder extends LogicDeleteEntity {
     /** 退货原因 */
     private String returnReason;
 
-    /** 审批状态（字典 return_approval_status） */
+    /** 审批状态（字典 approval_status） */
     private String approvalStatus;
 
     /** Flowable 流程实例 ID */

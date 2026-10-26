@@ -83,7 +83,7 @@ public class ProjectVO {
     /** 签约人展示名（nickname 兜底 username；V46） */
     private String contractSignedByName;
 
-    /** 审批状态（字典 project_approval_status：DRAFT/PENDING_APPROVAL/APPROVING/REJECTED/APPROVED/CANCELLED） */
+    /** 审批状态（字典 approval_status：DRAFT/PENDING_APPROVAL/APPROVING/REJECTED/APPROVED/CANCELLED） */
     private String approvalStatus;
 
     /** 审批状态中文名（字典翻译） */
@@ -97,6 +97,9 @@ public class ProjectVO {
 
     /** Flowable 流程实例 ID（提交审批后非空） */
     private String processInstanceId;
+
+    /** 当前审批节点名（审批中时由 Flowable 当前活跃任务名填充；非审批中为空） */
+    private String currentNodeName;
 
     private LocalDateTime createdAt;
 }

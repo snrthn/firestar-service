@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.common.DataScopeHelper;
+import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
@@ -29,6 +30,7 @@ import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.ItemMapper;
+import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.RoleMapper;
@@ -81,7 +83,7 @@ public class ShipmentServiceImpl implements ShipmentService {
     private static final String DICT_RECEIVABLE_STATUS = "receivable_status";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
     private static final String DICT_RECEIVABLE_SOURCE = "receivable_source";
-    private static final String DICT_SHIPMENT_APPROVAL_STATUS = "shipment_approval_status";
+    private static final String DICT_SHIPMENT_APPROVAL_STATUS = "approval_status";
     private static final String ROLE_SALES_MANAGER = "ROLE_SALES_MANAGER";
 
     private final ShipmentMapper shipmentMapper;
@@ -99,6 +101,8 @@ public class ShipmentServiceImpl implements ShipmentService {
     private final ReceivableService receivableService;
     /** 客户主表（V68）：V72 起 fin_project 不再存客户名，展示名需按 customer_id 联表翻译 */
     private final CustomerMapper customerMapper;
+    /** 流程定义（V75：判断流程是否多节点，决定要不要回填 currentNodeName） */
+    private final ProcessDefMapper processDefMapper;
 
     @Autowired
     public ShipmentServiceImpl(ShipmentMapper shipmentMapper, ShipmentLineMapper shipmentLineMapper,
@@ -108,7 +112,7 @@ public class ShipmentServiceImpl implements ShipmentService {
                                WorkflowEngineService engine, NotificationService notificationService,
                                UserMapper userMapper, RoleMapper roleMapper,
                                UserRoleMapper userRoleMapper, ReceivableService receivableService,
-                               CustomerMapper customerMapper) {
+                               CustomerMapper customerMapper, ProcessDefMapper processDefMapper) {
         this.shipmentMapper = shipmentMapper;
         this.shipmentLineMapper = shipmentLineMapper;
         this.itemMapper = itemMapper;
@@ -123,6 +127,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         this.userRoleMapper = userRoleMapper;
         this.receivableService = receivableService;
         this.customerMapper = customerMapper;
+        this.processDefMapper = processDefMapper;
     }
 
     // ===================== 创建（仅落草稿；审批由详情面板 submit 触发） =====================
@@ -727,11 +732,16 @@ public class ShipmentServiceImpl implements ShipmentService {
                 vo.setReceivedAmount(r.getReceivedAmount() != null ? r.getReceivedAmount() : BigDecimal.ZERO);
             }
         }
-        // 当前登录用户在流程实例上的待办任务（审批中才有；审批通过/驳回后实例结束 → 无 → 详情页据此切换「通过/驳回」与「标记发货」）
-        if (s.getProcessInstanceId() != null && "PENDING".equals(s.getShipmentStatus())) {
+        // 当前登录用户在流程实例上的待办任务 + 当前审批节点名（审批中才有；实例结束后无 → 详情页据此切换「通过/驳回」与「标记发货」）
+        if (s.getProcessInstanceId() != null) {
             List<TaskInfo> tasks = engine.listTasks(s.getProcessInstanceId());
             if (tasks != null && !tasks.isEmpty()) {
                 vo.setMyPendingTaskId(tasks.get(0).getTaskId());
+                // V75：只有多节点流程才回填「当前节点名」——单节点流程（发货/收款/发票）
+                // 没有「第几级」概念，回填的 taskName 恒等于流程名，纯噪音
+                if (FlowNodeUtil.isMultiNode(processDefMapper, SHIPMENT_PROCESS_CODE)) {
+                    vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                }
             }
         }
         // 签收证据文件 ID 列表（决策#6：confirmedById 非空时按 bizType+bizId 从文件表回填；

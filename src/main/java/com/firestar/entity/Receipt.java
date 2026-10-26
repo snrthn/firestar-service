@@ -47,8 +47,11 @@ public class Receipt extends LogicDeleteEntity {
     /** 银行回单路径（只存路径，不存文件） */
     private String bankReceiptPath;
 
-    /** 审批状态（字典 receipt_status） */
+    /** 审批状态（字典 approval_status：通用审批流状态） */
     private String approvalStatus;
+
+    /** 收款业务状态（字典 receipt_business_status：RECEIVED 已收款；审批通过后为已收款） */
+    private String receiptStatus;
 
     /** Flowable 流程实例 ID（提交审批后写入，驳回/终结后保留便于排查） */
     private String processInstanceId;

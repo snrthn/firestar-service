@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.annotation.Auditable;
 import com.firestar.common.BatchLoader;
 import com.firestar.common.DataScopeHelper;
+import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.AllocationItem;
 import com.firestar.dto.AllocationVO;
 import com.firestar.dto.NotifyCommand;
@@ -89,7 +90,8 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     private static final DateTimeFormatter RECEIPT_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    private static final String DICT_RECEIPT_STATUS = "receipt_status";
+    private static final String DICT_APPROVAL_STATUS = "approval_status";
+    private static final String DICT_RECEIPT_BUSINESS_STATUS = "receipt_business_status";
     private static final String DICT_RECEIPT_TYPE = "receipt_type";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
@@ -206,7 +208,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         vars.put("applicantId", currentUserId());
         String instanceId = engine.start(RECEIPT_PROCESS_CODE, String.valueOf(id), vars);
         r.setProcessInstanceId(instanceId);
-        r.setApprovalStatus("CASHIER_APPROVING");
+        r.setApprovalStatus("APPROVING");
         receiptMapper.updateById(r);
 
         log.info("[receipt] 提交收款审批 id={} instanceId={} applicant={}", id, instanceId, currentUsername());
@@ -230,7 +232,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (!isAdmin && !Objects.equals(r.getCreatedBy(), operatorId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收款单不存在或无权操作：" + id);
         }
-        // 草稿态 + 已驳回态可编辑（用友范式：驳回=回到编写中，可改后重提；CASHIER_APPROVING 在审批链中不可改）
+        // 草稿态（PENDING_APPROVAL）+ 已驳回态可编辑（用友范式：驳回=回到编写中，可改后重提；APPROVING 在审批链中不可改）
         if (!"PENDING_APPROVAL".equals(r.getApprovalStatus()) && !"REJECTED".equals(r.getApprovalStatus())) {
             throw new IllegalArgumentException("仅草稿态或已驳回态可编辑，当前：" + r.getApprovalStatus());
         }
@@ -314,7 +316,8 @@ public class ReceiptServiceImpl implements ReceiptService {
             String bizKey = bizKeyUpfront != null ? bizKeyUpfront : engine.getBusinessKey(instanceId);
             Receipt r = (bizKey != null) ? receiptMapper.selectById(Long.parseLong(bizKey)) : null;
             if (r != null) {
-                r.setApprovalStatus("RECEIVED");
+                r.setReceiptStatus("RECEIVED");
+                r.setApprovalStatus("APPROVED");
                 receiptMapper.updateById(r);
                 // 累加 fin_project.collected_amount（金额纪律：null 当 0，add）
                 accumulateProjectCollected(r.getProjectId(), r.getReceiptAmount(), r.getDocDirection());
@@ -382,7 +385,8 @@ public class ReceiptServiceImpl implements ReceiptService {
                                 .eq(statusEq != null, Receipt::getApprovalStatus, statusEq)
                                 .orderByDesc(Receipt::getCreatedAt),
                         Receipt::getCreatedBy, me));
-        Map<String, DictData> statusDict = dictMap(DICT_RECEIPT_STATUS);
+        Map<String, DictData> statusDict = dictMap(DICT_APPROVAL_STATUS);
+        Map<String, DictData> businessDict = dictMap(DICT_RECEIPT_BUSINESS_STATUS);
         Map<String, DictData> typeDict = dictMap(DICT_RECEIPT_TYPE);
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
         Map<Long, String> userNames = userNamesOf(page.getRecords());
@@ -391,7 +395,7 @@ public class ReceiptServiceImpl implements ReceiptService {
                 BatchLoader.projects(projectMapper, page.getRecords(), Receipt::getProjectId);
         // V72：客户名按 customer_id 批量翻译（fin_project 已删该列）
         Map<Long, String> customerNames = BatchLoader.customerNames(customerMapper, projects.values());
-        return page.convert(r -> toVO(r, statusDict, typeDict, docDict, userNames, projects, customerNames));
+        return page.convert(r -> toVO(r, statusDict, businessDict, typeDict, docDict, userNames, projects, customerNames));
     }
 
     @Override
@@ -405,7 +409,8 @@ public class ReceiptServiceImpl implements ReceiptService {
                 && !engine.isCandidate(RECEIPT_PROCESS_CODE, String.valueOf(id), username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收款单不存在或无权访问：" + id);
         }
-        Map<String, DictData> statusDict = dictMap(DICT_RECEIPT_STATUS);
+        Map<String, DictData> statusDict = dictMap(DICT_APPROVAL_STATUS);
+        Map<String, DictData> businessDict = dictMap(DICT_RECEIPT_BUSINESS_STATUS);
         Map<String, DictData> typeDict = dictMap(DICT_RECEIPT_TYPE);
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
         Map<Long, String> userNames = userNamesOf(List.of(r));
@@ -413,7 +418,7 @@ public class ReceiptServiceImpl implements ReceiptService {
                 BatchLoader.projects(projectMapper, List.of(r), Receipt::getProjectId);
         // V72：客户名按 customer_id 批量翻译（fin_project 已删该列）
         Map<Long, String> customerNames = BatchLoader.customerNames(customerMapper, projects.values());
-        ReceiptVO vo = toVO(r, statusDict, typeDict, docDict, userNames, projects, customerNames);
+        ReceiptVO vo = toVO(r, statusDict, businessDict, typeDict, docDict, userNames, projects, customerNames);
         // 附件 ID 仅详情回填：放在 toVO 里会被分页放大成 N+1（一页最多 500 次单条查询）
         vo.setAttachmentFileIds(loadAttachmentIds(id));
         // 核销分配明细仅详情回填（同附件口径，V65）
@@ -452,7 +457,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (r == null) {
             throw new IllegalArgumentException("收款单不存在：" + id);
         }
-        if (!"RECEIVED".equals(r.getApprovalStatus())) {
+        if (!"RECEIVED".equals(r.getReceiptStatus())) {
             throw new IllegalArgumentException("仅已收款（审批通过）的单据可核销分配，当前状态：" + r.getApprovalStatus());
         }
         List<AllocationItem> list = items == null ? List.of() : items;
@@ -547,7 +552,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (original == null) {
             throw new IllegalArgumentException("原收款单不存在：" + req.getOriginalReceiptId());
         }
-        if (!"RECEIVED".equals(original.getApprovalStatus())) {
+        if (!"RECEIVED".equals(original.getReceiptStatus())) {
             throw new IllegalArgumentException("仅已收款（审批通过）的单据可红冲，原单当前状态：" + original.getApprovalStatus());
         }
         if (!Objects.equals(original.getProjectId(), project.getId())) {
@@ -649,7 +654,7 @@ public class ReceiptServiceImpl implements ReceiptService {
     }
 
     /**
-     * 指定应收单的「在途分配」合计：其他收款单已提交审批（CASHIER_APPROVING）占用但尚未
+     * 指定应收单的「在途分配」合计：其他收款单已提交审批（APPROVING）占用但尚未
      * 生效（completeTask 未跑）的额度。已通过单的额度已滚进 unreceived_amount，不重复扣。
      */
     private BigDecimal sumInFlightAllocations(Long receivableId, Long excludeReceiptId) {
@@ -665,7 +670,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         }
         List<Receipt> inFlight = receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                 .in(Receipt::getId, otherReceiptIds)
-                .eq(Receipt::getApprovalStatus, "CASHIER_APPROVING"));
+                .eq(Receipt::getApprovalStatus, "APPROVING"));
         Set<Long> inFlightIds = inFlight.stream().map(Receipt::getId).collect(Collectors.toSet());
         return rows.stream()
                 .filter(w -> inFlightIds.contains(w.getReceiptId()))
@@ -744,9 +749,9 @@ public class ReceiptServiceImpl implements ReceiptService {
                 .eq(ProcessDef::getStatus, "ENABLED"));
     }
 
-    private ReceiptVO toVO(Receipt r, Map<String, DictData> statusDict, Map<String, DictData> typeDict,
-                           Map<String, DictData> docDict, Map<Long, String> userNames,
-                           Map<Long, Project> projects, Map<Long, String> customerNames) {
+    private ReceiptVO toVO(Receipt r, Map<String, DictData> statusDict, Map<String, DictData> businessDict,
+                           Map<String, DictData> typeDict, Map<String, DictData> docDict,
+                           Map<Long, String> userNames, Map<Long, Project> projects, Map<Long, String> customerNames) {
         ReceiptVO vo = new ReceiptVO();
         vo.setId(r.getId());
         vo.setReceiptNo(r.getReceiptNo());
@@ -766,6 +771,10 @@ public class ReceiptServiceImpl implements ReceiptService {
         DictData st = statusDict.get(r.getApprovalStatus());
         vo.setApprovalStatusName(st != null ? st.getDictLabel() : null);
         vo.setApprovalStatusStyle(st != null ? st.getStyle() : null);
+        vo.setReceiptStatus(r.getReceiptStatus());
+        DictData bs = businessDict.get(r.getReceiptStatus());
+        vo.setReceiptStatusName(bs != null ? bs.getDictLabel() : null);
+        vo.setReceiptStatusStyle(bs != null ? bs.getStyle() : null);
         vo.setProcessInstanceId(r.getProcessInstanceId());
         vo.setApplicantId(r.getCreatedBy());
         vo.setApplicantName(r.getCreatedBy() != null ? userNames.get(r.getCreatedBy()) : null);
@@ -779,11 +788,16 @@ public class ReceiptServiceImpl implements ReceiptService {
             // V72：客户名按 customer_id 翻译（fin_project 已删该列）
             vo.setCustomerName(customerNames.get(p.getCustomerId()));
         }
-        // 详情页「通过/驳回」切换：审批中才有待办任务
-        if (r.getProcessInstanceId() != null && "CASHIER_APPROVING".equals(r.getApprovalStatus())) {
+        // 详情页「通过/驳回」切换：审批中才有待办任务；同时回填当前节点名
+        if (r.getProcessInstanceId() != null && "APPROVING".equals(r.getApprovalStatus())) {
             List<TaskInfo> tasks = engine.listTasks(r.getProcessInstanceId());
             if (tasks != null && !tasks.isEmpty()) {
                 vo.setMyPendingTaskId(tasks.get(0).getTaskId());
+                // V75：只有多节点流程才回填「当前节点名」——单节点流程（发货/收款/发票）
+                // 没有「第几级」概念，回填的 taskName 恒等于流程名，纯噪音
+                if (FlowNodeUtil.isMultiNode(processDefMapper, RECEIPT_PROCESS_CODE)) {
+                    vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                }
             }
         }
         return vo;

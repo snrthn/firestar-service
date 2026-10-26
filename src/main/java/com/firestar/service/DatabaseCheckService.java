@@ -284,6 +284,13 @@ public class DatabaseCheckService {
          * V74（shipment_approval_status 状态归一）仅为 status 中文'启用'→'ENABLED' 的纯 UPDATE，
          *   无任何 INSERT/DELETE，计数不变（dictTypeCount 保持 34、dictDataCount 保持 150）。
          *   此类「只改已有行属性」的迁移无需同步本段常量，仅当计数基线与实际不符时排查。
+         * V75（审批流状态字典通用化）净变化：
+         *   删 4 个审批类型（project_approval_status / shipment_approval_status /
+         *   return_approval_status / invoice_status，共 6+6+9+5=26 项）+ 删 receipt_status 4 项
+         *   （CASHIER_APPROVING/RECEIVED/PARTIAL_WRITEOFF/FULL_WRITEOFF）；
+         *   建 approval_status（1 类型 / 6 项）与 receipt_business_status（1 类型 / 1 项）。
+         *   receipt_status 仅保留审批骨架（PENDING_APPROVAL/REJECTED/CANCELLED），类型不删、项剩 3。
+         *   → 类型 34 - 4 + 2 = 32；数据 150 - 26 - 4 + 7 = 127。
          *    ⚠️ 计数口径提示：本类按「实际行数」校验，而 V67 迁移注释曾按「INSERT 语句数」
          *       记 +3——凡迁移里出现 ON DUPLICATE KEY UPDATE，行数增量 ≠ 语句行数，
          *       必须以 SELECT COUNT(*) 实测为准，不能数 INSERT。
@@ -293,8 +300,8 @@ public class DatabaseCheckService {
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 34, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 150, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 32, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 127, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

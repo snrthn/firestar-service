@@ -44,7 +44,7 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("1. dev 库自检通过：41 张业务表、Flyway 74 个版本、种子数据齐全")
+    @DisplayName("1. dev 库自检通过：41 张业务表、Flyway 75 个版本、种子数据齐全")
     void devDatabaseIsHealthy() {
         Map<String, Object> r = check();
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
@@ -63,8 +63,8 @@ class DatabaseCheckServiceTest {
         assertEquals(62, tables.get("engineTableCount"), "V3 应建出 62 张引擎表");
 
         Map<String, Object> flyway = (Map<String, Object>) r.get("flyway");
-        assertEquals(74, flyway.get("appliedCount"), "Flyway 应已应用 74 个版本（V1–V74）");
-        assertEquals("74", flyway.get("currentVersion"));
+        assertEquals(75, flyway.get("appliedCount"), "Flyway 应已应用 75 个版本（V1–V75）");
+        assertEquals("75", flyway.get("currentVersion"));
     }
 
     @Test
@@ -106,8 +106,8 @@ class DatabaseCheckServiceTest {
     @DisplayName("3. 种子数据条数与当前迁移（V73 发货审批状态字典 + V74 归一）一致")
     void seedDataCountsMatchBaseline() {
         Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
-        assertEquals(34L, seed.get("dictTypeCount"));
-        assertEquals(150L, seed.get("dictDataCount"));
+        assertEquals(32L, seed.get("dictTypeCount"));
+        assertEquals(127L, seed.get("dictDataCount"));
         assertEquals(13L, seed.get("configCount"));
         assertEquals(7L, seed.get("roleCount"));
         assertEquals(4L, seed.get("roleConflictCount"));

@@ -54,8 +54,8 @@ public class Invoice extends LogicDeleteEntity {
     /** 发票文件路径（只存路径） */
     private String invoiceFilePath;
 
-    /** 开票状态（字典 invoice_status） */
-    private String invoiceStatus;
+    /** 审批状态（字典 approval_status：通用审批流状态 DRAFT/APPROVING/APPROVED/REJECTED/CANCELLED） */
+    private String approvalStatus;
 
     /** Flowable 流程实例 ID（提交审批后写入，驳回/终结后保留便于排查） */
     private String processInstanceId;

@@ -3,6 +3,7 @@ package com.firestar.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.FlowNodeUtil;
 import com.firestar.common.Result;
 import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ReturnCreateReq;
@@ -85,9 +86,9 @@ import java.util.stream.Collectors;
  * <p>数字范式：原单一动不动（审计），全部冲减走红字单；核销行增量语义天然支持
  * 部分退货（退 350 中的 200：红字单金额 200，原行 350 保持 NORMAL）。</p>
  *
- * <p>审批中状态推进（字典 return_approval_status）：提交 → SUPERVISOR_APPROVING →
- * FINANCE_APPROVING → MANAGER_APPROVING → 末节点通过 EXECUTING → 冲减完成 COMPLETED；
- * 驳回 REJECTED；撤销 CANCELLED。</p>
+ * <p>审批中状态推进（字典 approval_status）：提交 → 审批中 APPROVING（三级节点不再各立状态，
+ * 层级由 VO.currentNodeName 取自 Flowable 当前节点名表达）→ 审批通过 APPROVED；
+ * 驳回 REJECTED；撤销 CANCELLED。冲减执行进度走 executeStatus（return_execute_status）。</p>
  */
 @Slf4j
 @Service
@@ -102,17 +103,17 @@ public class ReturnServiceImpl implements ReturnService {
     private static final String ROLE_SALES_MANAGER = "ROLE_SALES_MANAGER";
 
     /**
-     * 可撤销的审批中间态（字典 return_approval_status 的三个推进态）。
-     * EXECUTING（末节点已通过、正在/已完成冲减）之后流程已终结，不可撤——与 cancel 的三道闸一致。
+     * 可撤销的审批中间态（字典 approval_status 的 APPROVING 推进态）。
+     * EXECUTING（执行中/已冲减）之后流程已终结，不可撤——与 cancel 的三道闸一致。
      */
     private static final Set<String> CANCELLABLE_STATES =
-            Set.of("SUPERVISOR_APPROVING", "FINANCE_APPROVING", "MANAGER_APPROVING");
+            Set.of("APPROVING");
 
     /** 退货单号前缀：TH-yyyyMMdd-NNN（与 SK-/FP-/YS-/PJ-/FH- 同范式） */
     private static final String RETURN_NO_PREFIX = "TH";
     private static final DateTimeFormatter RETURN_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    private static final String DICT_RETURN_APPROVAL = "return_approval_status";
+    private static final String DICT_RETURN_APPROVAL = "approval_status";
     private static final String DICT_RETURN_EXECUTE = "return_execute_status";
 
     private final ReturnOrderMapper returnOrderMapper;
@@ -254,7 +255,7 @@ public class ReturnServiceImpl implements ReturnService {
         String instanceId = engine.start(RETURN_PROCESS_CODE, String.valueOf(ro.getId()), vars);
         ro.setProcessInstanceId(instanceId);
         // 第一节点（主管）已激活 → 上级审批中
-        ro.setApprovalStatus("SUPERVISOR_APPROVING");
+        ro.setApprovalStatus("APPROVING");
         returnOrderMapper.updateById(ro);
         log.info("[return] 创建并发起三级审批 id={} no={} shipmentId={} amount={}",
                 ro.getId(), ro.getReturnNo(), shipment.getId(), amount);
@@ -301,7 +302,7 @@ public class ReturnServiceImpl implements ReturnService {
         }
         if (next.isEmpty()) {
             // 末节点（经理审批）通过 → 执行三冲减链
-            ro.setApprovalStatus("EXECUTING");
+            ro.setApprovalStatus("APPROVED");
             ro.setExecuteStatus("EXECUTING");
             ro.setUpdatedBy(currentUserId());
             returnOrderMapper.updateById(ro);
@@ -314,10 +315,10 @@ public class ReturnServiceImpl implements ReturnService {
             String status;
             String notifyRole;
             if ("node_2".equals(nodeId)) {
-                status = "FINANCE_APPROVING";
+                status = "APPROVING";
                 notifyRole = ROLE_FINANCE;
             } else if ("node_3".equals(nodeId)) {
-                status = "MANAGER_APPROVING";
+                status = "APPROVING";
                 notifyRole = ROLE_SALES_MANAGER;
             } else {
                 log.warn("[return] 未知下一节点 nodeId={} instanceId={}", nodeId, instanceId);
@@ -375,7 +376,7 @@ public class ReturnServiceImpl implements ReturnService {
             // 发货单未确认收货 → 无应收单可冲（理论不可达：退货仅 APPROVED 发货单可发起，
             // 而收货在发货审批之后；防御性处理：只置完成态，不建任何红字单）
             log.warn("[return] 冲减跳过：发货单无关联应收单 shipmentId={}", ro.getShipmentId());
-            ro.setApprovalStatus("COMPLETED");
+            ro.setApprovalStatus("APPROVED");
             ro.setExecuteStatus("COMPLETED");
             ro.setUpdatedBy(currentUserId());
             returnOrderMapper.updateById(ro);
@@ -419,7 +420,7 @@ public class ReturnServiceImpl implements ReturnService {
             List<Invoice> blueInvoices = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                     .eq(Invoice::getReceivableId, origin.getId())
                     .eq(Invoice::getDocDirection, "BLUE")
-                    .eq(Invoice::getInvoiceStatus, "ISSUED")
+                    .eq(Invoice::getApprovalStatus, "APPROVED")
                     .orderByAsc(Invoice::getId));
             for (Invoice blue : blueInvoices) {
                 if (invRemain.compareTo(BigDecimal.ZERO) <= 0) {
@@ -437,7 +438,7 @@ public class ReturnServiceImpl implements ReturnService {
                 redIv.setOriginalInvoiceId(blue.getId());
                 redIv.setReturnId(ro.getId());
                 redIv.setInvoiceType(blue.getInvoiceType());
-                redIv.setInvoiceStatus("ISSUED");        // 执行凭证：免再审，直接生效
+                redIv.setApprovalStatus("APPROVED");        // 执行凭证：免再审，直接生效
                 redIv.setInvoiceDate(LocalDate.now());
                 redIv.setCreatedBy(operatorId);
                 redIv.setInvoiceNo(generateInvoiceNo());
@@ -494,7 +495,8 @@ public class ReturnServiceImpl implements ReturnService {
             redRc.setOriginalReceiptId(originalReceiptId);
             redRc.setReturnId(ro.getId());
             redRc.setReceiptDate(LocalDate.now());
-            redRc.setApprovalStatus("RECEIVED");         // 执行凭证：三级审批已过，免再审
+            redRc.setReceiptStatus("RECEIVED");
+            redRc.setApprovalStatus("APPROVED");         // 执行凭证：三级审批已过，免再审
             redRc.setReceiptNo(generateReceiptNo());
             redRc.setCreatedBy(operatorId);
             receiptMapper.insert(redRc);
@@ -556,7 +558,7 @@ public class ReturnServiceImpl implements ReturnService {
         }
 
         // 冲减完成：状态推进 + ext 留执行说明（详情页展示）
-        ro.setApprovalStatus("COMPLETED");
+        ro.setApprovalStatus("APPROVED");   // V75：审批态用通用 approval_status，无 COMPLETED；完成度由 executeStatus 表达
         ro.setExecuteStatus("COMPLETED");
         ro.setUpdatedBy(operatorId);
         Map<String, Object> ext = ro.getExt();
@@ -721,6 +723,16 @@ public class ReturnServiceImpl implements ReturnService {
             vo.setApprovalStatusStyle(styleOf(approvalDict, ro.getApprovalStatus()));
             vo.setExecuteStatusName(labelOf(executeDict, ro.getExecuteStatus()));
             vo.setExecuteStatusStyle(styleOf(executeDict, ro.getExecuteStatus()));
+            // 审批中回填当前节点名（Flowable 当前活跃任务名），供列表「卡在第几级」展示
+            if ("APPROVING".equals(ro.getApprovalStatus()) && ro.getProcessInstanceId() != null) {
+                List<TaskInfo> tasks = engine.listTasks(ro.getProcessInstanceId());
+                if (tasks != null && !tasks.isEmpty()) {
+                    // V75：只有多节点流程才回填「当前节点名」（本流程三级审批，会回填）
+                    if (FlowNodeUtil.isMultiNode(processDefMapper, RETURN_PROCESS_CODE)) {
+                        vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                    }
+                }
+            }
         }
         IPage<ReturnVO> vp = new Page<>(p.getCurrent(), p.getSize(), p.getTotal());
         vp.setRecords(vos);
@@ -742,9 +754,8 @@ public class ReturnServiceImpl implements ReturnService {
         vo.setAppliedAt(ro.getAppliedAt());
         vo.setCreatedAt(ro.getCreatedAt());
         vo.setMyPendingTaskId(taskByBizKey.get(String.valueOf(ro.getId())));
-        // 可撤销 = 仍在三级审批中 ∧ 本人申请（后端 cancel 的三道闸仍是唯一权威，此字段仅控前端按钮显隐）。
-        // 注意：三级推进态是 SUPERVISOR_APPROVING/FINANCE_APPROVING/MANAGER_APPROVING
-        // （字典 return_approval_status），不存在笼统的 APPROVING；EXECUTING 起已进执行链不可撤。
+        // 可撤销 = 仍在审批中 ∧ 本人申请（后端 cancel 的三道闸仍是唯一权威，此字段仅控前端按钮显隐）。
+        // V75：三级节点态已统一为 APPROVING（层级看 VO.currentNodeName），执行链进度走 executeStatus。
         vo.setCanCancel(Boolean.TRUE.equals(
                 CANCELLABLE_STATES.contains(ro.getApprovalStatus())
                         && operatorId != null && operatorId.equals(ro.getApplicantId())));
@@ -781,6 +792,16 @@ public class ReturnServiceImpl implements ReturnService {
         Map<String, DictData> executeDict = dictMap(DICT_RETURN_EXECUTE);
         vo.setExecuteStatusName(labelOf(executeDict, ro.getExecuteStatus()));
         vo.setExecuteStatusStyle(styleOf(executeDict, ro.getExecuteStatus()));
+        // 审批中回填当前节点名（Flowable 当前活跃任务名）
+        if ("APPROVING".equals(ro.getApprovalStatus()) && ro.getProcessInstanceId() != null) {
+            List<TaskInfo> tasks = engine.listTasks(ro.getProcessInstanceId());
+            if (tasks != null && !tasks.isEmpty()) {
+                // V75：只有多节点流程才回填「当前节点名」（本流程三级审批，会回填）
+                if (FlowNodeUtil.isMultiNode(processDefMapper, RETURN_PROCESS_CODE)) {
+                    vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                }
+            }
+        }
     }
 
     private List<ReturnLineVO> lineVOs(Long returnId) {

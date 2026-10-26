@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.annotation.Auditable;
 import com.firestar.common.BatchLoader;
 import com.firestar.common.DataScopeHelper;
+import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.AllocationItem;
 import com.firestar.dto.AllocationVO;
 import com.firestar.dto.InvoiceRequest;
@@ -76,7 +77,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     /** 审批节点候选角色（开票员） */
     private static final String ROLE_INVOICER = "ROLE_INVOICER";
 
-    private static final String DICT_INVOICE_STATUS = "invoice_status";
+    private static final String DICT_INVOICE_STATUS = "approval_status";
     private static final String DICT_INVOICE_TYPE = "invoice_type";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
@@ -180,7 +181,7 @@ public class InvoiceServiceImpl implements InvoiceService {
             invoice.setOriginalInvoiceId(validateRedFlush(req, project).getId());
         }
         // 创建即草稿，待提交再拉审批
-        invoice.setInvoiceStatus("PENDING");
+        invoice.setApprovalStatus("DRAFT");
         // 归属人 = 当前用户（申请人）
         invoice.setApplicantId(operatorId);
         invoice.setClerkId(null);
@@ -201,15 +202,15 @@ public class InvoiceServiceImpl implements InvoiceService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     @Auditable(operationType = "UPDATE", targetType = "INVOICE", targetIdSpEl = "#id",
-            entityClass = Invoice.class, fields = {"invoiceStatus", "processInstanceId"})
+            entityClass = Invoice.class, fields = {"approvalStatus", "processInstanceId"})
     public void submit(Long id) {
         Invoice r = invoiceMapper.selectById(id);
         if (r == null) {
             throw new IllegalArgumentException("发票不存在：" + id);
         }
         // 草稿态 + 已驳回态可提交（2026-10-25 抄用友作业：驳回=回到编写中，可改后重提）
-        if (!"PENDING".equals(r.getInvoiceStatus()) && !"REJECTED".equals(r.getInvoiceStatus())) {
-            throw new IllegalArgumentException("仅草稿态或已驳回态可提交审批，当前：" + r.getInvoiceStatus());
+        if (!"DRAFT".equals(r.getApprovalStatus()) && !"REJECTED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可提交审批，当前：" + r.getApprovalStatus());
         }
         ProcessDef def = processDefMapper.selectOne(new LambdaQueryWrapper<ProcessDef>()
                 .eq(ProcessDef::getProcessCode, INVOICE_PROCESS_CODE)
@@ -222,7 +223,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         vars.put("applicantId", currentUserId());
         String instanceId = engine.start(INVOICE_PROCESS_CODE, String.valueOf(id), vars);
         r.setProcessInstanceId(instanceId);
-        r.setInvoiceStatus("ISSUING");
+        r.setApprovalStatus("APPROVING");
         invoiceMapper.updateById(r);
 
         log.info("[invoice] 提交发票审批 id={} instanceId={} applicant={}", id, instanceId, currentUsername());
@@ -248,8 +249,8 @@ public class InvoiceServiceImpl implements InvoiceService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发票不存在或无权操作：" + id);
         }
         // 草稿态 + 已驳回态可编辑（用友范式：驳回=回到编写中；ISSUING 在审批链中不可改）
-        if (!"PENDING".equals(r.getInvoiceStatus()) && !"REJECTED".equals(r.getInvoiceStatus())) {
-            throw new IllegalArgumentException("仅草稿态或已驳回态可编辑，当前：" + r.getInvoiceStatus());
+        if (!"DRAFT".equals(r.getApprovalStatus()) && !"REJECTED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅草稿态或已驳回态可编辑，当前：" + r.getApprovalStatus());
         }
         if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须为正");
@@ -285,7 +286,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     @Auditable(operationType = "UPDATE", targetType = "INVOICE", targetIdSpEl = "#id",
-            entityClass = Invoice.class, fields = {"invoiceStatus"})
+            entityClass = Invoice.class, fields = {"approvalStatus"})
     public void withdraw(Long id, String username, boolean isAdmin) {
         Invoice r = invoiceMapper.selectById(id);
         if (r == null) {
@@ -299,7 +300,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
         List<Long> approvedUserIds = engine.withdraw(r.getProcessInstanceId(), currentUsername(),
                 WorkflowEngineService.WITHDRAW_REASON_PREFIX + "发票申请，发票 id=" + id);
-        r.setInvoiceStatus("CANCELLED");
+        r.setApprovalStatus("CANCELLED");
         r.setUpdatedBy(currentUserId());
         invoiceMapper.updateById(r);
         // 分配明细硬删（V65）：withdraw 只可能发生在审批中（引擎挡已结束流程），
@@ -328,7 +329,7 @@ public class InvoiceServiceImpl implements InvoiceService {
             String bizKey = bizKeyUpfront != null ? bizKeyUpfront : engine.getBusinessKey(instanceId);
             Invoice r = (bizKey != null) ? invoiceMapper.selectById(Long.parseLong(bizKey)) : null;
             if (r != null) {
-                r.setInvoiceStatus("ISSUED");
+                r.setApprovalStatus("APPROVED");
                 // 开票员 = 当前操作人（审批通过人）
                 r.setClerkId(currentUserId());
                 r.setUpdatedBy(currentUserId());
@@ -368,7 +369,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (r.getProcessInstanceId() != null) {
             engine.terminate(r.getProcessInstanceId(), "发票申请被退回：" + comment);
         }
-        r.setInvoiceStatus("REJECTED");
+        r.setApprovalStatus("REJECTED");
         r.setUpdatedBy(currentUserId());
         invoiceMapper.updateById(r);
         log.info("[invoice] 审批驳回回写 id={} comment={}", r.getId(), comment);
@@ -393,7 +394,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                         new LambdaQueryWrapper<Invoice>()
                                 .eq(projectId != null, Invoice::getProjectId, projectId)
                                 .eq(receivableId != null, Invoice::getReceivableId, receivableId)
-                                .eq(statusEq != null, Invoice::getInvoiceStatus, statusEq)
+                                .eq(statusEq != null, Invoice::getApprovalStatus, statusEq)
                                 .orderByDesc(Invoice::getCreatedAt),
                         Invoice::getApplicantId, me));
         Map<String, DictData> statusDict = dictMap(DICT_INVOICE_STATUS);
@@ -483,8 +484,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (original == null) {
             throw new IllegalArgumentException("原发票不存在：" + req.getOriginalInvoiceId());
         }
-        if (!"ISSUED".equals(original.getInvoiceStatus())) {
-            throw new IllegalArgumentException("仅已完成开票（审批通过）的发票可红冲，原单当前状态：" + original.getInvoiceStatus());
+        if (!"APPROVED".equals(original.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅已完成开票（审批通过）的发票可红冲，原单当前状态：" + original.getApprovalStatus());
         }
         if (!Objects.equals(original.getProjectId(), project.getId())) {
             throw new IllegalArgumentException("红冲单必须与原单同项目，请新建");
@@ -575,7 +576,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
         List<Invoice> inFlight = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                 .in(Invoice::getId, otherInvoiceIds)
-                .eq(Invoice::getInvoiceStatus, "ISSUING"));
+                .eq(Invoice::getApprovalStatus, "APPROVING"));
         Set<Long> inFlightIds = inFlight.stream().map(Invoice::getId).collect(Collectors.toSet());
         return rows.stream()
                 .filter(a -> inFlightIds.contains(a.getInvoiceId()))
@@ -668,10 +669,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         vo.setDocDirectionName(doc != null ? doc.getDictLabel() : null);
         vo.setInvoiceDate(r.getInvoiceDate());
         vo.setInvoiceFilePath(r.getInvoiceFilePath());
-        vo.setInvoiceStatus(r.getInvoiceStatus());
-        DictData st = statusDict.get(r.getInvoiceStatus());
-        vo.setInvoiceStatusName(st != null ? st.getDictLabel() : null);
-        vo.setInvoiceStatusStyle(st != null ? st.getStyle() : null);
+        vo.setApprovalStatus(r.getApprovalStatus());
+        DictData st = statusDict.get(r.getApprovalStatus());
+        vo.setApprovalStatusName(st != null ? st.getDictLabel() : null);
+        vo.setApprovalStatusStyle(st != null ? st.getStyle() : null);
         vo.setProcessInstanceId(r.getProcessInstanceId());
         vo.setApplicantId(r.getApplicantId());
         vo.setApplicantName(r.getApplicantId() != null ? userNames.get(r.getApplicantId()) : null);
@@ -688,10 +689,15 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (rec != null) {
             vo.setReceivableNo(rec.getReceivableNo());
         }
-        if (r.getProcessInstanceId() != null && "ISSUING".equals(r.getInvoiceStatus())) {
+        if (r.getProcessInstanceId() != null && "APPROVING".equals(r.getApprovalStatus())) {
             List<TaskInfo> tasks = engine.listTasks(r.getProcessInstanceId());
             if (tasks != null && !tasks.isEmpty()) {
                 vo.setMyPendingTaskId(tasks.get(0).getTaskId());
+                // V75：只有多节点流程才回填「当前节点名」——单节点流程（发货/收款/发票）
+                // 没有「第几级」概念，回填的 taskName 恒等于流程名，纯噪音
+                if (FlowNodeUtil.isMultiNode(processDefMapper, INVOICE_PROCESS_CODE)) {
+                    vo.setCurrentNodeName(tasks.get(0).getTaskName());
+                }
             }
         }
         return vo;

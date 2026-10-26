@@ -11,7 +11,7 @@ import java.util.Map;
 /**
  * 发票（开票）业务逻辑。
  *
- * <p>状态机（字典 invoice_status）：PENDING（草稿）→ APPROVING（提交审批）→
+ * <p>状态机（字典 approval_status）：PENDING（草稿）→ APPROVING（提交审批）→
  * ISSUED（审批通过终态，开票员=当前用户）/ REJECTED（驳回终态）。审批通过终态时累加
  * fin_project.invoiced_amount。</p>
  *

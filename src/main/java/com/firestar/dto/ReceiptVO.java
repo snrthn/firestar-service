@@ -79,7 +79,7 @@ public class ReceiptVO {
      */
     private List<Long> attachmentFileIds;
 
-    /** 审批状态（字典 receipt_status：PENDING_APPROVAL/APPROVING/RECEIVED/REJECTED） */
+    /** 审批状态（字典 approval_status：PENDING_APPROVAL/APPROVING/REJECTED/APPROVED/CANCELLED） */
     private String approvalStatus;
 
     /** 审批状态中文名 */
@@ -87,6 +87,15 @@ public class ReceiptVO {
 
     /** 审批状态标签色 */
     private String approvalStatusStyle;
+
+    /** 收款业务状态（字典 receipt_business_status：RECEIVED 已收款；审批通过后为已收款） */
+    private String receiptStatus;
+
+    /** 收款业务状态中文名 */
+    private String receiptStatusName;
+
+    /** 收款业务状态标签色 */
+    private String receiptStatusStyle;
 
     /** Flowable 流程实例 ID（提交审批后非空） */
     private String processInstanceId;
@@ -98,6 +107,9 @@ public class ReceiptVO {
     private String applicantName;
 
     private LocalDateTime createdAt;
+
+    /** 当前审批节点名（审批中时由 Flowable 当前活跃任务名填充；非审批中为空） */
+    private String currentNodeName;
 
     /** 当前登录用户在流程实例上的待办任务 ID（详情页据此直接通过/驳回；无则 null） */
     private String myPendingTaskId;
