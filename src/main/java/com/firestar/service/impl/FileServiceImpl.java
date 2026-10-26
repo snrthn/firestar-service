@@ -188,10 +188,13 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
-    public IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, String fileType, String keyword) {
-        // 行级数据隔离（2026-10-24 虎哥）：非 ROLE_ADMIN 只看自己上传的文件（uploaderId = 自己）。
-        // 注意这里隔离的是「文件管理」列表页；业务单据里按 fileId 直取附件不受影响——
-        // 审批人仍能在发货详情里看到别人传的签收证据，只是不会出现在自己的文件管理列表。
+    public IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, Long bizId, String fileType, String keyword) {
+        // 数据隔离分流（2026-10-24 虎哥原意，本次修正实现）：
+        // - 业务上下文（带 bizType，如审批详情拉某单附件）：附件归属业务单据、随单据可见性走，
+        //   不按上传人隔离，否则审批人看不到别人传的附件（银行回单/签收证据等）。
+        // - 文件管理「我的文件」浏览（无 bizType）：仅看自己上传的（uploaderId = 自己）。
+        // 类级 file:view 门禁已移除（业务页读附件不应被文件模块权限卡住），读接口对登录用户开放；
+        // 写操作（上传/删除/改名）仍由方法级 file:manage 收口。
         Long me = DataScopeHelper.currentUserId(userMapper);
         if (DataScopeHelper.denyAll(me)) {
             return page(pageNum, pageSize);
@@ -200,12 +203,18 @@ public class FileServiceImpl implements FileService {
         // 已删除的不进列表（sys_ 表不带逻辑删除，靠 status 停用）
         wrapper.eq(FileStorage::getStatus, STATUS_NORMAL);
         wrapper.eq(StringUtils.hasText(bizType), FileStorage::getBizType, bizType);
+        wrapper.eq(bizId != null, FileStorage::getBizId, bizId);
         wrapper.eq(StringUtils.hasText(fileType), FileStorage::getFileType, fileType);
         wrapper.and(StringUtils.hasText(keyword), w -> w
                 .like(FileStorage::getOriginalName, keyword)
                 .or().like(FileStorage::getFileName, keyword));
         wrapper.orderByDesc(FileStorage::getCreatedAt);
-        DataScopeHelper.own(wrapper, FileStorage::getUploaderId, me);
+
+        boolean businessContext = StringUtils.hasText(bizType);
+        if (!businessContext) {
+            // 仅「我的文件」浏览按上传人隔离；业务上下文放行（随单据可见性）
+            DataScopeHelper.own(wrapper, FileStorage::getUploaderId, me);
+        }
 
         IPage<FileStorage> page = fileMapper.selectPage(page(pageNum, pageSize), wrapper);
         Map<Long, String> names = uploaderNames(page.getRecords());

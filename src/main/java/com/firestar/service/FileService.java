@@ -27,8 +27,20 @@ public interface FileService {
      */
     FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType, String alias);
 
-    /** 文件分页列表（默认只含 NORMAL，已删除的不出现在列表中）。 */
-    IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, String fileType, String keyword);
+    /**
+     * 文件分页列表（默认只含 NORMAL，已删除的不出现在列表中）。
+     *
+     * <p><b>数据隔离分流（2026-10-26 修正）</b>：
+     * <ul>
+     *   <li>带 {@code bizType}（业务上下文，如审批详情拉某单附件）→ 附件归属业务单据、随单据可见性走，
+     *       不按上传人隔离，否则审批人看不到别人传的附件（银行回单/签收证据等）；</li>
+     *   <li>不带 {@code bizType}（文件管理「我的文件」浏览）→ 仅看自己上传的（uploaderId = 自己）。</li>
+     * </ul>
+     * 读接口类级 file:view 已移除，业务页展示附件不再被文件模块权限卡住；写操作仍由 file:manage 收口。
+     *
+     * @param bizId 业务 ID（bizType 非空时建议传入，后端按它精确过滤，避免返回同类型全部附件）
+     */
+    IPage<FileVO> list(Integer pageNum, Integer pageSize, String bizType, Long bizId, String fileType, String keyword);
 
     /** 文件详情（不返回内容，只返回元信息）。 */
     FileVO detail(Long id);

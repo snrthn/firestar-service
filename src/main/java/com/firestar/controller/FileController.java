@@ -32,7 +32,6 @@ import org.springframework.web.multipart.MultipartFile;
  * 仅本地存储模式（dev）没有签名能力，才走 /{id}/raw 由后端代理输出。
  */
 @RestController
-@RequirePerm("file:view")
 @RequestMapping("/files")
 public class FileController {
 
@@ -58,9 +57,10 @@ public class FileController {
     public Result<IPage<FileVO>> list(@RequestParam(defaultValue = "1") Integer pageNum,
                                       @RequestParam(defaultValue = "10") Integer pageSize,
                                       @RequestParam(required = false) String bizType,
+                                      @RequestParam(required = false) Long bizId,
                                       @RequestParam(required = false) String fileType,
                                       @RequestParam(required = false) String keyword) {
-        return Result.success(fileService.list(pageNum, pageSize, bizType, fileType, keyword));
+        return Result.success(fileService.list(pageNum, pageSize, bizType, bizId, fileType, keyword));
     }
 
     /** 获取文件信息（不返回内容）。 */
@@ -113,8 +113,9 @@ public class FileController {
         return Result.success(fileService.downloadLogs(id, pageNum, pageSize, keyword));
     }
 
-    /** 下载记录全量分页（供「下载记录」菜单独立查询，不按文件过滤）。 */
+    /** 下载记录全量分页（供「下载记录」菜单独立查询，不按文件过滤；全局审计视图，保留 file:view 门禁）。 */
     @GetMapping("/download-logs")
+    @RequirePerm("file:view")
     public Result<IPage<FileDownloadLogVO>> allDownloadLogs(@RequestParam(defaultValue = "1") Integer pageNum,
                                                             @RequestParam(defaultValue = "10") Integer pageSize,
                                                             @RequestParam(required = false) String keyword) {
