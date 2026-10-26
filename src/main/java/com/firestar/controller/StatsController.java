@@ -8,6 +8,7 @@ import com.firestar.dto.InvoiceSummaryVO;
 import com.firestar.dto.OverviewVO;
 import com.firestar.dto.ProjectRankingVO;
 import com.firestar.dto.StatsQuery;
+import com.firestar.dto.AgeingVO;
 import com.firestar.service.StatsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -57,5 +58,11 @@ public class StatsController {
     @PostMapping("/fulfillment")
     public Result<FulfillmentVO> fulfillment(@RequestBody(required = false) StatsQuery q) {
         return Result.success(statsService.fulfillment(q == null ? new StatsQuery() : q));
+    }
+
+    /** Tab② L2 账龄与周转（FIFO） */
+    @PostMapping("/ageing")
+    public Result<AgeingVO> ageing(@RequestBody(required = false) StatsQuery q) {
+        return Result.success(statsService.ageing(q == null ? new StatsQuery() : q));
     }
 }

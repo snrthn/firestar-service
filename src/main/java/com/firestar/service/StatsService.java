@@ -6,9 +6,10 @@ import com.firestar.dto.InvoiceSummaryVO;
 import com.firestar.dto.OverviewVO;
 import com.firestar.dto.ProjectRankingVO;
 import com.firestar.dto.StatsQuery;
+import com.firestar.dto.AgeingVO;
 
 /**
- * 看板只读统计层（L1）。
+ * 看板只读统计层（L1 + L2）。
  *
  * <p>约定：
  * <ul>
@@ -36,4 +37,7 @@ public interface StatsService {
 
     /** Tab⑤ 履约与风控（非 Flowable 指标） */
     FulfillmentVO fulfillment(StatsQuery q);
+
+    /** Tab② L2 账龄与周转（FIFO 账龄五段 / DSO / 年化周转率 / 平均逾期天数） */
+    AgeingVO ageing(StatsQuery q);
 }

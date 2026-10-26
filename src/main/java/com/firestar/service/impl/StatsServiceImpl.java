@@ -43,6 +43,14 @@ import java.util.stream.Collectors;
 
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 
+import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.Set;
+
+import com.firestar.dto.AgeingVO;
+import com.firestar.dto.AgeingSegmentVO;
+
 /**
  * 看板只读统计层实现（L1）。
  *
@@ -564,6 +572,152 @@ public class StatsServiceImpl implements StatsService {
         }
         v.setRedRate(rate(red, blue));
         return v;
+    }
+
+    // ===================== L2 账龄（FIFO） =====================
+
+    @Override
+    public AgeingVO ageing(StatsQuery q) {
+        AgeingVO v = new AgeingVO();
+        v.setMethod("FIFO");
+        List<Long> pids = resolveProjectIds(q);
+        LocalDate[] p = periodDates(q);
+        if (pids != null && pids.isEmpty()) {
+            v.setSegments(emptySegments());
+            return v;
+        }
+
+        // 1) 应收队列：有效应收单（蓝-红 effective），按 receivable_date 升序（FIFO 队头=最老）
+        List<Receivable> queue = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
+                .select(Receivable::getId, Receivable::getProjectId, Receivable::getReceivableAmount,
+                        Receivable::getDocDirection, Receivable::getReceivableDate))
+                .stream()
+                .filter(r -> pids == null || pids.contains(r.getProjectId()))
+                .filter(r -> r.getReceivableDate() != null)
+                .sorted(Comparator.comparing(Receivable::getReceivableDate).thenComparing(Receivable::getId))
+                .collect(Collectors.toList());
+        Set<Long> queueIds = queue.stream().map(Receivable::getId).collect(Collectors.toSet());
+
+        // 2) 回款流水：NORMAL 核销，排除退款类收款（REFUND 反向核销），按 write_off_date 升序
+        //    仅保留"挂在本主体应收"上的核销 → 主体级精确 FIFO（解决 L1 公司级近似）。
+        List<WriteOff> wos = writeOffMapper.selectList(new LambdaQueryWrapper<WriteOff>()
+                .select(WriteOff::getId, WriteOff::getReceivableId, WriteOff::getReceiptId,
+                        WriteOff::getAmount, WriteOff::getWriteOffDate)
+                .eq(WriteOff::getStatus, "NORMAL"));
+        Set<Long> refundReceiptIds = new java.util.HashSet<>();
+        Set<Long> usedReceiptIds = wos.stream().map(WriteOff::getReceiptId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (!usedReceiptIds.isEmpty()) {
+            List<Receipt> receipts = receiptMapper.selectBatchIds(usedReceiptIds);
+            for (Receipt rc : receipts) {
+                if ("REFUND".equals(rc.getReceiptType())) refundReceiptIds.add(rc.getId());
+            }
+        }
+        List<BigDecimal> cashflow = wos.stream()
+                .filter(wo -> wo.getReceivableId() != null && queueIds.contains(wo.getReceivableId()))
+                .filter(wo -> wo.getReceiptId() == null || !refundReceiptIds.contains(wo.getReceiptId()))
+                .filter(wo -> wo.getWriteOffDate() != null)
+                .sorted(Comparator.comparing(WriteOff::getWriteOffDate).thenComparing(WriteOff::getId))
+                .map(wo -> nz(wo.getAmount()))
+                .collect(Collectors.toList());
+
+        // 3) FIFO 冲抵：回款依次吃掉最老应收的 effective
+        BigDecimal[] consumed = new BigDecimal[queue.size()];
+        Arrays.fill(consumed, BigDecimal.ZERO);
+        int qi = 0;
+        for (BigDecimal cf : cashflow) {
+            BigDecimal remaining = cf;
+            while (remaining.compareTo(BigDecimal.ZERO) > 0 && qi < queue.size()) {
+                Receivable item = queue.get(qi);
+                BigDecimal eff = signed(item.getReceivableAmount(), item.getDocDirection());
+                if (eff.compareTo(BigDecimal.ZERO) <= 0) { qi++; continue; } // 红冲/空单不参与冲抵
+                BigDecimal left = eff.subtract(consumed[qi]);
+                if (left.compareTo(BigDecimal.ZERO) <= 0) { qi++; continue; }
+                BigDecimal take = left.min(remaining);
+                consumed[qi] = consumed[qi].add(take);
+                remaining = remaining.subtract(take);
+                if (consumed[qi].compareTo(eff) >= 0) qi++;
+            }
+        }
+
+        // 4) 落账龄五段 + 逾期 / ADD 派生
+        LocalDate today = LocalDate.now();
+        BigDecimal[] seg = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        BigDecimal totalUnrec = BigDecimal.ZERO;
+        BigDecimal overdueAmt = BigDecimal.ZERO;
+        BigDecimal addWeight = BigDecimal.ZERO;
+        BigDecimal addBase = BigDecimal.ZERO;
+        int overdueCnt = 0;
+        for (int i = 0; i < queue.size(); i++) {
+            Receivable item = queue.get(i);
+            BigDecimal eff = signed(item.getReceivableAmount(), item.getDocDirection());
+            BigDecimal rem = eff.subtract(consumed[i]);
+            if (rem.compareTo(BigDecimal.ZERO) <= 0) continue; // 已结清 / 红冲负余额
+            totalUnrec = totalUnrec.add(rem);
+            long age = ChronoUnit.DAYS.between(item.getReceivableDate(), today);
+            int bucket;
+            if (age <= 0) bucket = 0;
+            else if (age <= 30) bucket = 1;
+            else if (age <= 60) bucket = 2;
+            else if (age <= 90) bucket = 3;
+            else bucket = 4;
+            seg[bucket] = seg[bucket].add(rem);
+            if (age > 0) {
+                overdueAmt = overdueAmt.add(rem);
+                overdueCnt++;
+                addWeight = addWeight.add(rem.multiply(BigDecimal.valueOf(age)));
+                addBase = addBase.add(rem);
+            }
+        }
+        String[] labels = {"未到期", "0-30天", "31-60天", "61-90天", "90天以上"};
+        List<AgeingSegmentVO> segments = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            AgeingSegmentVO s = new AgeingSegmentVO();
+            s.setLabel(labels[i]);
+            s.setAmount(seg[i]);
+            s.setRatio(rate(seg[i], totalUnrec));
+            segments.add(s);
+        }
+        v.setSegments(segments);
+        v.setTotalUnreceived(totalUnrec);
+        v.setOverdueAmount(overdueAmt);
+        v.setOverdueCount(overdueCnt);
+        v.setOverdueRate(rate(overdueAmt, totalUnrec));
+        v.setAdd(addBase.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                : addWeight.divide(addBase, 2, RoundingMode.HALF_UP));
+
+        // DSO（D-03）/ 年化周转率（D-04）：期间窗口天数 × 余额 ÷ 期内应收发生额
+        int days = (p[0] != null && p[1] != null) ? (int) (ChronoUnit.DAYS.between(p[0], p[1]) + 1) : 365;
+        BigDecimal recvOccurred = BigDecimal.ZERO;
+        {
+            LambdaQueryWrapper<Receivable> w = new LambdaQueryWrapper<Receivable>()
+                    .select(Receivable::getReceivableAmount, Receivable::getDocDirection);
+            inProject(w, Receivable::getProjectId, pids);
+            betweenDate(w, Receivable::getReceivableDate, p);
+            for (Receivable r : receivableMapper.selectList(w)) {
+                recvOccurred = recvOccurred.add(signed(r.getReceivableAmount(), r.getDocDirection()));
+            }
+        }
+        BigDecimal dso = recvOccurred.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                : totalUnrec.multiply(BigDecimal.valueOf(days)).divide(recvOccurred, 4, RoundingMode.HALF_UP);
+        v.setDso(dso);
+        v.setTurnover(dso.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                : BigDecimal.valueOf(365).divide(dso, 2, RoundingMode.HALF_UP));
+        return v;
+    }
+
+    /** 空账龄五段（无匹配主体时返回） */
+    private List<AgeingSegmentVO> emptySegments() {
+        String[] labels = {"未到期", "0-30天", "31-60天", "61-90天", "90天以上"};
+        List<AgeingSegmentVO> segs = new ArrayList<>();
+        for (String l : labels) {
+            AgeingSegmentVO s = new AgeingSegmentVO();
+            s.setLabel(l);
+            s.setAmount(BigDecimal.ZERO);
+            s.setRatio(BigDecimal.ZERO);
+            segs.add(s);
+        }
+        return segs;
     }
 
     // ===================== 辅助 =====================
