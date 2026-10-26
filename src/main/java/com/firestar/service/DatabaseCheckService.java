@@ -278,6 +278,11 @@ public class DatabaseCheckService {
          * V70（core_business_status_styles）仅为字典项 `style` 列配色，纯 UPDATE、
          *   无任何 INSERT/DELETE/CREATE，**不新增/不删除任何行**，故所有计数常量均不变
          *   （dictTypeCount 保持 33、dictDataCount 保持 144；config/role 等亦不变）。
+         * V73（发货审批状态字典 shipment_approval_status）新增 1 个字典类型与 6 个字典项
+         *   （DRAFT/PENDING_APPROVAL/APPROVING/REJECTED/APPROVED/CANCELLED，镜像 project_approval_status），
+         *   → dictTypeCount 33→34、dictDataCount 144→150（已用真实库对账：实际 34/150）。
+         * V74（shipment_approval_status 状态归一）仅为 status 中文'启用'→'ENABLED' 的纯 UPDATE，
+         *   无任何 INSERT/DELETE，计数不变（dictTypeCount 保持 34、dictDataCount 保持 150）。
          *   此类「只改已有行属性」的迁移无需同步本段常量，仅当计数基线与实际不符时排查。
          *    ⚠️ 计数口径提示：本类按「实际行数」校验，而 V67 迁移注释曾按「INSERT 语句数」
          *       记 +3——凡迁移里出现 ON DUPLICATE KEY UPDATE，行数增量 ≠ 语句行数，
@@ -288,8 +293,8 @@ public class DatabaseCheckService {
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 33, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 144, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 34, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 150, errors));
         result.put("configCount", countOf(conn, "sys_config", 13, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));

@@ -12,8 +12,8 @@
 
 在 `DatabaseCheckService` 里（不同步会让 `/system/db-check` 报警）：
 
-1. `readSeedData()` → `dictTypeCount` / `dictDataCount`（当前 **31 / 122**）
-2. `EXPECTED_TABLE_COUNT`（当前 **36**，仅新增表时才动）
+1. `readSeedData()` → `dictTypeCount` / `dictDataCount`（当前 **34 / 150**）
+2. `EXPECTED_TABLE_COUNT`（当前 **41**，仅新增表时才动）
 
 账目（每次改字典都往下记一笔）：
 
@@ -23,6 +23,11 @@
 | V32 | feedback_status（+1 类型 / +4 项） | 29 | 110 |
 | V34 | feedback_category（+1 类型 / +7 项） | 30 | 117 |
 | V35 | help_category（+1 类型 / +5 项） | **31** | **122** |
+| V73 | shipment_approval_status（+1 类型 / +6 项，镜像 project_approval_status） | 34 | 150 |
+| V74 | shipment_approval_status 状态归一（纯 UPDATE，无计数变化） | 34 | 150 |
+
+> V38–V72 各次字典计数变更（V38/V50/V54/V56/V59/V62/V63/V64/V67/V69/V70 等）见
+> `DatabaseCheckService.readSeedData` 的注释流水账；本表仅列首尾与最新，避免重复维护。
 
 历史误报：V19 / V20 / V22 各一次，V32+V34+V35 于 2026-10-21 一次性暴露
 （报「应为 28 实际 31」，旧文案甩锅「V2 未完整执行」，排查被带偏 —— 文案已修）。
