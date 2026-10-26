@@ -42,6 +42,9 @@ public interface ShipmentService {
      */
     void withdraw(Long shipmentId);
 
+    /** 提交审批（详情面板触发；仅草稿/驳回可提，起流程 + 置 APPROVING） */
+    void submit(Long id, String username, boolean isAdmin);
+
     /**
      * 编辑发货申请（2026-10-23 虎哥：发货单需要编辑入口）。
      * 仅 PENDING 可编辑，项目不可更换；先退还旧明细占用额度再按新明细重新校验占用，

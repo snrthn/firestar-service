@@ -87,6 +87,14 @@ public class ShipmentController {
         return Result.success();
     }
 
+    /** 提交审批（详情面板触发；仅草稿/驳回可提，起流程 + 置 APPROVING） */
+    @PostMapping("/{id}/submit")
+    public Result<Void> submit(@PathVariable Long id) {
+        shipmentService.submit(id,
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
+        return Result.success();
+    }
+
     /** 标记已发货（审批通过后；shippedById = 当前操作人，决策#2 澄清发货人=操作人自身） */
     @PostMapping("/{id}/ship")
     public Result<Void> markShipped(@PathVariable Long id) {

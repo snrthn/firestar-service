@@ -81,6 +81,7 @@ public class ShipmentServiceImpl implements ShipmentService {
     private static final String DICT_RECEIVABLE_STATUS = "receivable_status";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
     private static final String DICT_RECEIVABLE_SOURCE = "receivable_source";
+    private static final String DICT_SHIPMENT_APPROVAL_STATUS = "shipment_approval_status";
     private static final String ROLE_SALES_MANAGER = "ROLE_SALES_MANAGER";
 
     private final ShipmentMapper shipmentMapper;
@@ -124,7 +125,7 @@ public class ShipmentServiceImpl implements ShipmentService {
         this.customerMapper = customerMapper;
     }
 
-    // ===================== 创建 + 发起审批（决策#1） =====================
+    // ===================== 创建（仅落草稿；审批由详情面板 submit 触发） =====================
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -154,6 +155,9 @@ public class ShipmentServiceImpl implements ShipmentService {
         shipment.setReceivedAmount(BigDecimal.ZERO);
         shipment.setReturnedAmount(BigDecimal.ZERO);
         shipment.setShipmentStatus("PENDING");
+        // 草稿态：审批由详情面板「提交审批」触发（2026-10-26 虎哥：不再新建即发审批，
+        // 否则会出现「有编辑入口的同时审批流已发出」的不合规流程）
+        shipment.setApprovalStatus("DRAFT");
         shipment.setApplicantId(operatorId);
         shipment.setCreatedBy(operatorId);
         shipmentMapper.insert(shipment);
@@ -177,21 +181,42 @@ public class ShipmentServiceImpl implements ShipmentService {
         for (Item item : toUpdateItems) {
             itemMapper.updateById(item);
         }
-        // 拉审批（决策#1）：一步 ROLE_SALES_MANAGER 节点
+        // 草稿态创建完成（审批流程在 submit() 中由详情面板触发）
+        log.info("[shipment] 创建草稿 id={} batchNo={} projectId={} amount={}",
+                shipment.getId(), batchNo, project.getId(), newAmount);
+        return shipment.getId();
+    }
+
+    // ===================== 提交审批（详情面板触发；仅草稿/驳回可提） =====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void submit(Long id, String username, boolean isAdmin) {
+        Long operatorId = currentUserId();
+        Shipment s = shipmentMapper.selectById(id);
+        if (s == null) {
+            throw new IllegalArgumentException("发货单不存在：" + id);
+        }
+        // 归属校验（与 update/withdraw 同口径）：仅申请人本人或 ROLE_ADMIN
+        if (!isAdmin && !Objects.equals(s.getApplicantId(), operatorId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权操作：" + id);
+        }
+        // 仅草稿 / 驳回可提交审批（与立项 submit 同口径；APPROVING/APPROVED/CANCELLED 不可重提）
+        if (!("DRAFT".equals(s.getApprovalStatus()) || "REJECTED".equals(s.getApprovalStatus()))) {
+            throw new IllegalArgumentException("仅草稿或驳回状态可提交审批，当前：" + s.getApprovalStatus());
+        }
+        // 草稿即占用货物额度（create/update 已占用），此处仅起流程，不再重复占用
+        Project project = projectMapper.selectById(s.getProjectId());
         Map<String, Object> vars = new HashMap<>();
         vars.put("applicantUsername", currentUsername());
         vars.put("applicantId", operatorId);
-        String instanceId = engine.start(SHIPMENT_PROCESS_CODE, String.valueOf(shipment.getId()), vars);
-        shipment.setProcessInstanceId(instanceId);
-        // 创建即提交审批 → 审批中（2026-10-24 虎哥：需明确信号供前端区分「审批中」与「已通过待发货」）
-        shipment.setApprovalStatus("APPROVING");
-        shipmentMapper.updateById(shipment);
-
-        log.info("[shipment] 创建并发起审批 id={} batchNo={} projectId={} amount={}",
-                shipment.getId(), batchNo, project.getId(), newAmount);
-        // 提交时通知所有销售经理（决策#2）
-        notifySubmitted(project, shipment.getId(), operatorId);
-        return shipment.getId();
+        String instanceId = engine.start(SHIPMENT_PROCESS_CODE, String.valueOf(s.getId()), vars);
+        s.setProcessInstanceId(instanceId);
+        s.setApprovalStatus("APPROVING");
+        s.setUpdatedBy(operatorId);
+        shipmentMapper.updateById(s);
+        log.info("[shipment] 提交审批 id={} batchNo={} instanceId={}", s.getId(), s.getBatchNo(), instanceId);
+        notifySubmitted(project, s.getId(), operatorId);
     }
 
     /**
@@ -279,11 +304,12 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (!isAdmin && !Objects.equals(s.getApplicantId(), operatorId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "发货单不存在或无权操作：" + id);
         }
-        // 仅 PENDING（待发货）可编辑：此状态下未产生实际出入库与应收，改内容不牵动下游；
-        // 已发货/已收货/已驳回/已撤销的单据改内容会与库存、应收、审批结论冲突。
+        // 仅「草稿 / 驳回」可编辑：审批未进入终态时改内容不牵动下游（不占实际出入库/应收）；
+        // 审批中(APPROVING)/已通过(APPROVED)/已撤销(CANCELLED) 改内容会与审批结论、库存、应收冲突。
         // 项目不允许更换（换项目等于换合同，应新建）。
-        if (!"PENDING".equals(s.getShipmentStatus())) {
-            throw new IllegalArgumentException("仅待发货状态可编辑，当前：" + s.getShipmentStatus());
+        // （虎哥 2026-10-26：原按 shipmentStatus==PENDING 判定会放行审批中单；改为按审批态锁定）
+        if (!("DRAFT".equals(s.getApprovalStatus()) || "REJECTED".equals(s.getApprovalStatus()))) {
+            throw new IllegalArgumentException("仅草稿或驳回状态可编辑，当前审批状态：" + s.getApprovalStatus());
         }
         if (req.getProjectId() == null) {
             throw new IllegalArgumentException("项目不能为空");
@@ -644,6 +670,9 @@ public class ShipmentServiceImpl implements ShipmentService {
         vo.setReceivableId(s.getReceivableId());
         vo.setProcessInstanceId(s.getProcessInstanceId());
         vo.setApprovalStatus(s.getApprovalStatus());
+        DictData appr = dicts.shipmentApprovalStatus.get(s.getApprovalStatus());
+        vo.setApprovalStatusName(appr != null ? appr.getDictLabel() : null);
+        vo.setApprovalStatusStyle(appr != null ? appr.getStyle() : null);
         vo.setApplicantId(s.getApplicantId());
         vo.setApplicantName(s.getApplicantId() != null ? userNames.get(s.getApplicantId()) : null);
         vo.setShippedById(s.getShippedById());
@@ -750,7 +779,8 @@ public class ShipmentServiceImpl implements ShipmentService {
     private DictMaps dictMaps() {
         return new DictMaps(
                 dictMap(DICT_SHIPMENT_STATUS), dictMap(DICT_SHIPMENT_LINE_STATUS),
-                dictMap(DICT_RECEIVABLE_STATUS), dictMap(DICT_DOC_DIRECTION), dictMap(DICT_RECEIVABLE_SOURCE));
+                dictMap(DICT_RECEIVABLE_STATUS), dictMap(DICT_DOC_DIRECTION), dictMap(DICT_RECEIVABLE_SOURCE),
+                dictMap(DICT_SHIPMENT_APPROVAL_STATUS));
     }
 
     private Map<String, DictData> dictMap(String typeCode) {
@@ -869,15 +899,17 @@ public class ShipmentServiceImpl implements ShipmentService {
         final Map<String, DictData> receivableStatus;
         final Map<String, DictData> docDirection;
         final Map<String, DictData> receivableSource;
+        final Map<String, DictData> shipmentApprovalStatus;
 
         DictMaps(Map<String, DictData> shipmentStatus, Map<String, DictData> shipmentLineStatus,
                  Map<String, DictData> receivableStatus, Map<String, DictData> docDirection,
-                 Map<String, DictData> receivableSource) {
+                 Map<String, DictData> receivableSource, Map<String, DictData> shipmentApprovalStatus) {
             this.shipmentStatus = shipmentStatus;
             this.shipmentLineStatus = shipmentLineStatus;
             this.receivableStatus = receivableStatus;
             this.docDirection = docDirection;
             this.receivableSource = receivableSource;
+            this.shipmentApprovalStatus = shipmentApprovalStatus;
         }
     }
 }
