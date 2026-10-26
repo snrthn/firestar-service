@@ -432,7 +432,9 @@ public class StatsServiceImpl implements StatsService {
 
         LambdaQueryWrapper<Project> pw = new LambdaQueryWrapper<Project>()
                 .select(Project::getId, Project::getProjectNo, Project::getProjectName,
-                        Project::getCustomerName, Project::getSalesManagerId, Project::getContractAmount);
+                        Project::getCustomerName, Project::getSalesManagerId, Project::getContractAmount)
+                // 拍板：Tab④ 仅排「已签合同」(APPROVED)，与 F-01 合同签约额口径对齐
+                .eq(Project::getApprovalStatus, "APPROVED");
         if (q.getCustomerId() != null) pw.eq(Project::getCustomerId, q.getCustomerId());
         if (q.getManagerId() != null) pw.eq(Project::getSalesManagerId, q.getManagerId());
         inProject(pw, Project::getId, pids);
