@@ -161,6 +161,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须为正");
         }
+        if (req.getInvoiceDate() == null) {
+            throw new IllegalArgumentException("开票日期不能为空");
+        }
 
         Invoice invoice = new Invoice();
         invoice.setProjectId(project.getId());
@@ -168,7 +171,16 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setInvoiceAmount(req.getInvoiceAmount());
         invoice.setTaxRate(req.getTaxRate());
         invoice.setTaxAmount(req.getTaxAmount());
-        invoice.setInvoiceNo(req.getInvoiceNo());
+        // 业务单号：未手填时系统自动生成 FP-yyyyMMdd-NNN（MAX+1 含逻辑删除占位，不复用已删号）；
+        // 手填场景 = 录纸质发票票号，必须业务层查重（含逻辑删除行）防唯一键冲突 500（2026-10-27 实锤）
+        String invoiceNo = (req.getInvoiceNo() == null || req.getInvoiceNo().isBlank())
+                ? generateInvoiceNo() : req.getInvoiceNo();
+        if (req.getInvoiceNo() != null && !req.getInvoiceNo().isBlank()
+                && invoiceMapper.selectIdByInvoiceNo(invoiceNo, null) != null) {
+            throw new IllegalArgumentException("发票号码已存在：" + invoiceNo
+                    + "，请更换或留空由系统自动生成");
+        }
+        invoice.setInvoiceNo(invoiceNo);
         invoice.setInvoiceCode(req.getInvoiceCode());
         invoice.setInvoiceType(req.getInvoiceType());
         invoice.setInvoiceDate(req.getInvoiceDate());
@@ -189,7 +201,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
         bindAttachments(invoice.getId(), req.getAttachmentFileIds());
         // 核销分配明细落库（V65 双向拆分）：计划态不滚数字，completeTask 审批通过才生效
-        saveAllocations(invoice.getId(), req.getAllocations(), req.getInvoiceAmount(), project.getId());
+        // 传主应收+方向：空分配（旧兼容路径）也要过"未开票余额"闸；红冲单（RED）不受上限限制
+        saveAllocations(invoice.getId(), req.getAllocations(), req.getInvoiceAmount(), project.getId(),
+                receivable.getId(), direction);
 
         log.info("[invoice] 创建发票草稿 id={} projectId={} receivableId={} amount={} allocations={}",
                 invoice.getId(), project.getId(), receivable.getId(), req.getInvoiceAmount(),
@@ -255,10 +269,21 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须为正");
         }
+        if (req.getInvoiceDate() == null) {
+            throw new IllegalArgumentException("开票日期不能为空");
+        }
         r.setInvoiceAmount(req.getInvoiceAmount());
         r.setTaxRate(req.getTaxRate());
         r.setTaxAmount(req.getTaxAmount());
-        r.setInvoiceNo(req.getInvoiceNo());
+        // 发票号查重（排除自身）：手填重复票号会撞 uk_tenant_invoice_no 唯一键 -> 500，提前拦截
+        String newInvoiceNo = req.getInvoiceNo();
+        if (newInvoiceNo != null && !newInvoiceNo.isBlank()
+                && !Objects.equals(newInvoiceNo, r.getInvoiceNo())
+                && invoiceMapper.selectIdByInvoiceNo(newInvoiceNo, id) != null) {
+            throw new IllegalArgumentException("发票号码已存在：" + newInvoiceNo
+                    + "，请更换或留空由系统自动生成");
+        }
+        r.setInvoiceNo(newInvoiceNo);
         r.setInvoiceCode(req.getInvoiceCode());
         r.setInvoiceType(req.getInvoiceType());
         r.setInvoiceDate(req.getInvoiceDate());
@@ -275,7 +300,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         // 分配明细同口径全量替换：计划态未生效，硬删重插无痕（V65）
         invoiceAllocationMapper.delete(new LambdaQueryWrapper<InvoiceAllocation>()
                 .eq(InvoiceAllocation::getInvoiceId, id));
-        saveAllocations(id, req.getAllocations(), req.getInvoiceAmount(), r.getProjectId());
+        // 同 create：空分配也要过"未开票余额"闸；方向以库中原单为准（编辑请求不带 docDirection）
+        saveAllocations(id, req.getAllocations(), req.getInvoiceAmount(), r.getProjectId(),
+                r.getReceivableId(), r.getDocDirection());
         log.info("[invoice] 编辑发票 id={} amount={} allocations={} user={}",
                 id, req.getInvoiceAmount(), req.getAllocations() == null ? 0 : req.getAllocations().size(),
                 currentUsername());
@@ -506,8 +533,15 @@ public class InvoiceServiceImpl implements InvoiceService {
      * ③ 同一应收单合并一行；④ 分配必须落在本项目下。空列表兜底为主应收单独享
      * （不插明细，兼容 V65 前历史数据）。</p>
      */
-    private void saveAllocations(Long invoiceId, List<AllocationItem> items, BigDecimal total, Long projectId) {
+    private void saveAllocations(Long invoiceId, List<AllocationItem> items, BigDecimal total,
+                                 Long projectId, Long mainReceivableId, String docDirection) {
         if (items == null || items.isEmpty()) {
+            // 旧兼容路径（无分配明细 = 主应收单独享全额）同样必须过"未开票余额"闸，
+            // 否则任意大金额可绕过全部校验直接落库（2026-10-27 实锤：id=7 开出 55,555,555.00）。
+            // 红冲单（RED）审批通过后是加回额度（uninvoiced.add），不受上限限制。
+            if (!"RED".equals(docDirection)) {
+                assertWithinUninvoiced(mainReceivableId, total, invoiceId);
+            }
             return;
         }
         Set<Long> ids = new LinkedHashSet<>();
@@ -527,6 +561,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         Map<Long, Receivable> byId = receivables.stream()
                 .collect(Collectors.toMap(Receivable::getId, rv -> rv));
         BigDecimal sum = BigDecimal.ZERO;
+        boolean red = "RED".equals(docDirection);
         for (AllocationItem it : items) {
             Receivable rv = byId.get(it.getReceivableId());
             if (!Objects.equals(rv.getProjectId(), projectId)) {
@@ -535,11 +570,14 @@ public class InvoiceServiceImpl implements InvoiceService {
             if (it.getAmount() == null || it.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
                 throw new IllegalArgumentException("分配金额必须为正：" + rv.getReceivableNo());
             }
-            BigDecimal available = (rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount())
-                    .subtract(sumInFlightAllocations(rv.getId(), invoiceId));
-            if (it.getAmount().compareTo(available) > 0) {
-                throw new IllegalArgumentException("超出应收单未开票余额：" + rv.getReceivableNo()
-                        + "，可用 " + available.toPlainString());
+            // 蓝字：分配 ≤ 未开票余额 − 其他发票在途占用；红冲（RED）是加回额度，不拦
+            if (!red) {
+                BigDecimal available = (rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount())
+                        .subtract(sumInFlightAllocations(rv.getId(), invoiceId));
+                if (it.getAmount().compareTo(available) > 0) {
+                    throw new IllegalArgumentException("超出应收单未开票余额：" + rv.getReceivableNo()
+                            + "，可用 " + available.toPlainString());
+                }
             }
             sum = sum.add(it.getAmount());
         }
@@ -605,8 +643,15 @@ public class InvoiceServiceImpl implements InvoiceService {
             }
             BigDecimal invoiced = rv.getInvoicedAmount() == null ? BigDecimal.ZERO : rv.getInvoicedAmount();
             BigDecimal uninvoiced = rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount();
+            // 蓝字减后不得为负：负数 = 有并发超开穿透了前面所有关口，账绝不能错，审批回滚（第三道闸兜底）
+            BigDecimal newUninvoiced = red ? uninvoiced.add(a.getAmount()) : uninvoiced.subtract(a.getAmount());
+            if (!red && newUninvoiced.compareTo(BigDecimal.ZERO) < 0) {
+                throw new IllegalStateException("应收单未开票余额不足以核销本次开票：" + rv.getReceivableNo()
+                        + "，未开票 " + uninvoiced.toPlainString() + "，本次 " + a.getAmount().toPlainString()
+                        + "，疑似并发超开穿透，请核查（本次审批已回滚）");
+            }
             rv.setInvoicedAmount(red ? invoiced.subtract(a.getAmount()) : invoiced.add(a.getAmount()));
-            rv.setUninvoicedAmount(red ? uninvoiced.add(a.getAmount()) : uninvoiced.subtract(a.getAmount()));
+            rv.setUninvoicedAmount(newUninvoiced);
             receivableMapper.updateById(rv);
         }
         log.info("[invoice] 核销生效 invoiceId={} rows={}", r.getId(), rows.size());
@@ -641,6 +686,35 @@ public class InvoiceServiceImpl implements InvoiceService {
      * <p>与收款侧 WO- 前缀分开：两张明细表各自 count+1，共用前缀会撞号混淆
      * （uk 都是各表内 unique，不跨表）。</p>
      */
+    /**
+     * 蓝字开票额度闸（双保险核心，对齐收款单 assertWithinContract 范式）：
+     * 本次开票额度 ≤ 应收单未开票余额 − 其他发票在途占用。信任是系统命脉，账不能算错。
+     */
+    private void assertWithinUninvoiced(Long receivableId, BigDecimal amount, Long excludeInvoiceId) {
+        Receivable rv = receivableMapper.selectById(receivableId);
+        if (rv == null) {
+            throw new IllegalArgumentException("应收单不存在：" + receivableId);
+        }
+        BigDecimal uninvoiced = rv.getUninvoicedAmount() == null ? BigDecimal.ZERO : rv.getUninvoicedAmount();
+        BigDecimal available = uninvoiced.subtract(sumInFlightAllocations(receivableId, excludeInvoiceId));
+        if (amount.compareTo(available) > 0) {
+            throw new IllegalArgumentException("开票金额超出应收单未开票余额：" + rv.getReceivableNo()
+                    + "，可用 " + available.toPlainString() + "，本次 " + amount.toPlainString()
+                    + "。请核实金额，或按未开票余额拆分分配。");
+        }
+    }
+
+    /**
+     * 发票业务单号：FP-yyyyMMdd-NNN。取含逻辑删除行的当日最大序号 +1（同 generateReceiptNo 范式）——
+     * 已删发票仍占用 uk_tenant_invoice_no 唯一键，复用号会撞键 500（2026-10-27 收款单同款教训）。
+     */
+    private String generateInvoiceNo() {
+        String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
+        Integer maxSeq = invoiceMapper.selectMaxDailySeq(date);
+        int next = (maxSeq == null ? 0 : maxSeq) + 1;
+        return String.format("FP-%s-%03d", date, next);
+    }
+
     private String generateAllocationNo() {
         String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
         Long count = invoiceAllocationMapper.selectCount(new LambdaQueryWrapper<InvoiceAllocation>()

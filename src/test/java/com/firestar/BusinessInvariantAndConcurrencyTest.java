@@ -1,16 +1,23 @@
 package com.firestar;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.firestar.dto.ReceiptRequest;
 import com.firestar.entity.Item;
 import com.firestar.entity.Project;
+import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
 import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProjectMapper;
+import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
+import com.firestar.service.ReceiptService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -48,6 +55,10 @@ class BusinessInvariantAndConcurrencyTest {
     private ProjectMapper projectMapper;
     @Autowired
     private ReceivableMapper receivableMapper;
+    @Autowired
+    private ReceiptMapper receiptMapper;
+    @Autowired
+    private ReceiptService receiptService;
 
     private Long newProjectAndItem(int quantity) {
         Project p = new Project();
@@ -157,5 +168,59 @@ class BusinessInvariantAndConcurrencyTest {
 
         receivableMapper.deleteById(r.getId());
         projectMapper.deleteById(p.getId());
+    }
+
+    @Test
+    @DisplayName("超收双保险·后端关口一：蓝字收款使累计已收超过合同额时被拒；未超收则放行")
+    void overCollectionRejectedAtCreate() {
+        // 注入安全上下文（create 内部读 currentUserId，测试需有登录身份；无对应用户时 id 取 null 不影响守卫）
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("biz_test", null, java.util.List.of()));
+        // 复刻真实事故：合同 6350，已有一笔 RECEIVED 蓝字收款 1170，再录整份合同额 6350 → 累计 7520 > 6350
+        Project p = new Project();
+        p.setProjectNo(PREFIX + "OC");
+        p.setProjectName("超收拦截测试");
+        p.setContractStatus("SIGNED");
+        p.setApprovalStatus("APPROVED");
+        p.setContractAmount(new BigDecimal("6350.00"));
+        p.setTenantId(0L);
+        projectMapper.insert(p);
+
+        Receipt existing = new Receipt();
+        existing.setProjectId(p.getId());
+        existing.setReceiptNo(PREFIX + "OC_R1");
+        existing.setReceiptAmount(new BigDecimal("1170.00"));
+        existing.setDocDirection("BLUE");
+        existing.setReceiptStatus("RECEIVED");
+        existing.setApprovalStatus("APPROVED");
+        existing.setReceiptType("NORMAL");
+        existing.setTenantId(0L);
+        receiptMapper.insert(existing);
+
+        try {
+        // ① 超收：再录整份合同额 → 必须被 create 关口拒绝
+        ReceiptRequest over = new ReceiptRequest();
+        over.setProjectId(p.getId());
+        over.setReceiptAmount(new BigDecimal("6350.00"));
+        over.setReceiptType("NORMAL");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> receiptService.create(over),
+                "超收收款必须被后端关口拒绝");
+        assertTrue(ex.getMessage().contains("合同可收额度") || ex.getMessage().contains("超出"),
+                "异常信息应说明超出合同额度，实际=" + ex.getMessage());
+
+        // ② 未超收：再录 100 → 累计 1270 <= 6350，必须放行（证明关口不会误杀正常收款）
+        ReceiptRequest ok = new ReceiptRequest();
+        ok.setProjectId(p.getId());
+        ok.setReceiptAmount(new BigDecimal("100.00"));
+        ok.setReceiptType("NORMAL");
+        assertDoesNotThrow(() -> receiptService.create(ok), "未超收的收款应被放行");
+
+        } finally {
+            // 无论如何都清掉本项目构造的数据，避免 generateReceiptNo 固定单号导致的跨运行残留
+            receiptMapper.delete(new LambdaQueryWrapper<Receipt>().eq(Receipt::getProjectId, p.getId()));
+            projectMapper.deleteById(p.getId());
+            SecurityContextHolder.clearContext();
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.firestar.exception;
 
 import com.firestar.common.Result;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
@@ -37,6 +38,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public Result<Void> handleIllegalArg(IllegalArgumentException e) {
         return Result.error(400, e.getMessage());
+    }
+
+    /**
+     * ⚠️ DuplicateKeyException（唯一键冲突，如手填重复发票号/单据号）必须显式处理。
+     * 它是 RuntimeException 子类，会落入兜底 handler -> HTTP 200 + {"code":500,"message":"服务器内部错误"}，
+     * 真实原因（撞唯一键）被吞，用户只见"服务器内部错误"无法定位是填了重复号（2026-10-27 实锤）。
+     * 业务层（create/update）已做精确查重并抛 IAE 友好提示，此处是最后兜底：
+     * 任何唯一键冲突都不应表现为 500，统一转 400 并给出可读提示。
+     */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public Result<Void> handleDuplicateKey(DuplicateKeyException e) {
+        log.warn("唯一键冲突（已兜底为 400）：{}", e.getMessage());
+        return Result.error(400, "单据编号重复，请检查唯一编号后重试");
     }
 
     @ExceptionHandler(AuthenticationException.class)

@@ -162,6 +162,8 @@ public class ReceiptServiceImpl implements ReceiptService {
         // （2026-10-25 红冲入口：正数金额+方向标记，汇总/核销时按方向代数运算）
         String direction = "RED".equals(req.getDocDirection()) ? "RED" : "BLUE";
         receipt.setDocDirection(direction);
+        // 超收硬校验（双保险·后端关口一）：蓝字收款不得使累计已收超过合同金额；信任是命脉，账不能算错
+        assertWithinContract(project, req.getReceiptAmount(), direction, null);
         if ("RED".equals(direction)) {
             receipt.setOriginalReceiptId(validateRedFlush(req, project).getId());
         }
@@ -246,6 +248,11 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (req.getReceiptAmount() == null || req.getReceiptAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("收款金额必须为正");
         }
+        // 超收硬校验（双保险·后端关口一，编辑草稿同口径）
+        // 方向以数据库原单为准：update 不允许改 docDirection，且编辑请求不携带该字段
+        // （前端仅红冲创建时传 RED），用 req 判会把编辑中的红冲单误判成蓝字而误拦（2026-10-27 实锤）
+        assertWithinContract(project, req.getReceiptAmount(),
+                "RED".equals(r.getDocDirection()) ? "RED" : "BLUE", r.getId());
         // 不允许更换项目（换项目等于换合同，应新建；且汇总列是项目维度的）
         if (!Objects.equals(req.getProjectId(), r.getProjectId())) {
             throw new IllegalArgumentException("不允许更换项目，请新建收款单");
@@ -316,6 +323,10 @@ public class ReceiptServiceImpl implements ReceiptService {
             String bizKey = bizKeyUpfront != null ? bizKeyUpfront : engine.getBusinessKey(instanceId);
             Receipt r = (bizKey != null) ? receiptMapper.selectById(Long.parseLong(bizKey)) : null;
             if (r != null) {
+                // 超收硬校验（双保险·后端关口二）：审批通过回写前再次确认不顶过合同
+                // （防 create 被绕过 / 并发双审；信任是命脉，账不能算错）
+                Project proj = projectMapper.selectById(r.getProjectId());
+                assertWithinContract(proj, r.getReceiptAmount(), r.getDocDirection(), r.getId());
                 r.setReceiptStatus("RECEIVED");
                 r.setApprovalStatus("APPROVED");
                 receiptMapper.updateById(r);
@@ -538,6 +549,49 @@ public class ReceiptServiceImpl implements ReceiptService {
         BigDecimal base = p.getCollectedAmount() == null ? BigDecimal.ZERO : p.getCollectedAmount();
         p.setCollectedAmount(red ? base.subtract(amount) : base.add(amount));
         projectMapper.updateById(p);
+    }
+
+    /**
+     * 实时累计已收（蓝字加、红字减；与项目详情页「累计已收」口径完全一致），可排除指定收款单。
+     * 刻意不读 fin_project.collected_amount 冗余列——该列历史上出现过漂移，会给出错误阈值。
+     */
+    private BigDecimal currentReceived(Long projectId, Long excludeReceiptId) {
+        if (projectId == null) {
+            return BigDecimal.ZERO;
+        }
+        List<Receipt> list = receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
+                .select(Receipt::getReceiptAmount, Receipt::getDocDirection)
+                .eq(Receipt::getProjectId, projectId)
+                .eq(Receipt::getReceiptStatus, "RECEIVED")
+                .ne(excludeReceiptId != null, Receipt::getId, excludeReceiptId));
+        BigDecimal sum = BigDecimal.ZERO;
+        for (Receipt r : list) {
+            BigDecimal amt = r.getReceiptAmount() == null ? BigDecimal.ZERO : r.getReceiptAmount();
+            sum = "RED".equals(r.getDocDirection()) ? sum.subtract(amt) : sum.add(amt);
+        }
+        return sum;
+    }
+
+    /**
+     * 超收硬校验（双保险核心）：蓝字（收款）不得使「累计已收」超过合同金额；红字（退款）减少已收，直接放行。
+     * 信任是系统命脉，账绝对不能算错——任何会把累计已收顶过合同的收款一律拒绝，前端亦会拦截。
+     */
+    private void assertWithinContract(Project project, BigDecimal incrementalAmount,
+                                      String docDirection, Long excludeReceiptId) {
+        if (project == null || "RED".equals(docDirection)) {
+            return;
+        }
+        BigDecimal contract = project.getContractAmount() == null ? BigDecimal.ZERO : project.getContractAmount();
+        BigDecimal already = currentReceived(project.getId(), excludeReceiptId);
+        BigDecimal incoming = incrementalAmount == null ? BigDecimal.ZERO : incrementalAmount;
+        BigDecimal projected = already.add(incoming);
+        if (projected.compareTo(contract) > 0) {
+            throw new IllegalArgumentException(String.format(
+                    "收款金额超出合同可收额度：合同金额 %s，当前已收 %s，本次 %s，将超出 %s。"
+                            + "请核实金额，或先对超收部分做红冲后再录。",
+                    contract.toPlainString(), already.toPlainString(),
+                    incoming.toPlainString(), projected.subtract(contract).toPlainString()));
+        }
     }
 
     /**
@@ -834,9 +888,11 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     private String generateReceiptNo() {
         String date = LocalDateTime.now().format(RECEIPT_NO_DATE_FMT);
-        Long count = receiptMapper.selectCount(new LambdaQueryWrapper<Receipt>()
-                .likeRight(Receipt::getReceiptNo, "SK-" + date + "-"));
-        return String.format("SK-%s-%03d", date, (count == null ? 0 : count) + 1);
+        // 关键：取含逻辑删除行的当天最大序号 +1。
+        // 逻辑删除行仍物理占用 uk_tenant_receipt_no 唯一键，必须纳入，否则会复用已删单号撞键 500。
+        Integer maxSeq = receiptMapper.selectMaxDailySeq(date);
+        int next = (maxSeq == null ? 0 : maxSeq) + 1;
+        return String.format("SK-%s-%03d", date, next);
     }
 
     /** 提交时通知出纳（ROLE_CASHIER，模板 RECEIPT_AUDIT） */
