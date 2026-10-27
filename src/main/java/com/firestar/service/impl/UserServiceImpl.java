@@ -198,7 +198,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     @Auditable(operationType = "CREATE", targetType = "USER", targetIdSpEl = "#result", entityClass = User.class, fields = {"username", "nickname", "status", "deptId", "phone", "email"})
     public Long createUser(UserRequest req) {
         String username = req.getUsername() == null ? "" : req.getUsername().trim();
@@ -249,7 +249,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     @Auditable(operationType = "UPDATE", targetType = "USER", targetIdSpEl = "#id", entityClass = User.class, fields = {"username", "nickname", "status", "deptId", "phone", "email"})
     public void updateUser(Long id, UserRequest req) {
         User exist = userMapper.selectById(id);
@@ -287,7 +287,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     @Auditable(operationType = "DELETE", targetType = "USER", targetIdSpEl = "#id", entityClass = User.class, fields = {"username", "status", "nickname"})
     public void deleteUser(Long id) {
         User exist = userMapper.selectById(id);

@@ -11,7 +11,8 @@ import java.util.Map;
  * 项目信息 / 冒烟探测接口。
  * 根路径 / 返回项目基本描述，避免默认 Whitelabel Error Page；
  * 另保留 /ping 作为最轻量的存活探测。
- * 后续按业务补齐领域 Controller（报销 / 付款 / 发票 / 审批流 等）。
+ * 后续按业务补齐领域 Controller（开票 / 收款 / 核销 / 审批流 等）。
+ * 注：一期仅实现应收账款侧；支出侧（报销 / 付款）在后续规划中，本期未实现。
  */
 @RestController
 public class HomeController {
@@ -22,7 +23,7 @@ public class HomeController {
     @Value("${firestar.version:0.0.1}")
     private String version;
 
-    @Value("${firestar.description:火星财务管理系统 —— 面向中小企业的云端财务 SaaS，涵盖报销、付款、发票与审批流。}")
+    @Value("${firestar.description:火星财务管理系统 —— 一期聚焦应收账款管理（开票、收款、核销、台账），支出侧（报销 / 付款）在后续规划中，本期未实现。}")
     private String description;
 
     /** 根路径：返回项目基本描述信息（取代默认 Whitelabel Error Page） */

@@ -157,7 +157,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void assignPerms(Long roleId, RolePermRequest req) {
         if (roleMapper.selectById(roleId) == null) {
             throw new BizException("角色不存在");
@@ -195,7 +195,7 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void assignMenus(Long roleId, RoleMenuRequest req) {
         if (roleMapper.selectById(roleId) == null) {
             throw new BizException("角色不存在");

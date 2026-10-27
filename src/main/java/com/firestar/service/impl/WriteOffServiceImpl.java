@@ -101,71 +101,19 @@ public class WriteOffServiceImpl implements WriteOffService {
         if (ledgerType != null && !LEDGER_RECEIPT.equals(ledgerType) && !LEDGER_INVOICE.equals(ledgerType)) {
             throw new IllegalArgumentException("ledgerType 仅支持 RECEIPT/INVOICE，当前：" + ledgerType);
         }
-        // ① 项目收窄：两张核销明细表都无 project_id，先收敛应收单 ID 集合（空 = 直接空页）
-        Set<Long> recvIds = null;
-        if (projectId != null) {
-            recvIds = receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
-                            .eq(Receivable::getProjectId, projectId)
-                            .select(Receivable::getId))
-                    .stream().map(Receivable::getId).collect(Collectors.toSet());
-            if (recvIds.isEmpty()) {
-                return emptyPage(pn, ps);
-            }
-        }
-        // ② 双表分别查（内存合并，同 ProjectServiceImpl.amountsOf 范式；
-        //    跨表 UNION 需手写 XML，破 V1「零手写 SQL」纪律，台账数据量下不值得）
-        List<WriteOffLedgerVO> all = new ArrayList<>();
-        if (ledgerType == null || LEDGER_RECEIPT.equals(ledgerType)) {
-            LambdaQueryWrapper<WriteOff> q = new LambdaQueryWrapper<>();
-            if (recvIds != null) {
-                q.in(WriteOff::getReceivableId, recvIds);
-            }
-            if (status != null && !status.isBlank()) {
-                q.eq(WriteOff::getStatus, status);
-            }
-            if (keyword != null && !keyword.isBlank()) {
-                q.like(WriteOff::getWriteOffNo, keyword);
-            }
-            if (dateFrom != null) {
-                q.ge(WriteOff::getWriteOffDate, dateFrom);
-            }
-            if (dateTo != null) {
-                q.le(WriteOff::getWriteOffDate, dateTo);
-            }
-            for (WriteOff w : writeOffMapper.selectList(q)) {
-                all.add(toReceiptLedgerVO(w));
-            }
-        }
-        if (ledgerType == null || LEDGER_INVOICE.equals(ledgerType)) {
-            LambdaQueryWrapper<InvoiceAllocation> q = new LambdaQueryWrapper<>();
-            if (recvIds != null) {
-                q.in(InvoiceAllocation::getReceivableId, recvIds);
-            }
-            if (status != null && !status.isBlank()) {
-                q.eq(InvoiceAllocation::getStatus, status);
-            }
-            if (keyword != null && !keyword.isBlank()) {
-                q.like(InvoiceAllocation::getAllocationNo, keyword);
-            }
-            // 该表无 write_off_date 列，日期过滤回落 created_at（左闭右开）
-            if (dateFrom != null) {
-                q.ge(InvoiceAllocation::getCreatedAt, dateFrom.atStartOfDay());
-            }
-            if (dateTo != null) {
-                q.le(InvoiceAllocation::getCreatedAt, dateTo.plusDays(1).atStartOfDay());
-            }
-            for (InvoiceAllocation a : invoiceAllocationMapper.selectList(q)) {
-                all.add(toInvoiceLedgerVO(a));
-            }
-        }
-        // ③ 批量翻译：应收单号 / 主单号 / 项目号 / 创建人
-        fillNames(all);
-        // ④ 合并排序（createdAt 倒序）+ 内存分页
-        all.sort(Comparator.comparing(WriteOffLedgerVO::getCreatedAt).reversed());
-        int from = Math.min((pn - 1) * ps, all.size());
-        int to = Math.min(from + ps, all.size());
-        Page<WriteOffLedgerVO> page = new Page<>(pn, ps, all.size());
-        page.setRecords(all.subList(from, to));
+        // P0-2 修复：改用 XML UNION ALL + 数据库分页，杜绝原内存全量分页
+        // （台账只增不减，数据量增长后原实现必然 OOM）。项目收窄直接下推到 SQL
+        // （JOIN fin_receivable 按 project_id 过滤），不再先查应收 ID 集合进内存。
+        long total = writeOffMapper.countLedger(projectId, ledgerType, status, keyword, dateFrom, dateTo);
+        List<WriteOffLedgerVO> records = total == 0
+                ? List.of()
+                : writeOffMapper.listLedger(projectId, ledgerType, status, keyword, dateFrom, dateTo,
+                        (long) (pn - 1) * ps, ps);
+        // 批量翻译：创建人用户名等 SQL 未直接 JOIN 的列
+        // （projectNo / receivableNo / bizNo / reverseReason 已由 XML 的 JOIN + JSON_UNQUOTE 查出）
+        fillNames(records);
+        Page<WriteOffLedgerVO> page = new Page<>(pn, ps, total);
+        page.setRecords(records);
         return page;
     }
 
@@ -248,7 +196,7 @@ public class WriteOffServiceImpl implements WriteOffService {
     // ===================== 自动核销 =====================
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public AutoMatchResultVO autoMatch(Long projectId) {
         if (projectId == null) {
             throw new IllegalArgumentException("自动核销必须指定项目（禁止跨项目错配）");
@@ -337,7 +285,7 @@ public class WriteOffServiceImpl implements WriteOffService {
     // ===================== 反核销 =====================
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void reverse(ReverseRequest req) {
         if (req == null || req.getLedgerId() == null) {
             throw new IllegalArgumentException("ledgerId 不能为空");

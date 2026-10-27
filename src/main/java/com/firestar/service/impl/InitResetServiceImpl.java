@@ -120,7 +120,7 @@ public class InitResetServiceImpl implements InitResetService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public InitStatusVO init(InitRequest req) {
         // 初始化完成后安装向导关闭：匿名端点收口，回真 HTTP 403
         // （ResponseStatusException 走 GlobalExceptionHandler 的 ResponseEntity 通道带出状态码，

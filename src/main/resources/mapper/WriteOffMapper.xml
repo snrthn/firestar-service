@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.firestar.mapper.WriteOffMapper">
+
+    <resultMap id="LedgerVOMap" type="com.firestar.dto.WriteOffLedgerVO">
+        <id column="id" property="id"/>
+        <result column="ledger_type" property="ledgerType"/>
+        <result column="ledger_no" property="ledgerNo"/>
+        <result column="project_id" property="projectId"/>
+        <result column="project_no" property="projectNo"/>
+        <result column="biz_id" property="bizId"/>
+        <result column="biz_no" property="bizNo"/>
+        <result column="receivable_id" property="receivableId"/>
+        <result column="receivable_no" property="receivableNo"/>
+        <result column="amount" property="amount"/>
+        <result column="status" property="status"/>
+        <result column="method" property="method"/>
+        <result column="ledger_date" property="ledgerDate"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="created_by" property="createdBy"/>
+        <result column="created_by_name" property="createdByName"/>
+        <result column="original_ledger_id" property="originalLedgerId"/>
+        <result column="reverse_reason" property="reverseReason"/>
+    </resultMap>
+
+    <!-- 两表 UNION：回款核销(fin_write_off) + 开票核销(fin_invoice_allocation) -->
+    <sql id="ledgerUnion">
+        SELECT
+            w.id,
+            'RECEIPT' AS ledger_type,
+            w.write_off_no AS ledger_no,
+            r.project_id AS project_id,
+            p.project_no AS project_no,
+            w.receipt_id AS biz_id,
+            rc.receipt_no AS biz_no,
+            w.receivable_id AS receivable_id,
+            r.receivable_no AS receivable_no,
+            w.amount AS amount,
+            w.status AS status,
+            w.write_off_method AS method,
+            w.write_off_date AS ledger_date,
+            w.created_at AS created_at,
+            w.operator_id AS created_by,
+            NULL AS created_by_name,
+            w.original_write_off_id AS original_ledger_id,
+            JSON_UNQUOTE(JSON_EXTRACT(w.ext, '$.reverseReason')) AS reverse_reason
+        FROM fin_write_off w
+        LEFT JOIN fin_receivable r ON r.id = w.receivable_id
+        LEFT JOIN fin_project p ON p.id = r.project_id
+        LEFT JOIN fin_receipt rc ON rc.id = w.receipt_id
+        WHERE w.is_deleted = 0
+          AND (#{projectId} IS NULL OR r.project_id = #{projectId})
+          AND (#{ledgerType} IS NULL OR #{ledgerType} = '' OR 'RECEIPT' = #{ledgerType})
+          AND (#{status} IS NULL OR #{status} = '' OR w.status = #{status})
+          AND (#{keyword} IS NULL OR #{keyword} = '' OR w.write_off_no LIKE CONCAT('%', #{keyword}, '%'))
+          AND (#{dateFrom} IS NULL OR w.write_off_date &gt;= #{dateFrom})
+          AND (#{dateTo} IS NULL OR w.write_off_date &lt;= #{dateTo})
+        UNION ALL
+        SELECT
+            a.id,
+            'INVOICE' AS ledger_type,
+            a.allocation_no AS ledger_no,
+            r.project_id AS project_id,
+            p.project_no AS project_no,
+            a.invoice_id AS biz_id,
+            i.invoice_no AS biz_no,
+            a.receivable_id AS receivable_id,
+            r.receivable_no AS receivable_no,
+            a.amount AS amount,
+            a.status AS status,
+            'MANUAL' AS method,
+            DATE(a.created_at) AS ledger_date,
+            a.created_at AS created_at,
+            NULL AS created_by,
+            NULL AS created_by_name,
+            a.original_allocation_id AS original_ledger_id,
+            JSON_UNQUOTE(JSON_EXTRACT(a.ext, '$.reverseReason')) AS reverse_reason
+        FROM fin_invoice_allocation a
+        LEFT JOIN fin_receivable r ON r.id = a.receivable_id
+        LEFT JOIN fin_project p ON p.id = r.project_id
+        LEFT JOIN fin_invoice i ON i.id = a.invoice_id
+        WHERE a.is_deleted = 0
+          AND (#{projectId} IS NULL OR r.project_id = #{projectId})
+          AND (#{ledgerType} IS NULL OR #{ledgerType} = '' OR 'INVOICE' = #{ledgerType})
+          AND (#{status} IS NULL OR #{status} = '' OR a.status = #{status})
+          AND (#{keyword} IS NULL OR #{keyword} = '' OR a.allocation_no LIKE CONCAT('%', #{keyword}, '%'))
+          AND (#{dateFrom} IS NULL OR a.created_at &gt;= #{dateFrom})
+          AND (#{dateTo} IS NULL OR a.created_at &lt; DATE_ADD(#{dateTo}, INTERVAL 1 DAY))
+    </sql>
+
+    <select id="listLedger" resultMap="LedgerVOMap">
+        SELECT * FROM (<include refid="ledgerUnion"/>) t
+        ORDER BY created_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countLedger" resultType="long">
+        SELECT COUNT(*) FROM (<include refid="ledgerUnion"/>) t
+    </select>
+
+</mapper>

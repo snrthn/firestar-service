@@ -1,6 +1,7 @@
 package com.firestar.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.common.DataScopeHelper;
@@ -182,9 +183,22 @@ public class ShipmentServiceImpl implements ShipmentService {
                     ? item.getUnitPrice().multiply(BigDecimal.valueOf(line.getShipmentQty())) : BigDecimal.ZERO);
             shipmentLineMapper.insert(sl);
         }
-        // 回写 Item 已发累计（乐观锁生效点）
-        for (Item item : toUpdateItems) {
-            itemMapper.updateById(item);
+        // 回写 Item 已发累计（P0-1 修复：原子 UPDATE 下推超发校验，杜绝乐观锁静默失败导致超发）
+        // 直接遍历申请明细，按 itemId 把「已发 += 本次数量」下推到 SQL，并用 shipped_qty + qty <= quantity
+        // 在数据库侧拦超发；并发冲突时影响行数为 0，触发异常回滚，绝不留「额度凭空消失」的脏数据。
+        for (ShipmentLineCreateReq line : req.getLines()) {
+            int qty = line.getShipmentQty() == null ? 0 : line.getShipmentQty();
+            if (qty <= 0) {
+                continue;
+            }
+            int rows = itemMapper.update(null, new LambdaUpdateWrapper<Item>()
+                    .eq(Item::getId, line.getItemId())
+                    .apply("shipped_qty + {0} <= quantity", qty)
+                    .setSql("shipped_qty = shipped_qty + " + qty));
+            if (rows == 0) {
+                throw new IllegalStateException("货物（ID=" + line.getItemId()
+                        + "）发货额度不足或已被并发占用，请稍后重试");
+            }
         }
         // 草稿态创建完成（审批流程在 submit() 中由详情面板触发）
         log.info("[shipment] 创建草稿 id={} batchNo={} projectId={} amount={}",
@@ -279,19 +293,20 @@ public class ShipmentServiceImpl implements ShipmentService {
         return newAmount;
     }
 
-    /** 退还某发货单全部明细行已占用的货物额度（撤回 / 编辑前调用） */
+    /** 退还某发货单全部明细行已占用的货物额度（撤回 / 编辑前调用）。P0-1 修复：改原子减法，并发下不会减成负。 */
     private void releaseItemOccupancy(Long shipmentId) {
         List<ShipmentLine> lines = shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
                 .eq(ShipmentLine::getShipmentId, shipmentId));
         for (ShipmentLine ln : lines) {
-            Item item = itemMapper.selectById(ln.getItemId());
-            if (item == null) {
+            int back = ln.getShipmentQty() == null ? 0 : ln.getShipmentQty();
+            if (back <= 0) {
                 continue;
             }
-            int shipped = item.getShippedQty() == null ? 0 : item.getShippedQty();
-            int back = ln.getShipmentQty() == null ? 0 : ln.getShipmentQty();
-            item.setShippedQty(Math.max(0, shipped - back));
-            itemMapper.updateById(item);
+            // 原子减法：仅当 shipped_qty >= back 时执行，避免并发下减成负数
+            itemMapper.update(null, new LambdaUpdateWrapper<Item>()
+                    .eq(Item::getId, ln.getItemId())
+                    .ge(Item::getShippedQty, back)
+                    .setSql("shipped_qty = shipped_qty - " + back));
         }
     }
 
@@ -351,8 +366,20 @@ public class ShipmentServiceImpl implements ShipmentService {
                     ? item.getUnitPrice().multiply(BigDecimal.valueOf(line.getShipmentQty())) : BigDecimal.ZERO);
             shipmentLineMapper.insert(sl);
         }
-        for (Item item : toUpdateItems) {
-            itemMapper.updateById(item);
+        // 回写 Item 已发累计（P0-1 修复：同 create，原子 UPDATE 下推超发校验）
+        for (ShipmentLineCreateReq line : req.getLines()) {
+            int qty = line.getShipmentQty() == null ? 0 : line.getShipmentQty();
+            if (qty <= 0) {
+                continue;
+            }
+            int rows = itemMapper.update(null, new LambdaUpdateWrapper<Item>()
+                    .eq(Item::getId, line.getItemId())
+                    .apply("shipped_qty + {0} <= quantity", qty)
+                    .setSql("shipped_qty = shipped_qty + " + qty));
+            if (rows == 0) {
+                throw new IllegalStateException("货物（ID=" + line.getItemId()
+                        + "）发货额度不足或已被并发占用，请稍后重试");
+            }
         }
         s.setShipmentAmount(newAmount);
         s.setUpdatedBy(operatorId);
