@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -43,17 +44,27 @@ public class ReturnController {
         this.returnService = returnService;
     }
 
-    /** 退货列表（分页 + 项目/状态筛选） */
+    /**
+     * 退货列表（分页 + 筛选；字典翻译 + 我的待办任务 ID）。
+     *
+     * <p>查询条件（2026-10-28 补齐，口径对齐核销台账）：projectNo/projectName 模糊（反查项目）、
+     * returnNo 模糊、status(审批状态)/executeStatus(执行状态) 精确、dateFrom~dateTo 按
+     * 申请时间(applied_at) 闭区间。全部可空，空即不限。</p>
+     */
     @GetMapping("/page")
     public Result<IPage<ReturnVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String returnNo,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String executeStatus,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) {
         return Result.success(returnService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectNo, projectName, status));
+                pageNum, pageSize, projectNo, projectName, returnNo, status, executeStatus, dateFrom, dateTo));
     }
 
     /** 待审批的退货列表（按角色过滤：当前用户有待办任务的退货单） */

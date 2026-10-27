@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -37,16 +38,29 @@ public class ReceiptController {
         this.receiptService = receiptService;
     }
 
-    /** 分页列表（projectId/status 精确；字典翻译 + 用户名翻译） */
+    /**
+     * 分页列表（行级隔离：非 admin 只看 createdBy=自己；字典翻译 + 用户名翻译）。
+     *
+     * <p>查询条件（2026-10-28 补齐，口径对齐核销台账）：projectId/status/receiptType/
+     * docDirection 精确、receiptNo 模糊、projectName 模糊（反查项目）、
+     * dateFrom~dateTo 按收款日期闭区间。全部可空。</p>
+     */
     @GetMapping("/page")
     public Result<IPage<ReceiptVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) Long projectId,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String receiptNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String receiptType,
+            @RequestParam(required = false) String docDirection,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) {
         return Result.success(receiptService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectId, status));
+                pageNum, pageSize, projectId, status, receiptNo, projectName,
+                receiptType, docDirection, dateFrom, dateTo));
     }
 
     /** 详情（含项目信息 + 字典翻译） */

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -37,20 +38,26 @@ public class ShipmentController {
         this.shipmentService = shipmentService;
     }
 
-    /** 分页列表（projectNo/projectName 模糊、status(发货状态)精确、approvalStatus(审批状态)精确；字典翻译 + 用户名翻译）
+    /** 分页列表（批次号/项目号/项目名模糊、status(发货状态)精确、approvalStatus(审批状态)精确、发货日期区间；字典翻译 + 用户名翻译）
      *  ⚠️ status = 发货生命周期状态(shipment_status)；approvalStatus = 审批状态(approval_status，含 APPROVED)。
-     *     退货弹窗按 approvalStatus=APPROVED 查询，严禁把 APPROVED 当 status 传（APPROVED 不是发货状态值）。 */
+     *     退货弹窗按 approvalStatus=APPROVED 查询，严禁把 APPROVED 当 status 传（APPROVED 不是发货状态值）。
+     *  ⚠️ 2026-10-28 修正：此前只声明 projectNo 却由前端传 batchNo，批次号查询框是死的；
+     *     且 ServiceImpl 把 projectNo 实现成了 .like(batch_no)，参数名与语义错位——
+     *     现新增真正的 batchNo 参数，projectNo 回归「按项目编号模糊」语义。 */
     @GetMapping("/page")
     public Result<IPage<ShipmentVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) String batchNo,
             @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) String approvalStatus) {
+            @RequestParam(required = false) String approvalStatus,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) {
         return Result.success(shipmentService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectNo, projectName, status, approvalStatus));
+                pageNum, pageSize, batchNo, projectNo, projectName, status, approvalStatus, dateFrom, dateTo));
     }
 
     /** 详情（含明细行 + 关联应收单 + 字典翻译） */

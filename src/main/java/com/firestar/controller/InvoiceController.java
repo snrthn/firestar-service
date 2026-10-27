@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -36,17 +37,30 @@ public class InvoiceController {
         this.invoiceService = invoiceService;
     }
 
-    /** 分页列表（projectId/receivableId/status 精确；字典翻译 + 用户名翻译） */
+    /**
+     * 分页列表（行级隔离：非 admin 只看 applicantId=自己；字典翻译 + 用户名翻译）。
+     *
+     * <p>查询条件（2026-10-28 补齐，口径对齐核销台账）：projectId/receivableId/status/
+     * invoiceType/docDirection 精确、invoiceNo 模糊、projectName 模糊（反查项目）、
+     * dateFrom~dateTo 按开票日期闭区间。全部可空，空即不限。</p>
+     */
     @GetMapping("/page")
     public Result<IPage<InvoiceVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) Long receivableId,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String invoiceType,
+            @RequestParam(required = false) String docDirection,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) {
         return Result.success(invoiceService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectId, receivableId, status));
+                pageNum, pageSize, projectId, receivableId, status,
+                invoiceNo, projectName, invoiceType, docDirection, dateFrom, dateTo));
     }
 
     /** 详情（含项目/应收单信息 + 字典翻译） */

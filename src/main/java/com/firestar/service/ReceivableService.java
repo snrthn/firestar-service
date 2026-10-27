@@ -3,6 +3,8 @@ package com.firestar.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.dto.ReceivableVO;
 
+import java.time.LocalDate;
+
 /**
  * 应收单服务（由发货「客户已收货」时点自动生成，决策#2）。
  *
@@ -25,6 +27,14 @@ public interface ReceivableService {
     /** 应收单详情（含字典翻译） */
     ReceivableVO detail(Long id);
 
-    /** 应收单分页列表（projectId/status 精确；字典翻译） */
-    IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status);
+    /**
+     * 应收单分页列表（字典翻译）。
+     *
+     * <p>查询条件（2026-10-28 补齐）：projectId/status/sourceType 精确、receivableNo 模糊、
+     * projectName 模糊（反查项目）、dateFrom~dateTo 按 receivable_date 闭区间。
+     * 全部可空，空即不限。</p>
+     */
+    IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status,
+                             String receivableNo, String projectName, String sourceType,
+                             LocalDate dateFrom, LocalDate dateTo);
 }

@@ -413,10 +413,26 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     @Override
     public IPage<ReceiptVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                 Long projectId, String status) {
+                                 Long projectId, String status, String receiptNo, String projectName,
+                                 String receiptType, String docDirection, LocalDate dateFrom, LocalDate dateTo) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
         String statusEq = status == null || status.isBlank() ? null : status.trim();
+        String noKw = receiptNo == null || receiptNo.isBlank() ? null : receiptNo.trim();
+        String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
+        String typeEq = receiptType == null || receiptType.isBlank() ? null : receiptType.trim();
+        String dirEq = docDirection == null || docDirection.isBlank() ? null : docDirection.trim();
+
+        // 项目名称模糊 → projectId 集合（两段式，与 ShipmentServiceImpl 同范式，不拼 SQL 无注入）
+        List<Long> nameIds = null;
+        if (nameKw != null) {
+            nameIds = projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                            .like(Project::getProjectName, nameKw).select(Project::getId))
+                    .stream().map(Project::getId).filter(Objects::nonNull).toList();
+            if (nameIds.isEmpty()) {
+                return new Page<>(current, size, 0);
+            }
+        }
 
         Long me = currentUserId();
         if (DataScopeHelper.denyAll(me)) {
@@ -428,6 +444,12 @@ public class ReceiptServiceImpl implements ReceiptService {
                         new LambdaQueryWrapper<Receipt>()
                                 .eq(projectId != null, Receipt::getProjectId, projectId)
                                 .eq(statusEq != null, Receipt::getApprovalStatus, statusEq)
+                                .eq(typeEq != null, Receipt::getReceiptType, typeEq)
+                                .eq(dirEq != null, Receipt::getDocDirection, dirEq)
+                                .like(noKw != null, Receipt::getReceiptNo, noKw)
+                                .in(nameIds != null, Receipt::getProjectId, nameIds)
+                                .ge(dateFrom != null, Receipt::getReceiptDate, dateFrom)
+                                .le(dateTo != null, Receipt::getReceiptDate, dateTo)
                                 .orderByDesc(Receipt::getCreatedAt),
                         Receipt::getCreatedBy, me));
         Map<String, DictData> statusDict = dictMap(DICT_APPROVAL_STATUS);

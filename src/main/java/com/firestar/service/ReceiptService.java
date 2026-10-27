@@ -6,6 +6,7 @@ import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.TimelineNodeVO;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -39,9 +40,16 @@ public interface ReceiptService {
     /** 审批驳回（回写 REJECTED + 通知） */
     void rejectTask(String taskId, String comment);
 
-    /** 分页列表（行级隔离：非 admin 只看 createdBy=自己；字典翻译 + 用户名翻译） */
+    /**
+     * 分页列表（行级隔离：非 admin 只看 createdBy=自己；字典翻译 + 用户名翻译）。
+     *
+     * <p>查询条件（2026-10-28 补齐）：projectId/status/receiptType/docDirection 精确、
+     * receiptNo 模糊、projectName 模糊（反查项目）、dateFrom~dateTo 按 receipt_date
+     * 闭区间。全部可空，空即不限。</p>
+     */
     IPage<ReceiptVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                           Long projectId, String status);
+                           Long projectId, String status, String receiptNo, String projectName,
+                           String receiptType, String docDirection, LocalDate dateFrom, LocalDate dateTo);
 
     /** 详情（可见性：申请人 / ROLE_ADMIN / 审批任务处理人 三选一） */
     ReceiptVO detail(Long id, String username, boolean isAdmin);

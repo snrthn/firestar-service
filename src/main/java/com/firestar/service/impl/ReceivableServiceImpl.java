@@ -27,6 +27,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 应收单生成实现：客户已收货 → 蓝字应收单（doc_direction=BLUE, source_type=FROM_SHIPMENT）。
@@ -145,14 +146,37 @@ public class ReceivableServiceImpl implements ReceivableService {
     }
 
     @Override
-    public IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status) {
+    public IPage<ReceivableVO> page(Integer pageNum, Integer pageSize, Long projectId, String status,
+                                    String receivableNo, String projectName, String sourceType,
+                                    LocalDate dateFrom, LocalDate dateTo) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
         String statusEq = status == null || status.isBlank() ? null : status.trim();
+        String noKw = receivableNo == null || receivableNo.isBlank() ? null : receivableNo.trim();
+        String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
+        String sourceEq = sourceType == null || sourceType.isBlank() ? null : sourceType.trim();
+
+        // 项目名称模糊 → projectId 集合（两段式，与 ShipmentServiceImpl 同范式，不拼 SQL 无注入）。
+        // fin_receivable 只有 project_id 没有项目名称列，只能先反查项目。
+        List<Long> nameIds = null;
+        if (nameKw != null) {
+            nameIds = projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                            .like(Project::getProjectName, nameKw).select(Project::getId))
+                    .stream().map(Project::getId).filter(Objects::nonNull).toList();
+            if (nameIds.isEmpty()) {
+                return new Page<>(current, size, 0);
+            }
+        }
+
         IPage<Receivable> page = receivableMapper.selectPage(new Page<>(current, size),
                 new LambdaQueryWrapper<Receivable>()
                         .eq(projectId != null, Receivable::getProjectId, projectId)
                         .eq(statusEq != null, Receivable::getStatus, statusEq)
+                        .eq(sourceEq != null, Receivable::getSourceType, sourceEq)
+                        .like(noKw != null, Receivable::getReceivableNo, noKw)
+                        .in(nameIds != null, Receivable::getProjectId, nameIds)
+                        .ge(dateFrom != null, Receivable::getReceivableDate, dateFrom)
+                        .le(dateTo != null, Receivable::getReceivableDate, dateTo)
                         .orderByDesc(Receivable::getCreatedAt));
         Map<String, DictData> statusDict = dictMap(DICT_RECEIVABLE_STATUS);
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);

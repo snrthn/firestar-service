@@ -7,6 +7,7 @@ import com.firestar.dto.ProjectSignRequest;
 import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -33,7 +34,9 @@ public interface ProjectService {
      * 的自己发起的立项（含草稿）；viewAll = true（ROLE_ADMIN）时无人员限制看全部。</p>
      */
     IPage<ProjectVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                          String projectNo, String projectName, String approvalStatus);
+                          String projectNo, String projectName, String approvalStatus,
+                          String customerName, String contractStatus, Long salesManagerId,
+                          LocalDate dateFrom, LocalDate dateTo);
 
     /**
      * 审批中心「我发起的」分页（2026-10-22 虎哥：审批中心 Tab 化）。

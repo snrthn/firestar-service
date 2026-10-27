@@ -575,12 +575,28 @@ public class ReturnServiceImpl implements ReturnService {
 
     @Override
     public IPage<ReturnVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                String projectNo, String projectName, String status) {
+                                String projectNo, String projectName, String returnNo, String status,
+                                String executeStatus, LocalDate dateFrom, LocalDate dateTo) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10 : pageSize;
         LambdaQueryWrapper<ReturnOrder> qw = new LambdaQueryWrapper<>();
         if (status != null && !status.isBlank()) {
             qw.eq(ReturnOrder::getApprovalStatus, status);
+        }
+        // 执行状态精确（2026-10-28 补齐：列表有该列却无筛选，只能全表翻）
+        if (executeStatus != null && !executeStatus.isBlank()) {
+            qw.eq(ReturnOrder::getExecuteStatus, executeStatus);
+        }
+        // 退货单号模糊（2026-10-28 补齐：查单第一入口）
+        if (returnNo != null && !returnNo.isBlank()) {
+            qw.like(ReturnOrder::getReturnNo, returnNo.trim());
+        }
+        // 申请时间闭区间：applied_at 是 DATETIME，上界取次日 00:00 开区间
+        if (dateFrom != null) {
+            qw.ge(ReturnOrder::getAppliedAt, dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            qw.lt(ReturnOrder::getAppliedAt, dateTo.plusDays(1).atStartOfDay());
         }
         if (projectNo != null && !projectNo.isBlank() || projectName != null && !projectName.isBlank()) {
             Set<Long> pids = projectMapper.selectList(new LambdaQueryWrapper<Project>() {{

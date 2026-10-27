@@ -56,6 +56,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -412,7 +413,9 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     public IPage<ProjectVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                 String projectNo, String projectName, String approvalStatus) {
+                                 String projectNo, String projectName, String approvalStatus,
+                                 String customerName, String contractStatus, Long salesManagerId,
+                                 LocalDate dateFrom, LocalDate dateTo) {
         // 数据行级隔离（2026-10-22 虎哥）：非 ROLE_ADMIN 只能看 applicantUsername = 自己的
         // 立项（含 DRAFT 草稿——本页即「立项管理」，用户管理自己的草稿）；ROLE_ADMIN 看全部。
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
@@ -420,11 +423,22 @@ public class ProjectServiceImpl implements ProjectService {
         String noKw = projectNo == null || projectNo.isBlank() ? null : projectNo.trim();
         String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
         String statusEq = approvalStatus == null || approvalStatus.isBlank() ? null : approvalStatus.trim();
+        // 2026-10-28 补齐：客户名称模糊、合同（签约）状态精确、销售经理精确、创建时间闭区间
+        String custKw = customerName == null || customerName.isBlank() ? null : customerName.trim();
+        String contractEq = contractStatus == null || contractStatus.isBlank() ? null : contractStatus.trim();
         IPage<Project> page = mapper.selectPage(new Page<>(current, size),
                 new LambdaQueryWrapper<Project>()
                         .like(noKw != null, Project::getProjectNo, noKw)
                         .like(nameKw != null, Project::getProjectName, nameKw)
+                        .like(custKw != null, Project::getCustomerName, custKw)
                         .eq(statusEq != null, Project::getApprovalStatus, statusEq)
+                        .eq(contractEq != null, Project::getContractStatus, contractEq)
+                        .eq(salesManagerId != null, Project::getSalesManagerId, salesManagerId)
+                        // created_at 是 DATETIME：上界取次日 00:00 开区间，否则「当天」查不到
+                        .ge(dateFrom != null, Project::getCreatedAt,
+                                dateFrom == null ? null : dateFrom.atStartOfDay())
+                        .lt(dateTo != null, Project::getCreatedAt,
+                                dateTo == null ? null : dateTo.plusDays(1).atStartOfDay())
                         .eq(!viewAll, Project::getApplicantUsername, username)
                         .orderByDesc(Project::getCreatedAt));
         Map<String, DictData> approvalDict = approvalStatusDict();

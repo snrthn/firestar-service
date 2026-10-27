@@ -6,6 +6,7 @@ import com.firestar.dto.ReturnVO;
 import com.firestar.dto.ReturnWriteoffDetailVO;
 import com.firestar.dto.TimelineNodeVO;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -18,9 +19,16 @@ import java.util.Map;
  */
 public interface ReturnService {
 
-    /** 退货列表（分页 + 项目/状态筛选；字典翻译 + 我的待办任务 ID） */
+    /**
+     * 退货列表（分页 + 筛选；字典翻译 + 我的待办任务 ID）。
+     *
+     * <p>查询条件（2026-10-28 补齐）：projectNo/projectName 模糊（反查项目）、returnNo 模糊、
+     * status(审批状态)/executeStatus(执行状态) 精确、dateFrom~dateTo 按 applied_at 闭区间。
+     * 全部可空，空即不限。</p>
+     */
     IPage<ReturnVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                         String projectNo, String projectName, String status);
+                         String projectNo, String projectName, String returnNo, String status,
+                         String executeStatus, LocalDate dateFrom, LocalDate dateTo);
 
     /** 详情（含明细行 + 审批时间线 + 冲减明细；归属校验同 Shipment 三选一） */
     ReturnVO detail(Long id, String username, boolean isAdmin);

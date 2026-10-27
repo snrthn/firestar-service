@@ -426,10 +426,27 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public IPage<InvoiceVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                 Long projectId, Long receivableId, String status) {
+                                 Long projectId, Long receivableId, String status, String invoiceNo,
+                                 String projectName, String invoiceType, String docDirection,
+                                 LocalDate dateFrom, LocalDate dateTo) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
         String statusEq = status == null || status.isBlank() ? null : status.trim();
+        String noKw = invoiceNo == null || invoiceNo.isBlank() ? null : invoiceNo.trim();
+        String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
+        String typeEq = invoiceType == null || invoiceType.isBlank() ? null : invoiceType.trim();
+        String dirEq = docDirection == null || docDirection.isBlank() ? null : docDirection.trim();
+
+        // 项目名称模糊 → projectId 集合（两段式，与 ShipmentServiceImpl 同范式，不拼 SQL 无注入）
+        List<Long> nameIds = null;
+        if (nameKw != null) {
+            nameIds = projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                            .like(Project::getProjectName, nameKw).select(Project::getId))
+                    .stream().map(Project::getId).filter(Objects::nonNull).toList();
+            if (nameIds.isEmpty()) {
+                return new Page<>(current, size, 0);
+            }
+        }
 
         Long me = currentUserId();
         if (DataScopeHelper.denyAll(me)) {
@@ -441,6 +458,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 .eq(projectId != null, Invoice::getProjectId, projectId)
                                 .eq(receivableId != null, Invoice::getReceivableId, receivableId)
                                 .eq(statusEq != null, Invoice::getApprovalStatus, statusEq)
+                                .eq(typeEq != null, Invoice::getInvoiceType, typeEq)
+                                .eq(dirEq != null, Invoice::getDocDirection, dirEq)
+                                .like(noKw != null, Invoice::getInvoiceNo, noKw)
+                                .in(nameIds != null, Invoice::getProjectId, nameIds)
+                                .ge(dateFrom != null, Invoice::getInvoiceDate, dateFrom)
+                                .le(dateTo != null, Invoice::getInvoiceDate, dateTo)
                                 .orderByDesc(Invoice::getCreatedAt),
                         Invoice::getApplicantId, me));
         Map<String, DictData> statusDict = dictMap(DICT_INVOICE_STATUS);

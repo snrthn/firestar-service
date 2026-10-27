@@ -11,6 +11,7 @@ import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.service.ProjectService;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,7 +43,11 @@ public class ProjectController {
     }
 
     /**
-     * 分页立项列表（projectName 模糊、approvalStatus 精确；默认 1/10，size 上限 500）。
+     * 分页立项列表（默认 1/10，size 上限 500）。
+     *
+     * <p>查询条件（2026-10-28 补齐，口径对齐核销台账）：projectNo/projectName/customerName
+     * 模糊、approvalStatus/contractStatus/salesManagerId 精确、dateFrom~dateTo 按创建时间
+     * 闭区间。全部可空，空即不限。</p>
      *
      * <p>数据行级隔离（2026-10-22 虎哥）：非 ROLE_ADMIN 只能看到自己发起的（applicantUsername
      * = 当前用户，含草稿）；ROLE_ADMIN 无条件放行看全部。</p>
@@ -53,10 +58,16 @@ public class ProjectController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
-            @RequestParam(required = false) String approvalStatus) {
+            @RequestParam(required = false) String approvalStatus,
+            @RequestParam(required = false) String customerName,
+            @RequestParam(required = false) String contractStatus,
+            @RequestParam(required = false) Long salesManagerId,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) {
         return Result.success(projectService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectNo, projectName, approvalStatus));
+                pageNum, pageSize, projectNo, projectName, approvalStatus,
+                customerName, contractStatus, salesManagerId, dateFrom, dateTo));
     }
 
     /**

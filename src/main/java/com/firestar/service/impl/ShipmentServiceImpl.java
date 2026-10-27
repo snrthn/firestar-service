@@ -52,6 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -625,9 +626,11 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     public IPage<ShipmentVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                 String projectNo, String projectName, String status, String approvalStatus) {
+                                 String batchNo, String projectNo, String projectName, String status,
+                                 String approvalStatus, LocalDate dateFrom, LocalDate dateTo) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
+        String batchKw = batchNo == null || batchNo.isBlank() ? null : batchNo.trim();
         String noKw = projectNo == null || projectNo.isBlank() ? null : projectNo.trim();
         String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
         String statusEq = status == null || status.isBlank() ? null : status.trim();
@@ -635,13 +638,17 @@ public class ShipmentServiceImpl implements ShipmentService {
         // 与 status(发货生命周期) 是两张不同列，互不干扰。
         String approvalStatusEq = approvalStatus == null || approvalStatus.isBlank() ? null : approvalStatus.trim();
 
-        // 项目名称模糊 → projectId 集合（两段式，与 LogServiceImpl「操作人模糊」同范式，
-        // 不拼 SQL 无注入）。发货表只有 projectId 没有 projectName 列，只能先反查项目。
-        // 修复既有缺陷：nameKw 此前算了没用，前端「项目名称」查询框实际无效。
+        // 项目编号 / 项目名称模糊 → projectId 集合（两段式，与 LogServiceImpl「操作人模糊」
+        // 同范式，不拼 SQL 无注入）。发货表只有 projectId 没有项目编号/名称列，只能先反查项目。
+        // ⚠️ 2026-10-28 修正：此前 projectNo 被误接到 .like(batch_no)，导致「批次号」与
+        // 「项目编号」两个查询框双双失效——批次号改为独立参数 batchNo，projectNo 回归本义。
+        // 两个项目条件同给时按 AND 取交集（与 ReturnServiceImpl 同口径）。
         List<Long> projectIds = null;
-        if (nameKw != null) {
+        if (noKw != null || nameKw != null) {
             projectIds = projectMapper.selectList(new LambdaQueryWrapper<Project>()
-                            .like(Project::getProjectName, nameKw).select(Project::getId))
+                            .like(noKw != null, Project::getProjectNo, noKw)
+                            .like(nameKw != null, Project::getProjectName, nameKw)
+                            .select(Project::getId))
                     .stream().map(Project::getId).filter(Objects::nonNull).toList();
             if (projectIds.isEmpty()) {
                 return new Page<>(current, size, 0);
@@ -660,10 +667,15 @@ public class ShipmentServiceImpl implements ShipmentService {
         IPage<Shipment> page = shipmentMapper.selectPage(new Page<>(current, size),
                 DataScopeHelper.own(
                         new LambdaQueryWrapper<Shipment>()
-                                .like(noKw != null, Shipment::getBatchNo, noKw)
+                                .like(batchKw != null, Shipment::getBatchNo, batchKw)
                                 .in(projectIds != null, Shipment::getProjectId, projectIds)
                                 .eq(statusEq != null, Shipment::getShipmentStatus, statusEq)
                                 .eq(approvalStatusEq != null, Shipment::getApprovalStatus, approvalStatusEq)
+                                // shipment_date 是 DATETIME：上界取次日 00:00 开区间，否则「当天」查不到
+                                .ge(dateFrom != null, Shipment::getShipmentDate,
+                                        dateFrom == null ? null : dateFrom.atStartOfDay())
+                                .lt(dateTo != null, Shipment::getShipmentDate,
+                                        dateTo == null ? null : dateTo.plusDays(1).atStartOfDay())
                                 .orderByDesc(Shipment::getCreatedAt),
                         Shipment::getApplicantId, me));
         return page.convert(s -> toVO(s, dictMaps(), userNamesOf(page.getRecords())));

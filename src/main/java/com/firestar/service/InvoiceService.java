@@ -5,6 +5,7 @@ import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.TimelineNodeVO;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -38,9 +39,17 @@ public interface InvoiceService {
     /** 审批驳回（回写 REJECTED + 通知） */
     void rejectTask(String taskId, String comment);
 
-    /** 分页列表（行级隔离：非 admin 只看 applicantId=自己；字典翻译 + 用户名翻译） */
+    /**
+     * 分页列表（行级隔离：非 admin 只看 applicantId=自己；字典翻译 + 用户名翻译）。
+     *
+     * <p>查询条件（2026-10-28 补齐）：projectId/receivableId/status/invoiceType/docDirection
+     * 精确、invoiceNo 模糊、projectName 模糊（反查项目）、dateFrom~dateTo 按 invoice_date
+     * 闭区间。全部可空，空即不限。</p>
+     */
     IPage<InvoiceVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                           Long projectId, Long receivableId, String status);
+                           Long projectId, Long receivableId, String status, String invoiceNo,
+                           String projectName, String invoiceType, String docDirection,
+                           LocalDate dateFrom, LocalDate dateTo);
 
     /** 详情（可见性：申请人 / ROLE_ADMIN / 审批任务处理人 三选一） */
     InvoiceVO detail(Long id, String username, boolean isAdmin);
