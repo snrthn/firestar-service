@@ -42,6 +42,13 @@ public class ProjectRequest {
     private BigDecimal contractAmount;
 
     /**
+     * 是否允许回款前开出发票（V77，票款勾稽开关）。
+     * true(默认) = 允许先开票后回款；false = 不允许，发票侧强制票款勾稽。
+     * 立项为空时后端默认 true，保持既有宽松行为。
+     */
+    private Boolean allowInvoiceBeforeReceipt;
+
+    /**
      * 货物明细（方案2：立项带行）。
      * 随立项的草稿/提交一起保存，作为合同货物清单；发货流程按行做超发校验。
      * 可为空（草稿允许暂不定明细），但提交审批（submit）时后端强制至少一行。

@@ -46,6 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -158,19 +159,31 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (!Objects.equals(receivable.getProjectId(), project.getId())) {
             throw new IllegalArgumentException("应收单不属于该项目：" + req.getReceivableId());
         }
-        if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("开票金额必须为正");
+        // 方案A（2026-10-27）：总额强制 = Σ分配（只读自动算）；兼容旧 receivableId 单张开票路径兜底
+        BigDecimal total = (req.getAllocations() != null && !req.getAllocations().isEmpty())
+                ? req.getAllocations().stream()
+                .map(a -> a.getAmount() == null ? BigDecimal.ZERO : a.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : req.getInvoiceAmount();
+        if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("开票金额必须大于 0");
         }
         if (req.getInvoiceDate() == null) {
             throw new IllegalArgumentException("开票日期不能为空");
+        }
+        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
+            throw new IllegalArgumentException("发票文件附件不能为空");
+        }
+        if (req.getInvoiceType() == null || req.getInvoiceType().isBlank()) {
+            throw new IllegalArgumentException("发票类型不能为空");
         }
 
         Invoice invoice = new Invoice();
         invoice.setProjectId(project.getId());
         invoice.setReceivableId(receivable.getId());
-        invoice.setInvoiceAmount(req.getInvoiceAmount());
+        invoice.setInvoiceAmount(total);
         invoice.setTaxRate(req.getTaxRate());
-        invoice.setTaxAmount(req.getTaxAmount());
+        invoice.setTaxAmount(taxOf(req.getInvoiceAmount(), req.getTaxRate()));
         // 业务单号：未手填时系统自动生成 FP-yyyyMMdd-NNN（MAX+1 含逻辑删除占位，不复用已删号）；
         // 手填场景 = 录纸质发票票号，必须业务层查重（含逻辑删除行）防唯一键冲突 500（2026-10-27 实锤）
         String invoiceNo = (req.getInvoiceNo() == null || req.getInvoiceNo().isBlank())
@@ -202,7 +215,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         bindAttachments(invoice.getId(), req.getAttachmentFileIds());
         // 核销分配明细落库（V65 双向拆分）：计划态不滚数字，completeTask 审批通过才生效
         // 传主应收+方向：空分配（旧兼容路径）也要过"未开票余额"闸；红冲单（RED）不受上限限制
-        saveAllocations(invoice.getId(), req.getAllocations(), req.getInvoiceAmount(), project.getId(),
+        saveAllocations(invoice.getId(), req.getAllocations(), total, project.getId(),
                 receivable.getId(), direction);
 
         log.info("[invoice] 创建发票草稿 id={} projectId={} receivableId={} amount={} allocations={}",
@@ -272,9 +285,12 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (req.getInvoiceDate() == null) {
             throw new IllegalArgumentException("开票日期不能为空");
         }
+        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
+            throw new IllegalArgumentException("发票文件附件不能为空");
+        }
         r.setInvoiceAmount(req.getInvoiceAmount());
         r.setTaxRate(req.getTaxRate());
-        r.setTaxAmount(req.getTaxAmount());
+        r.setTaxAmount(taxOf(req.getInvoiceAmount(), req.getTaxRate()));
         // 发票号查重（排除自身）：手填重复票号会撞 uk_tenant_invoice_no 唯一键 -> 500，提前拦截
         String newInvoiceNo = req.getInvoiceNo();
         if (newInvoiceNo != null && !newInvoiceNo.isBlank()
@@ -300,11 +316,14 @@ public class InvoiceServiceImpl implements InvoiceService {
         // 分配明细同口径全量替换：计划态未生效，硬删重插无痕（V65）
         invoiceAllocationMapper.delete(new LambdaQueryWrapper<InvoiceAllocation>()
                 .eq(InvoiceAllocation::getInvoiceId, id));
+        // 方案A（2026-10-27）：编辑态发票金额法定锁定，总额以原单金额为准，
+        // 校验各分配行之和 = 原发票金额（防止编辑分配时偏离法定金额）
+        BigDecimal total = r.getInvoiceAmount();
         // 同 create：空分配也要过"未开票余额"闸；方向以库中原单为准（编辑请求不带 docDirection）
-        saveAllocations(id, req.getAllocations(), req.getInvoiceAmount(), r.getProjectId(),
+        saveAllocations(id, req.getAllocations(), total, r.getProjectId(),
                 r.getReceivableId(), r.getDocDirection());
         log.info("[invoice] 编辑发票 id={} amount={} allocations={} user={}",
-                id, req.getInvoiceAmount(), req.getAllocations() == null ? 0 : req.getAllocations().size(),
+                id, total, req.getAllocations() == null ? 0 : req.getAllocations().size(),
                 currentUsername());
     }
 
@@ -535,12 +554,31 @@ public class InvoiceServiceImpl implements InvoiceService {
      */
     private void saveAllocations(Long invoiceId, List<AllocationItem> items, BigDecimal total,
                                  Long projectId, Long mainReceivableId, String docDirection) {
+        // V77：票款勾稽开关（false=不允许回款前开票时强制 开票额≤已回款−已开票）
+        Project proj = projectMapper.selectById(projectId);
+        boolean allowInvoiceBeforeReceipt = proj != null
+                && !Boolean.FALSE.equals(proj.getAllowInvoiceBeforeReceipt());
         if (items == null || items.isEmpty()) {
             // 旧兼容路径（无分配明细 = 主应收单独享全额）同样必须过"未开票余额"闸，
             // 否则任意大金额可绕过全部校验直接落库（2026-10-27 实锤：id=7 开出 55,555,555.00）。
             // 红冲单（RED）审批通过后是加回额度（uninvoiced.add），不受上限限制。
             if (!"RED".equals(docDirection)) {
                 assertWithinUninvoiced(mainReceivableId, total, invoiceId);
+                // 票款勾稽（V77）：不允许回款前开票时，主应收单开票额不得超「已回款−已开票」
+                if (!allowInvoiceBeforeReceipt) {
+                    Receivable mrv = receivableMapper.selectById(mainReceivableId);
+                    BigDecimal received = (mrv == null || mrv.getReceivedAmount() == null)
+                            ? BigDecimal.ZERO : mrv.getReceivedAmount();
+                    BigDecimal invoiced = (mrv == null || mrv.getInvoicedAmount() == null)
+                            ? BigDecimal.ZERO : mrv.getInvoicedAmount();
+                    BigDecimal ceiling = received.subtract(invoiced);
+                    if (total.compareTo(ceiling) > 0) {
+                        throw new IllegalArgumentException("项目已设为「不允许回款前开票」，应收单 "
+                                + (mrv == null ? String.valueOf(mainReceivableId) : mrv.getReceivableNo())
+                                + " 本次开票 " + total.toPlainString() + " 超过可开票余额 " + ceiling.toPlainString()
+                                + "（已回款 " + received.toPlainString() + " − 已开票 " + invoiced.toPlainString() + "）");
+                    }
+                }
             }
             return;
         }
@@ -578,6 +616,15 @@ public class InvoiceServiceImpl implements InvoiceService {
                     throw new IllegalArgumentException("超出应收单未开票余额：" + rv.getReceivableNo()
                             + "，可用 " + available.toPlainString());
                 }
+                // 票款勾稽（V77）：不允许回款前开票时，开票额不得超「已回款−已开票」余额
+                BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
+                BigDecimal invoiced = rv.getInvoicedAmount() == null ? BigDecimal.ZERO : rv.getInvoicedAmount();
+                BigDecimal ceiling = received.subtract(invoiced);
+                if (!allowInvoiceBeforeReceipt && it.getAmount().compareTo(ceiling) > 0) {
+                    throw new IllegalArgumentException("项目已设为「不允许回款前开票」，应收单 " + rv.getReceivableNo()
+                            + " 本次开票 " + it.getAmount().toPlainString() + " 超过可开票余额 " + ceiling.toPlainString()
+                            + "（已回款 " + received.toPlainString() + " − 已开票 " + invoiced.toPlainString() + "）");
+                }
             }
             sum = sum.add(it.getAmount());
         }
@@ -595,6 +642,14 @@ public class InvoiceServiceImpl implements InvoiceService {
             invoiceAllocationMapper.insert(a);
         }
         log.info("[invoice] 开票分配落库 invoiceId={} rows={} total={}", invoiceId, items.size(), total);
+    }
+
+    /** 税额 = 金额 × 税率（V77：前端只读自动算，后端以金额×税率重算，不信任前端传入值） */
+    private static BigDecimal taxOf(BigDecimal amount, BigDecimal rate) {
+        if (amount == null || rate == null) {
+            return BigDecimal.ZERO;
+        }
+        return amount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**
@@ -636,6 +691,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
         // RED（红冲单）反向：扣回应收单已开票、加回未开票（2026-10-25 红冲入口）
         boolean red = "RED".equals(r.getDocDirection());
+        // V77：票款勾稽开关（false=不允许回款前开票时强制 开票后已开票≤已回款）
+        Project proj = projectMapper.selectById(r.getProjectId());
+        boolean allowInvoiceBeforeReceipt = proj != null
+                && !Boolean.FALSE.equals(proj.getAllowInvoiceBeforeReceipt());
         for (InvoiceAllocation a : rows) {
             Receivable rv = receivableMapper.selectById(a.getReceivableId());
             if (rv == null) {
@@ -649,6 +708,16 @@ public class InvoiceServiceImpl implements InvoiceService {
                 throw new IllegalStateException("应收单未开票余额不足以核销本次开票：" + rv.getReceivableNo()
                         + "，未开票 " + uninvoiced.toPlainString() + "，本次 " + a.getAmount().toPlainString()
                         + "，疑似并发超开穿透，请核查（本次审批已回滚）");
+            }
+            // 票款勾稽（V77 第三道闸兜底）：不允许回款前开票时，开票后已开票额不得超已回款额
+            if (!red && !allowInvoiceBeforeReceipt) {
+                BigDecimal invoicedAfter = invoiced.add(a.getAmount());
+                BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
+                if (invoicedAfter.compareTo(received) > 0) {
+                    throw new IllegalStateException("项目不允许回款前开票，应收单 " + rv.getReceivableNo()
+                            + " 开票后已开票 " + invoicedAfter.toPlainString() + " 将超过已回款 " + received.toPlainString()
+                            + "，疑似并发穿透，审批已回滚");
+                }
             }
             rv.setInvoicedAmount(red ? invoiced.subtract(a.getAmount()) : invoiced.add(a.getAmount()));
             rv.setUninvoicedAmount(newUninvoiced);

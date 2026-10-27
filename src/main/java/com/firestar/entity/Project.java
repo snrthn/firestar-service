@@ -87,4 +87,13 @@ public class Project extends LogicDeleteEntity {
 
     /** 应收金额（应收单生成时累加，V59 汇总列） */
     private BigDecimal receivableAmount;
+
+    /**
+     * 是否允许回款前开出发票（V77，票款勾稽开关）。
+     *
+     * <p>true(默认) = 允许先开票后回款（一期既有宽松行为）；
+     * false = 不允许，发票侧强制票款勾稽：每张应收单的开票额 ≤ 已回款 − 已开票余额，
+     * 防止「票开超了但钱没回」的账实不符。</p>
+     */
+    private Boolean allowInvoiceBeforeReceipt;
 }

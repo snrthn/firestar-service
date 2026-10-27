@@ -93,6 +93,8 @@ public class ReceiptServiceImpl implements ReceiptService {
     private static final String DICT_APPROVAL_STATUS = "approval_status";
     private static final String DICT_RECEIPT_BUSINESS_STATUS = "receipt_business_status";
     private static final String DICT_RECEIPT_TYPE = "receipt_type";
+    /** 红字/退款类款项类型（V78 从 receipt_type 拆出：REFUND 退货退款 / RED 红冲） */
+    private static final String DICT_RECEIPT_RED_TYPE = "receipt_red_type";
     private static final String DICT_DOC_DIRECTION = "doc_direction";
 
     private final ReceiptMapper receiptMapper;
@@ -144,8 +146,24 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (req.getProjectId() == null) {
             throw new IllegalArgumentException("项目不能为空");
         }
-        if (req.getReceiptAmount() == null || req.getReceiptAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("收款金额必须为正");
+        // 方案A（2026-10-27）：总额口径——有分配 → 总额=Σ分配（只读自动算）；无分配=预收 → 用单据填写总额
+        boolean hasAlloc = req.getAllocations() != null && !req.getAllocations().isEmpty();
+        BigDecimal total = hasAlloc
+                ? req.getAllocations().stream()
+                .map(a -> a.getAmount() == null ? BigDecimal.ZERO : a.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : req.getReceiptAmount();
+        if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(hasAlloc ? "分配金额合计必须大于 0" : "收款金额必须大于 0");
+        }
+        if (req.getReceiptType() == null || req.getReceiptType().isBlank()) {
+            throw new IllegalArgumentException("款项类型不能为空");
+        }
+        if (req.getReceiptDate() == null) {
+            throw new IllegalArgumentException("收款日期不能为空");
+        }
+        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
+            throw new IllegalArgumentException("银行回单附件不能为空");
         }
         Project project = projectMapper.selectById(req.getProjectId());
         if (project == null) {
@@ -154,7 +172,7 @@ public class ReceiptServiceImpl implements ReceiptService {
 
         Receipt receipt = new Receipt();
         receipt.setProjectId(project.getId());
-        receipt.setReceiptAmount(req.getReceiptAmount());
+        receipt.setReceiptAmount(total);
         receipt.setReceiptType(req.getReceiptType());
         receipt.setReceiptDate(req.getReceiptDate());
         // 注意：bank_receipt_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
@@ -163,7 +181,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         String direction = "RED".equals(req.getDocDirection()) ? "RED" : "BLUE";
         receipt.setDocDirection(direction);
         // 超收硬校验（双保险·后端关口一）：蓝字收款不得使累计已收超过合同金额；信任是命脉，账不能算错
-        assertWithinContract(project, req.getReceiptAmount(), direction, null);
+        assertWithinContract(project, total, direction, null);
         if ("RED".equals(direction)) {
             receipt.setOriginalReceiptId(validateRedFlush(req, project).getId());
         }
@@ -176,7 +194,7 @@ public class ReceiptServiceImpl implements ReceiptService {
         // 附件软关联挂载：前端新建时单据尚无 id，上传未带 bizId，此处拿到自增 id 后统一挂载
         bindAttachments(receipt.getId(), req.getAttachmentFileIds());
         // 核销分配明细落库（V65 双向拆分）：计划态不滚数字，completeTask 审批通过才生效
-        saveAllocations(receipt.getId(), req.getAllocations(), req.getReceiptAmount(), project.getId());
+        saveAllocations(receipt.getId(), req.getAllocations(), total, project.getId());
 
         log.info("[receipt] 创建收款单草稿 id={} no={} projectId={} amount={}",
                 receipt.getId(), receipt.getReceiptNo(), project.getId(), req.getReceiptAmount());
@@ -245,19 +263,35 @@ public class ReceiptServiceImpl implements ReceiptService {
         if (project == null) {
             throw new IllegalArgumentException("项目不存在：" + req.getProjectId());
         }
-        if (req.getReceiptAmount() == null || req.getReceiptAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("收款金额必须为正");
+        // 方案A（2026-10-27）：总额口径——有分配 → 总额=Σ分配（只读自动算）；无分配=预收 → 用单据填写总额
+        boolean hasAllocU = req.getAllocations() != null && !req.getAllocations().isEmpty();
+        BigDecimal total = hasAllocU
+                ? req.getAllocations().stream()
+                .map(a -> a.getAmount() == null ? BigDecimal.ZERO : a.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : req.getReceiptAmount();
+        if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(hasAllocU ? "分配金额合计必须大于 0" : "收款金额必须大于 0");
+        }
+        if (req.getReceiptType() == null || req.getReceiptType().isBlank()) {
+            throw new IllegalArgumentException("款项类型不能为空");
+        }
+        if (req.getReceiptDate() == null) {
+            throw new IllegalArgumentException("收款日期不能为空");
+        }
+        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
+            throw new IllegalArgumentException("银行回单附件不能为空");
         }
         // 超收硬校验（双保险·后端关口一，编辑草稿同口径）
         // 方向以数据库原单为准：update 不允许改 docDirection，且编辑请求不携带该字段
         // （前端仅红冲创建时传 RED），用 req 判会把编辑中的红冲单误判成蓝字而误拦（2026-10-27 实锤）
-        assertWithinContract(project, req.getReceiptAmount(),
+        assertWithinContract(project, total,
                 "RED".equals(r.getDocDirection()) ? "RED" : "BLUE", r.getId());
         // 不允许更换项目（换项目等于换合同，应新建；且汇总列是项目维度的）
         if (!Objects.equals(req.getProjectId(), r.getProjectId())) {
             throw new IllegalArgumentException("不允许更换项目，请新建收款单");
         }
-        r.setReceiptAmount(req.getReceiptAmount());
+        r.setReceiptAmount(total);
         r.setReceiptType(req.getReceiptType());
         r.setReceiptDate(req.getReceiptDate());
         // bank_receipt_path 已废弃（V62 真上传），不再写该列
@@ -267,9 +301,9 @@ public class ReceiptServiceImpl implements ReceiptService {
         rebindAttachments(id, req.getAttachmentFileIds());
         // 分配明细同口径全量替换：计划态未生效，硬删重插无痕（V65）
         writeOffMapper.delete(new LambdaQueryWrapper<WriteOff>().eq(WriteOff::getReceiptId, id));
-        saveAllocations(id, req.getAllocations(), req.getReceiptAmount(), r.getProjectId());
+        saveAllocations(id, req.getAllocations(), total, r.getProjectId());
         log.info("[receipt] 编辑收款单 id={} amount={} allocations={} user={}",
-                id, req.getReceiptAmount(), req.getAllocations() == null ? 0 : req.getAllocations().size(),
+                id, total, req.getAllocations() == null ? 0 : req.getAllocations().size(),
                 currentUsername());
     }
 
@@ -398,7 +432,10 @@ public class ReceiptServiceImpl implements ReceiptService {
                         Receipt::getCreatedBy, me));
         Map<String, DictData> statusDict = dictMap(DICT_APPROVAL_STATUS);
         Map<String, DictData> businessDict = dictMap(DICT_RECEIPT_BUSINESS_STATUS);
-        Map<String, DictData> typeDict = dictMap(DICT_RECEIPT_TYPE);
+        // V78：款项类型拆为蓝字(receipt_type) + 红字(receipt_red_type) 双字典，反查需合并
+        Map<String, DictData> typeDict = new HashMap<>();
+        typeDict.putAll(dictMap(DICT_RECEIPT_TYPE));
+        typeDict.putAll(dictMap(DICT_RECEIPT_RED_TYPE));
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
         Map<Long, String> userNames = userNamesOf(page.getRecords());
         // 项目信息批量预取：一页最多 500 条，逐条 selectById 会放大成 500 次查询
@@ -422,7 +459,10 @@ public class ReceiptServiceImpl implements ReceiptService {
         }
         Map<String, DictData> statusDict = dictMap(DICT_APPROVAL_STATUS);
         Map<String, DictData> businessDict = dictMap(DICT_RECEIPT_BUSINESS_STATUS);
-        Map<String, DictData> typeDict = dictMap(DICT_RECEIPT_TYPE);
+        // V78：款项类型拆为蓝字(receipt_type) + 红字(receipt_red_type) 双字典，反查需合并
+        Map<String, DictData> typeDict = new HashMap<>();
+        typeDict.putAll(dictMap(DICT_RECEIPT_TYPE));
+        typeDict.putAll(dictMap(DICT_RECEIPT_RED_TYPE));
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
         Map<Long, String> userNames = userNamesOf(List.of(r));
         Map<Long, Project> projects =

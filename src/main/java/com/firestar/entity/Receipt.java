@@ -56,6 +56,6 @@ public class Receipt extends LogicDeleteEntity {
     /** Flowable 流程实例 ID（提交审批后写入，驳回/终结后保留便于排查） */
     private String processInstanceId;
 
-    /** 款项类型（字典 receipt_type：NORMAL/PREPAY/OVERPAY/REFUND-退货退款） */
+    /** 款项类型：蓝字单取自 receipt_type（NORMAL/PREPAY），红字单取自 receipt_red_type（REFUND/RED）。V78 拆字典，存库值不变。 */
     private String receiptType;
 }

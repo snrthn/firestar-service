@@ -170,6 +170,9 @@ public class ProjectServiceImpl implements ProjectService {
         // 签约是审批通过后的独立动作（sign()），表单只认项目名称/客户/销售经理/预估金额
         p.setContractStatus("UNSIGNED");
         p.setContractAmount(req.getContractAmount());
+        // V77：票款勾稽开关，立项为空时默认允许（保持一期既有先开票后回款宽松行为）
+        p.setAllowInvoiceBeforeReceipt(req.getAllowInvoiceBeforeReceipt() != null
+                ? req.getAllowInvoiceBeforeReceipt() : Boolean.TRUE);
         // 编号不在此赋予（审批通过才赋）；状态从草稿开始
         p.setApprovalStatus("DRAFT");
         // 审批发起人（V47：审批中心「我发起的」过滤）。AuditMetaObjectHandler 不填 createdBy
@@ -211,6 +214,10 @@ public class ProjectServiceImpl implements ProjectService {
         if (req.getSalesManagerId() != null) exist.setSalesManagerId(req.getSalesManagerId());
         // contractStatus 不再随编辑变更（V46 起由 sign() 独占驱动）
         if (req.getContractAmount() != null) exist.setContractAmount(req.getContractAmount());
+        // V77：票款勾稽开关（传了才改，与 projectName / salesManagerId 同语义）
+        if (req.getAllowInvoiceBeforeReceipt() != null) {
+            exist.setAllowInvoiceBeforeReceipt(req.getAllowInvoiceBeforeReceipt());
+        }
         // 方案2：立项带行 —— 草稿/驳回态重建货物明细（先逻辑删旧行，再插新行，保持幂等）
         deleteItems(exist.getId());
         persistItems(exist.getId(), req.getItems());
@@ -1238,6 +1245,7 @@ public class ProjectServiceImpl implements ProjectService {
         vo.setCollectedAmount(amounts.receivedOf(p.getId()));
         vo.setInvoicedAmount(amounts.invoicedOf(p.getId()));
         vo.setReceivableAmount(amounts.receivableOf(p.getId()));
+        vo.setAllowInvoiceBeforeReceipt(p.getAllowInvoiceBeforeReceipt());
         vo.setReturnedAmount(returned);
         vo.setContractDesc(p.getContractDesc());
         vo.setContractSignedAt(p.getContractSignedAt());

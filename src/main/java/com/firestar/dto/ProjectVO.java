@@ -68,6 +68,9 @@ public class ProjectVO {
     /** 应收金额合计（Σ 有效应收单 receivable_amount，按项目聚合，V65） */
     private BigDecimal receivableAmount;
 
+    /** 是否允许回款前开出发票（V77，票款勾稽开关；true=允许默认，false=强制票款勾稽） */
+    private Boolean allowInvoiceBeforeReceipt;
+
     /** 累计退货金额（Σ fin_shipment.returned_amount） */
     private BigDecimal returnedAmount;
 
