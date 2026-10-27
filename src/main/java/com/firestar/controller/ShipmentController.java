@@ -37,17 +37,20 @@ public class ShipmentController {
         this.shipmentService = shipmentService;
     }
 
-    /** 分页列表（projectNo/projectName 模糊、status 精确；字典翻译 + 用户名翻译） */
+    /** 分页列表（projectNo/projectName 模糊、status(发货状态)精确、approvalStatus(审批状态)精确；字典翻译 + 用户名翻译）
+     *  ⚠️ status = 发货生命周期状态(shipment_status)；approvalStatus = 审批状态(approval_status，含 APPROVED)。
+     *     退货弹窗按 approvalStatus=APPROVED 查询，严禁把 APPROVED 当 status 传（APPROVED 不是发货状态值）。 */
     @GetMapping("/page")
     public Result<IPage<ShipmentVO>> page(
             @RequestParam(required = false) Integer pageNum,
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(required = false) String projectNo,
             @RequestParam(required = false) String projectName,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String approvalStatus) {
         return Result.success(shipmentService.page(
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
-                pageNum, pageSize, projectNo, projectName, status));
+                pageNum, pageSize, projectNo, projectName, status, approvalStatus));
     }
 
     /** 详情（含明细行 + 关联应收单 + 字典翻译） */

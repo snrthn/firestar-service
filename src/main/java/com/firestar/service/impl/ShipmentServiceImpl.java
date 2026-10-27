@@ -625,12 +625,15 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     @Override
     public IPage<ShipmentVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                                 String projectNo, String projectName, String status) {
+                                 String projectNo, String projectName, String status, String approvalStatus) {
         long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
         long size = pageSize == null || pageSize < 1 ? 10L : Math.min(pageSize, 500L);
         String noKw = projectNo == null || projectNo.isBlank() ? null : projectNo.trim();
         String nameKw = projectName == null || projectName.isBlank() ? null : projectName.trim();
         String statusEq = status == null || status.isBlank() ? null : status.trim();
+        // approvalStatus 精确匹配审批状态列（APPROVED 等）；退货弹窗据此筛「审批通过的发货单」。
+        // 与 status(发货生命周期) 是两张不同列，互不干扰。
+        String approvalStatusEq = approvalStatus == null || approvalStatus.isBlank() ? null : approvalStatus.trim();
 
         // 项目名称模糊 → projectId 集合（两段式，与 LogServiceImpl「操作人模糊」同范式，
         // 不拼 SQL 无注入）。发货表只有 projectId 没有 projectName 列，只能先反查项目。
@@ -660,6 +663,7 @@ public class ShipmentServiceImpl implements ShipmentService {
                                 .like(noKw != null, Shipment::getBatchNo, noKw)
                                 .in(projectIds != null, Shipment::getProjectId, projectIds)
                                 .eq(statusEq != null, Shipment::getShipmentStatus, statusEq)
+                                .eq(approvalStatusEq != null, Shipment::getApprovalStatus, approvalStatusEq)
                                 .orderByDesc(Shipment::getCreatedAt),
                         Shipment::getApplicantId, me));
         return page.convert(s -> toVO(s, dictMaps(), userNamesOf(page.getRecords())));

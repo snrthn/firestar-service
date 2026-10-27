@@ -56,9 +56,10 @@ public interface ShipmentService {
     /** 审批驳回（单节点流程无退回目标，故终结流程实例 + 置 REJECTED + 通知申请人，决策#2/#6 同人逻辑） */
     void rejectTask(String taskId, String comment);
 
-    /** 分页列表（projectNo/projectName 模糊、status 精确；字典翻译 + 用户名翻译） */
+    /** 分页列表（projectNo/projectName 模糊、status(发货状态)精确、approvalStatus(审批状态)精确；字典翻译 + 用户名翻译）
+     *  ⚠️ status=发货生命周期状态；approvalStatus=审批状态(APPROVED 等)。二者为不同列，勿混用。 */
     IPage<ShipmentVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,
-                           String projectNo, String projectName, String status);
+                           String projectNo, String projectName, String status, String approvalStatus);
 
     /** 详情（含明细行 + 关联应收单 + 字典翻译）；可见性：申请人 / ROLE_ADMIN / 审批任务处理人 三选一 */
     ShipmentVO detail(Long shipmentId, String username, boolean isAdmin);
