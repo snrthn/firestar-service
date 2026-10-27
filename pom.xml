@@ -204,6 +204,32 @@
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.3.0</version>
             </plugin>
+            <!-- JaCoCo 覆盖率（2026-10-27）：此前无任何覆盖率工具，核心业务覆盖度无法度量。
+                 显式锁 0.8.11（与 compiler/jar 同策略）：该版对 Maven 要求宽松，
+                 在开发机 Maven 3.5.4 与 CI 3.6.3+ 均可用。
+                 ⚠️ 本地 m2 首次无此插件，需联网解析 —— 不要用 mvn -o 跑 test，
+                    否则报 plugin resolution failure。
+                 报告产物：target/site/jacoco/index.html（mvn test 后生成）。 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

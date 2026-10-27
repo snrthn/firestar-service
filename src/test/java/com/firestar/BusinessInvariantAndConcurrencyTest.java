@@ -3,15 +3,22 @@ package com.firestar;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.dto.ReceiptRequest;
+import com.firestar.dto.ShipmentCreateReq;
+import com.firestar.dto.ShipmentLineCreateReq;
 import com.firestar.entity.Item;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
+import com.firestar.entity.Shipment;
+import com.firestar.entity.ShipmentLine;
 import com.firestar.mapper.ItemMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
+import com.firestar.mapper.ShipmentLineMapper;
+import com.firestar.mapper.ShipmentMapper;
 import com.firestar.service.ReceiptService;
+import com.firestar.service.ShipmentService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,6 +66,12 @@ class BusinessInvariantAndConcurrencyTest {
     private ReceiptMapper receiptMapper;
     @Autowired
     private ReceiptService receiptService;
+    @Autowired
+    private ShipmentService shipmentService;
+    @Autowired
+    private ShipmentMapper shipmentMapper;
+    @Autowired
+    private ShipmentLineMapper shipmentLineMapper;
 
     private Long newProjectAndItem(int quantity) {
         Project p = new Project();
@@ -82,9 +95,11 @@ class BusinessInvariantAndConcurrencyTest {
     }
 
     @Test
-    @DisplayName("P0-1 回归：两线程并发发货，合同量 10、各发 6，不得超发（最终 <= 10 且至少一个被拦）")
+    @DisplayName("P0-1 回归：两线程并发调用 ShipmentServiceImpl.create，合同量 10、各发 6，不得超发（真调服务）")
     void concurrentShipmentDoesNotOverIssued() throws Exception {
         Long itemId = newProjectAndItem(10);
+        Item before = itemMapper.selectById(itemId);
+        Long projectId = before.getProjectId();
 
         int qty = 6;
         int threads = 2;
@@ -92,19 +107,25 @@ class BusinessInvariantAndConcurrencyTest {
         CountDownLatch done = new CountDownLatch(threads);
         AtomicInteger successCount = new AtomicInteger(0);
 
+        // ⚠️ 本用例此前是「在测试内复制一份原子 UPDATE SQL 打 itemMapper」——验的是 SQL 副本，
+        //    ShipmentServiceImpl 真实逻辑一旦漂移，测试照样绿（假安全感）。
+        //    现改为真实调用 shipmentService.create，超发校验由服务内部的原子 UPDATE 兜底。
         Runnable task = () -> {
             try {
                 start.await();
-                // 与 ShipmentServiceImpl P0-1 修复完全一致的原子 UPDATE：把超发校验下推到 SQL
-                int rows = itemMapper.update(null, new LambdaUpdateWrapper<Item>()
-                        .eq(Item::getId, itemId)
-                        .apply("shipped_qty + {0} <= quantity", qty)
-                        .setSql("shipped_qty = shipped_qty + " + qty));
-                if (rows > 0) {
-                    successCount.incrementAndGet();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // SecurityContext 是线程隔离的，必须在每个线程内各自注入（create 内部读 currentUserId）
+                SecurityContextHolder.getContext().setAuthentication(
+                        new UsernamePasswordAuthenticationToken("biz_test", null, java.util.List.of()));
+                ShipmentLineCreateReq line = new ShipmentLineCreateReq();
+                line.setItemId(itemId);
+                line.setShipmentQty(qty);
+                ShipmentCreateReq req = new ShipmentCreateReq();
+                req.setProjectId(projectId);
+                req.setLines(List.of(line));
+                shipmentService.create(req);
+                successCount.incrementAndGet();
+            } catch (Exception ignored) {
+                // 超发被服务内原子 UPDATE 拦下（IllegalStateException）或校验拒绝 → 均计为未成功
             } finally {
                 done.countDown();
             }
@@ -122,12 +143,21 @@ class BusinessInvariantAndConcurrencyTest {
         // 核心不变量：并发下绝不突破合同量（原乐观锁静默失败时会变成 12）
         assertTrue(after.getShippedQty() <= 10,
                 "并发发货后已发量必须 <= 合同量 10，实际=" + after.getShippedQty());
-        // 两个 6 不可能都成功（12 > 10），至少一个被原子 UPDATE 的 WHERE 拦下
+        // 两个 6 不可能都成功（12 > 10），至少一个被服务内原子 UPDATE 的 WHERE 拦下
         assertTrue(successCount.get() < threads,
                 "超发应被拦下：成功次数应 < 线程数，实际=" + successCount.get());
 
+        // 清理：create 会落发货单 + 明细行（超发那条可能已插入后被拦/回滚，一并清）
+        List<Shipment> ss = shipmentMapper.selectList(
+                new LambdaQueryWrapper<Shipment>().eq(Shipment::getProjectId, projectId));
+        for (Shipment s : ss) {
+            shipmentLineMapper.delete(new LambdaQueryWrapper<ShipmentLine>()
+                    .eq(ShipmentLine::getShipmentId, s.getId()));
+            shipmentMapper.deleteById(s.getId());
+        }
         itemMapper.deleteById(itemId);
-        projectMapper.deleteById(after.getProjectId());
+        projectMapper.deleteById(projectId);
+        SecurityContextHolder.clearContext();
     }
 
     @Test
