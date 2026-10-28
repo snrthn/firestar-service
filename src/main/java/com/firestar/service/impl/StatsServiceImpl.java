@@ -17,6 +17,7 @@ import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
 import com.firestar.entity.ReturnOrder;
 import com.firestar.entity.Shipment;
+import com.firestar.entity.ShipmentLine;
 import com.firestar.entity.User;
 import com.firestar.entity.WriteOff;
 import com.firestar.mapper.CustomerMapper;
@@ -28,6 +29,7 @@ import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.ReturnOrderMapper;
 import com.firestar.mapper.ShipmentMapper;
+import com.firestar.mapper.ShipmentLineMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.mapper.WriteOffMapper;
 import com.firestar.service.StatsService;
@@ -82,6 +84,7 @@ public class StatsServiceImpl implements StatsService {
     private final ReceiptMapper receiptMapper;
     private final InvoiceMapper invoiceMapper;
     private final ShipmentMapper shipmentMapper;
+    private final ShipmentLineMapper shipmentLineMapper;
     private final WriteOffMapper writeOffMapper;
     private final ReturnOrderMapper returnOrderMapper;
     private final ItemMapper itemMapper;
@@ -216,8 +219,8 @@ public class StatsServiceImpl implements StatsService {
         LocalDate[] p = periodDates(q);
         if (pids != null && pids.isEmpty()) {
             v.setProjectCount(0L);
-            v.setCustomerCount(customerEnabledCount());
-            v.setGoodsCount(goodsEnabledCount());
+            v.setCustomerCount(customerEnabledCount(pids));
+            v.setGoodsCount(goodsEnabledCount(pids));
             return v;
         }
 
@@ -327,8 +330,8 @@ public class StatsServiceImpl implements StatsService {
 
         v.setDiffPool(v.getReceiptAmount().subtract(v.getWriteOffAmount()));
         v.setProjectCount(pids != null ? (long) pids.size() : projectMapper.selectCount(new LambdaQueryWrapper<>()));
-        v.setCustomerCount(customerEnabledCount());
-        v.setGoodsCount(goodsEnabledCount());
+        v.setCustomerCount(customerEnabledCount(pids));
+        v.setGoodsCount(goodsEnabledCount(pids));
         return v;
     }
 
@@ -789,12 +792,48 @@ public class StatsServiceImpl implements StatsService {
 
     // ===================== 辅助 =====================
 
-    private long customerEnabledCount() {
-        return customerMapper.selectCount(new LambdaQueryWrapper<Customer>().eq(Customer::getStatus, "ENABLED"));
+    /**
+     * 客户总数：pids 为 null（未筛选项目）时取全量 ENABLED 客户；
+     * 指定项目时收敛为「这些项目关联的去重启用客户数」（筛选 PJ-xxx 时不再显示全公司客户数）。
+     */
+    private long customerEnabledCount(List<Long> pids) {
+        if (pids == null) {
+            return customerMapper.selectCount(new LambdaQueryWrapper<Customer>().eq(Customer::getStatus, "ENABLED"));
+        }
+        if (pids.isEmpty()) {
+            return 0L;
+        }
+        List<Long> cids = projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                        .select(Project::getCustomerId).in(Project::getId, pids)).stream()
+                .map(Project::getCustomerId).filter(Objects::nonNull).distinct()
+                .collect(Collectors.toList());
+        if (cids.isEmpty()) {
+            return 0L;
+        }
+        return customerMapper.selectCount(new LambdaQueryWrapper<Customer>()
+                .eq(Customer::getStatus, "ENABLED").in(Customer::getId, cids));
     }
 
-    /** 货物总数（ENABLED，V71 主表）——与 customerEnabledCount 同范式，给总览提供可聚合的货物维度计数 */
-    private long goodsEnabledCount() {
-        return goodsMapper.selectCount(new LambdaQueryWrapper<Goods>().eq(Goods::getStatus, "ENABLED"));
+    /**
+     * 货物总数：pids 为 null（未筛选项目）时取全量 ENABLED 货物主数据（与历史口径一致）；
+     * 指定项目时收敛为「这些项目发货涉及的商品(SKU)去重计数」（fin_item via fin_shipment_line），
+     * 因 fin_goods 与 fin_item 为两张表、发货行只挂 item_id，故按实际发货 SKU 计本项目货物数。
+     */
+    private long goodsEnabledCount(List<Long> pids) {
+        if (pids == null) {
+            return goodsMapper.selectCount(new LambdaQueryWrapper<Goods>().eq(Goods::getStatus, "ENABLED"));
+        }
+        if (pids.isEmpty()) {
+            return 0L;
+        }
+        List<Long> shipmentIds = shipmentMapper.selectList(new LambdaQueryWrapper<Shipment>()
+                        .select(Shipment::getId).in(Shipment::getProjectId, pids)).stream()
+                .map(Shipment::getId).collect(Collectors.toList());
+        if (shipmentIds.isEmpty()) {
+            return 0L;
+        }
+        return shipmentLineMapper.selectList(new LambdaQueryWrapper<ShipmentLine>()
+                        .select(ShipmentLine::getItemId).in(ShipmentLine::getShipmentId, shipmentIds)).stream()
+                .map(ShipmentLine::getItemId).filter(Objects::nonNull).distinct().count();
     }
 }

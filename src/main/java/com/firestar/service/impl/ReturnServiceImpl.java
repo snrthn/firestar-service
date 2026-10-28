@@ -559,6 +559,18 @@ public class ReturnServiceImpl implements ReturnService {
             notes.add("发货明细已退量回写：" + String.join("；", rollbackNotes));
         }
 
+        // ⑤ 回写发货单的累计退货金额（立项详情「累计退货 / 净发货」的唯一取数来源）。
+        //    此前只回写发货明细行的已退数量（section ④），漏了发货单级别的 returned_amount →
+        //    退货真实发生、立项「累计退货」却恒为 0、净发货虚高（等于毛发货）。
+        //    一次退货可能含多行，amount 已是本单退货总额，对发货单做 += 累加即可支撑多次退货累计。
+        Shipment retShipment = shipmentMapper.selectById(ro.getShipmentId());
+        if (retShipment != null) {
+            retShipment.setReturnedAmount(nz(retShipment.getReturnedAmount()).add(amount));
+            shipmentMapper.updateById(retShipment);
+            notes.add("发货单累计退货金额 +" + amount
+                    + (retShipment.getBatchNo() != null ? "（" + retShipment.getBatchNo() + "）" : ""));
+        }
+
         // 冲减完成：状态推进 + ext 留执行说明（详情页展示）
         ro.setApprovalStatus("APPROVED");   // V75：审批态用通用 approval_status，无 COMPLETED；完成度由 executeStatus 表达
         ro.setExecuteStatus("COMPLETED");

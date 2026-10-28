@@ -578,7 +578,10 @@ public class ReceiptServiceImpl implements ReceiptService {
                 id, list.size(), written, r.getUnwrittenOffAmount());
     }
 
-    /** 滚（add）或回滚（!add）应收单回款口径：received/unreceived 成对增减（applyWriteOffs 同范式） */
+    /**
+     * 滚（add）或回滚（!add）应收单回款口径：received/unreceived/writtenOff 成对增减。
+     * writtenOffAmount（列表「已核销」列）此前从不回写、恒为 0，与 receivedAmount 同口径同步。
+     */
     private void rollReceivable(Long receivableId, BigDecimal amount, boolean add) {
         Receivable rv = receivableMapper.selectById(receivableId);
         if (rv == null) {
@@ -586,8 +589,13 @@ public class ReceiptServiceImpl implements ReceiptService {
         }
         BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
         BigDecimal unreceived = rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount();
+        BigDecimal written = rv.getWrittenOffAmount() == null ? BigDecimal.ZERO : rv.getWrittenOffAmount();
+        BigDecimal receivableAmt = rv.getReceivableAmount() == null ? BigDecimal.ZERO : rv.getReceivableAmount();
         rv.setReceivedAmount(add ? received.add(amount) : received.subtract(amount));
         rv.setUnreceivedAmount(add ? unreceived.subtract(amount) : unreceived.add(amount));
+        // D2：应收单「已核销」= 已回款核销累计（与 receivedAmount 同口径），此前从不回写恒为 0
+        rv.setWrittenOffAmount(add ? written.add(amount) : written.subtract(amount));
+        rv.setUnwrittenOffAmount(receivableAmt.subtract(rv.getWrittenOffAmount()));
         receivableMapper.updateById(rv);
     }
 
@@ -819,8 +827,13 @@ public class ReceiptServiceImpl implements ReceiptService {
             }
             BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
             BigDecimal unreceived = rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount();
+            BigDecimal writtenOff = rv.getWrittenOffAmount() == null ? BigDecimal.ZERO : rv.getWrittenOffAmount();
+            BigDecimal receivableAmt = rv.getReceivableAmount() == null ? BigDecimal.ZERO : rv.getReceivableAmount();
             rv.setReceivedAmount(red ? received.subtract(w.getAmount()) : received.add(w.getAmount()));
             rv.setUnreceivedAmount(red ? unreceived.add(w.getAmount()) : unreceived.subtract(w.getAmount()));
+            // D2：应收单「已核销」同步（与 receivedAmount 同口径，红冲反向）
+            rv.setWrittenOffAmount(red ? writtenOff.subtract(w.getAmount()) : writtenOff.add(w.getAmount()));
+            rv.setUnwrittenOffAmount(receivableAmt.subtract(rv.getWrittenOffAmount()));
             receivableMapper.updateById(rv);
             written = written.add(w.getAmount());
         }
