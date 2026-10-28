@@ -504,7 +504,9 @@ public class ReturnServiceImpl implements ReturnService {
             WriteOff wo = new WriteOff();
             wo.setWriteOffNo(generateWriteOffNo());
             wo.setReceiptId(redRc.getId());
-            wo.setReceivableId(origin.getId());
+            // 虎哥拍板：自动退款单与手动红冲②统一 → 反向核销行指向「红字应收」(red)，
+            // 执行「消耗贷项」语义（与手动红冲②同口径），而非反向冲原蓝字应收。
+            wo.setReceivableId(red.getId());
             // V80：反向核销行带 project_id，支撑看板 F-08/F-09 随项目/客户筛选下推
             wo.setProjectId(redRc.getProjectId());
             wo.setAmount(recRemain);
@@ -514,10 +516,12 @@ public class ReturnServiceImpl implements ReturnService {
             wo.setWriteOffDate(LocalDate.now());
             wo.setCreatedBy(operatorId);
             writeOffMapper.insert(wo);
-            // 滚原应收单：已回款 -= recRemain / 未回款 += recRemain（同构 V65 applyWriteOffs RED 分支）
-            origin.setReceivedAmount(received.subtract(recRemain));
-            origin.setUnreceivedAmount(nz(origin.getUnreceivedAmount()).add(recRemain));
-            receivableMapper.updateById(origin);
+            // 消耗红字应收（贷项备忘）：累加已冲销 writtenOff；不反向冲原蓝字应收的 received
+            // （红字应收独立承载退货负向，看板对其 docDirection=RED 取负，净应收已正确减除）。
+            BigDecimal redWritten = nz(red.getWrittenOffAmount()).add(recRemain);
+            red.setWrittenOffAmount(redWritten);
+            red.setUnwrittenOffAmount(red.getReceivableAmount().subtract(redWritten));
+            receivableMapper.updateById(red);
             // 滚退款单自身核销列（同构 applyWriteOffs：written = Σ 行金额）
             redRc.setWrittenOffAmount(recRemain);
             redRc.setUnwrittenOffAmount(redRc.getReceiptAmount().subtract(recRemain));

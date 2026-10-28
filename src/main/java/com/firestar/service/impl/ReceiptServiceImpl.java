@@ -183,7 +183,13 @@ public class ReceiptServiceImpl implements ReceiptService {
         // 超收硬校验（双保险·后端关口一）：蓝字收款不得使累计已收超过合同金额；信任是命脉，账不能算错
         assertWithinContract(project, total, direction, null);
         if ("RED".equals(direction)) {
-            receipt.setOriginalReceiptId(validateRedFlush(req, project).getId());
+            // ③ 详情红冲（冲蓝字原单）：带 originalReceiptId，走原单校验；
+            // ② 手动红冲 / ① 自动退款（消耗红字应收贷项）：originalReceiptId 为空，跳过原单校验，
+            // 核销行指向红字应收，由 applyWriteOffs 按目标方向走消耗语义。
+            // （2026-10-28 补堵：此前一律要求原单 → ② 手动红冲永远建不出单）
+            if (req.getOriginalReceiptId() != null) {
+                receipt.setOriginalReceiptId(validateRedFlush(req, project).getId());
+            }
         }
         // 创建即草稿，待提交再拉审批
         receipt.setApprovalStatus("PENDING_APPROVAL");
@@ -825,10 +831,30 @@ public class ReceiptServiceImpl implements ReceiptService {
             if (rv == null) {
                 continue;
             }
+            BigDecimal receivableAmt = rv.getReceivableAmount() == null ? BigDecimal.ZERO : rv.getReceivableAmount();
+            // 目标应收单为红字（退货生成的贷项备忘）：执行「消耗」语义——累加已冲销 writtenOff、
+            // 标记贷项结清；不对其 received 做加减（红字应收 received 恒为 0，减项统一由收款单
+            // docDirection=RED 在 accumulateProjectCollected 层面取负）。最后一道闸：防双冲，
+            // writtenOff 不得超出 receivableAmount，否则说明已被冲销过一次，阻断。
+            if ("RED".equals(rv.getDocDirection())) {
+                BigDecimal writtenOff = rv.getWrittenOffAmount() == null ? BigDecimal.ZERO : rv.getWrittenOffAmount();
+                BigDecimal newWritten = writtenOff.add(w.getAmount());
+                if (newWritten.compareTo(receivableAmt) > 0) {
+                    throw new IllegalArgumentException("红字应收单 " + rv.getReceivableNo()
+                            + " 冲销金额超出可冲销余额（已冲销 " + writtenOff.toPlainString()
+                            + "，本次 " + w.getAmount().toPlainString()
+                            + "，应收额 " + receivableAmt.toPlainString() + "），疑似重复冲销，已阻断。");
+                }
+                rv.setWrittenOffAmount(newWritten);
+                rv.setUnwrittenOffAmount(receivableAmt.subtract(newWritten));
+                receivableMapper.updateById(rv);
+                written = written.add(w.getAmount());
+                continue;
+            }
+            // 目标应收单为蓝字：按收款单方向加减（蓝字收款单 → add；红冲单 → subtract 反向）
             BigDecimal received = rv.getReceivedAmount() == null ? BigDecimal.ZERO : rv.getReceivedAmount();
             BigDecimal unreceived = rv.getUnreceivedAmount() == null ? BigDecimal.ZERO : rv.getUnreceivedAmount();
             BigDecimal writtenOff = rv.getWrittenOffAmount() == null ? BigDecimal.ZERO : rv.getWrittenOffAmount();
-            BigDecimal receivableAmt = rv.getReceivableAmount() == null ? BigDecimal.ZERO : rv.getReceivableAmount();
             rv.setReceivedAmount(red ? received.subtract(w.getAmount()) : received.add(w.getAmount()));
             rv.setUnreceivedAmount(red ? unreceived.add(w.getAmount()) : unreceived.subtract(w.getAmount()));
             // D2：应收单「已核销」同步（与 receivedAmount 同口径，红冲反向）
