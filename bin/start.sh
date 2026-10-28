@@ -142,11 +142,21 @@ fi
 
 # ---- 本地开发：启动前重建产物，避免每次起旧 jar ----
 if [ "$OS" = "windows" ] && [ "${SPRING_PROFILE:-dev}" != "production" ]; then
-  if command -v mvn >/dev/null 2>&1; then
-    BUILD_LOG="$APP_HOME/logs/build.log"
-    mkdir -p "$APP_HOME/logs"
-    echo "[start] 本地开发模式：mvn clean package 重建产物（跳过测试）..."
-    if mvn -q clean package -Dmaven.test.skip=true >> "$BUILD_LOG" 2>&1; then
+    if command -v mvn >/dev/null 2>&1; then
+      BUILD_LOG="$APP_HOME/logs/build.log"
+      mkdir -p "$APP_HOME/logs"
+      # Windows: 构建前先释放被旧实例占用的 jar（避免 mvn clean 因文件锁失败 / 拒绝启动）
+      if [ "$OS" = "windows" ]; then
+        _BPORT="${1:-2025}"
+        _OPID="$(netstat -ano 2>/dev/null | awk -v p=":$_BPORT " '$0 ~ p && /LISTENING/ {print $5; exit}' || true)"
+        if [ -n "$_OPID" ]; then
+          echo "[start] 端口 $_BPORT 被旧实例(PID $_OPID)占用，先 taskkill 释放 jar 文件锁..."
+          taskkill //F //PID "$_OPID" >/dev/null 2>&1 || true
+          sleep 1
+        fi
+      fi
+      echo "[start] 本地开发模式：mvn clean package 重建产物（跳过测试）..."
+      if mvn -q clean package -Dmaven.test.skip=true >> "$BUILD_LOG" 2>&1; then
       echo "[start] 构建完成 -> $BUILD_LOG"
     else
       echo "[start] mvn clean package 失败，拒绝启动以免使用旧/损坏产物。" >&2
