@@ -21,7 +21,7 @@ public class ShipmentVO {
 
     private Long projectId;
 
-    /** 项目编号（fin_project.project_no，批次号 FH-{projectNo}-NNN 取自此处） */
+    /** 项目编号（fin_project.project_no，批次编号 FH-{projectNo}-NNN 取自此处） */
     private String projectNo;
 
     /** 项目名称 */
@@ -30,7 +30,7 @@ public class ShipmentVO {
     /** 客户名称 */
     private String customerName;
 
-    /** 批次号（规则 FH-项目编号-NNN，决策#5） */
+    /** 批次编号（规则 FH-项目编号-NNN，决策#5） */
     private String batchNo;
 
     /** 发货时间（标记已发货时写入） */

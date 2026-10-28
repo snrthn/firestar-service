@@ -27,7 +27,7 @@ public class ReturnVO {
     /** 关联发货单 ID → fin_shipment.id */
     private Long shipmentId;
 
-    /** 发货批次号（翻译） */
+    /** 发货批次编号（翻译） */
     private String shipmentBatchNo;
 
     /** 退货金额 = Σ 行金额（服务端汇总） */

@@ -38,10 +38,10 @@ public class ShipmentController {
         this.shipmentService = shipmentService;
     }
 
-    /** 分页列表（批次号/项目号/项目名模糊、status(发货状态)精确、approvalStatus(审批状态)精确、发货日期区间；字典翻译 + 用户名翻译）
+    /** 分页列表（批次编号/项目号/项目名模糊、status(发货状态)精确、approvalStatus(审批状态)精确、发货日期区间；字典翻译 + 用户名翻译）
      *  ⚠️ status = 发货生命周期状态(shipment_status)；approvalStatus = 审批状态(approval_status，含 APPROVED)。
      *     退货弹窗按 approvalStatus=APPROVED 查询，严禁把 APPROVED 当 status 传（APPROVED 不是发货状态值）。
-     *  ⚠️ 2026-10-28 修正：此前只声明 projectNo 却由前端传 batchNo，批次号查询框是死的；
+     *  ⚠️ 2026-10-28 修正：此前只声明 projectNo 却由前端传 batchNo，批次编号查询框是死的；
      *     且 ServiceImpl 把 projectNo 实现成了 .like(batch_no)，参数名与语义错位——
      *     现新增真正的 batchNo 参数，projectNo 回归「按项目编号模糊」语义。 */
     @GetMapping("/page")

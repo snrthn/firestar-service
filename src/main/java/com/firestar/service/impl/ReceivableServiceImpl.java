@@ -43,7 +43,7 @@ import java.util.Objects;
 public class ReceivableServiceImpl implements ReceivableService {
 
     /**
-     * 应收单号规则：YS-{yyyyMMdd}-{三位序号}（当日自增，与发货批次号同范式）。
+     * 应收单号规则：YS-{yyyyMMdd}-{三位序号}（当日自增，与发货批次编号同范式）。
      *
      * <p>⚠️ 必须「先算后插」：fin_receivable.receivable_no 是 NOT NULL 无默认列
      * （V1 基线），曾用「先 insert 占 id 再回写」范式（对齐 project_no 的可空列），

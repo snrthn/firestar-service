@@ -62,11 +62,11 @@ public interface ShipmentService {
     /**
      * 分页列表。
      *
-     * <p>查询条件（2026-10-28 修正 + 补齐）：batchNo 模糊（批次号列）、projectNo/projectName
+     * <p>查询条件（2026-10-28 修正 + 补齐）：batchNo 模糊（批次编号列）、projectNo/projectName
      * 模糊（反查项目后按 projectId 集合过滤）、status(发货状态)/approvalStatus(审批状态)
      * 精确、dateFrom~dateTo 按 shipment_date 闭区间。全部可空，空即不限。</p>
      *
-     * <p>⚠️ 2026-10-28 修正：原 projectNo 参数被实现成 .like(batch_no)，批次号查询失效且
+     * <p>⚠️ 2026-10-28 修正：原 projectNo 参数被实现成 .like(batch_no)，批次编号查询失效且
      * 项目编号查不了；现将 batchNo 独立成参，projectNo 回归项目编号语义。</p>
      */
     IPage<ShipmentVO> page(String username, boolean viewAll, Integer pageNum, Integer pageSize,

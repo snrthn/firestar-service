@@ -640,8 +640,8 @@ public class ShipmentServiceImpl implements ShipmentService {
 
         // 项目编号 / 项目名称模糊 → projectId 集合（两段式，与 LogServiceImpl「操作人模糊」
         // 同范式，不拼 SQL 无注入）。发货表只有 projectId 没有项目编号/名称列，只能先反查项目。
-        // ⚠️ 2026-10-28 修正：此前 projectNo 被误接到 .like(batch_no)，导致「批次号」与
-        // 「项目编号」两个查询框双双失效——批次号改为独立参数 batchNo，projectNo 回归本义。
+        // ⚠️ 2026-10-28 修正：此前 projectNo 被误接到 .like(batch_no)，导致「批次编号」与
+        // 「项目编号」两个查询框双双失效——批次编号改为独立参数 batchNo，projectNo 回归本义。
         // 两个项目条件同给时按 AND 取交集（与 ReturnServiceImpl 同口径）。
         List<Long> projectIds = null;
         if (noKw != null || nameKw != null) {

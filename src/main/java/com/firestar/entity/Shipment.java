@@ -20,7 +20,7 @@ public class Shipment extends LogicDeleteEntity {
     /** 项目 ID → fin_project.id */
     private Long projectId;
 
-    /** 批次号（规则 FH-项目编号-001） */
+    /** 批次编号（规则 FH-项目编号-001） */
     private String batchNo;
 
     /** 发货时间 */
