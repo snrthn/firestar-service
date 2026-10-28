@@ -29,6 +29,9 @@ public class WriteOff extends LogicDeleteEntity {
     /** 收款单 ID → fin_receipt.id */
     private Long receiptId;
 
+    /** 关联项目 ID → fin_project.id（V80 新增，核销口径下推用；历史数据由 V80 迁移回填） */
+    private Long projectId;
+
     /** 本次核销金额 */
     private BigDecimal amount;
 

@@ -250,6 +250,8 @@ public class WriteOffServiceImpl implements WriteOffService {
                 w.setWriteOffNo(generateWriteOffNo());
                 w.setReceiptId(r.getId());
                 w.setReceivableId(v.getId());
+                // V80：核销行带 project_id，支撑看板 F-08/F-09 随项目/客户筛选下推
+                w.setProjectId(r.getProjectId());
                 w.setAmount(m);
                 w.setStatus("NORMAL");
                 w.setWriteOffMethod("AUTO");

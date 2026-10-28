@@ -505,6 +505,8 @@ public class ReturnServiceImpl implements ReturnService {
             wo.setWriteOffNo(generateWriteOffNo());
             wo.setReceiptId(redRc.getId());
             wo.setReceivableId(origin.getId());
+            // V80：反向核销行带 project_id，支撑看板 F-08/F-09 随项目/客户筛选下推
+            wo.setProjectId(redRc.getProjectId());
             wo.setAmount(recRemain);
             wo.setStatus("NORMAL");
             wo.setWriteOffMethod("AUTO");

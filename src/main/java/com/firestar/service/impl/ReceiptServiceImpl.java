@@ -756,11 +756,14 @@ public class ReceiptServiceImpl implements ReceiptService {
 
     /** 分配明细逐行 insert（计划态；状态 NORMAL，单号 WO-yyyyMMdd-NNN count+1） */
     private void insertAllocationRows(Long receiptId, List<AllocationItem> items) {
+        // V80：核销分配行带 project_id（取主单项目），支撑看板 F-08/F-09 随项目/客户筛选下推
+        Long projId = receiptMapper.selectById(receiptId).getProjectId();
         for (AllocationItem it : items) {
             WriteOff w = new WriteOff();
             w.setWriteOffNo(generateWriteOffNo());
             w.setReceiptId(receiptId);
             w.setReceivableId(it.getReceivableId());
+            w.setProjectId(projId);
             w.setAmount(it.getAmount());
             w.setStatus("NORMAL");
             w.setWriteOffDate(LocalDate.now());
