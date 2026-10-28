@@ -74,6 +74,20 @@ public class ProjectVO {
     /** 累计退货金额（Σ fin_shipment.returned_amount） */
     private BigDecimal returnedAmount;
 
+    /**
+     * 红冲收款额（docDirection=RED 的收款单 receipt_amount 绝对值汇总，V80）。
+     *
+     * <p>与 {@link #collectedAmount}（已收净额，RED 取负）对应：本字段单独拎出「红冲掉多少」，
+     * 供详情面板红字行展示，使回款毛/净口径可见。</p>
+     */
+    private BigDecimal redReceivedAmount;
+
+    /** 红冲开票额（docDirection=RED 的发票 invoice_amount 绝对值汇总，V80） */
+    private BigDecimal redInvoicedAmount;
+
+    /** 红冲应收额（docDirection=RED 的应收单 receivable_amount 绝对值汇总，含退货生成的红字应收，V80） */
+    private BigDecimal redReceivableAmount;
+
     /** 签约描述/签约留言（签约时补录，非必填；V46） */
     private String contractDesc;
 

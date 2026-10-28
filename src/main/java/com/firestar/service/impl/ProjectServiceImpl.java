@@ -13,6 +13,7 @@ import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ProjectItemReq;
 import com.firestar.dto.ProjectRequest;
 import com.firestar.dto.ProjectSignRequest;
+import com.firestar.dto.ProjectOptionVO;
 import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
@@ -751,7 +752,7 @@ public class ProjectServiceImpl implements ProjectService {
             return tasks;
         }
         // enrich 业务标题 + 可驳回目标节点（2026-10-23 通用化：按 processDefinitionKey 分发，
-        // project_initiate → 项目名；shipment_approval → 批次号·项目名；
+        // project_initiate → 项目名；shipment_approval → 批次编号·项目名；
         // receipt_approval → 收款单号·项目名；invoice_approval → 发票号·项目名）
         Map<String, String> titleMap = enrichBizTitles(tasks);
         for (TaskInfo t : tasks) {
@@ -765,7 +766,7 @@ public class ProjectServiceImpl implements ProjectService {
      * 按流程 key 批量 enrich 业务标题（bizKey 在各业务 ID 空间各自独立，必须按 key 分组合查，
      * 不能混查——project 150 与 shipment 150 与 receipt 150 是三张表的不同单据）。
      *
-     * @return bizKey → 标题（project：项目名；shipment：批次号 · 项目名；
+     * @return bizKey → 标题（project：项目名；shipment：批次编号 · 项目名；
      *          receipt：收款单号 · 项目名；invoice：发票号 · 项目名）
      */
     private Map<String, String> enrichBizTitles(List<TaskInfo> tasks) {
@@ -784,7 +785,7 @@ public class ProjectServiceImpl implements ProjectService {
             List<Long> ids = shipmentKeys.stream().map(Long::parseLong).collect(Collectors.toList());
             List<Shipment> shipments = shipmentMapper.selectList(new LambdaQueryWrapper<Shipment>()
                     .in(Shipment::getId, ids).select(Shipment::getId, Shipment::getBatchNo, Shipment::getProjectId));
-            // 批次号 + 项目名（审批人一眼看到是哪个项目的货）；项目名批量补查
+            // 批次编号 + 项目名（审批人一眼看到是哪个项目的货）；项目名批量补查
             Set<Long> projectIds = shipments.stream().map(Shipment::getProjectId)
                     .filter(Objects::nonNull).collect(Collectors.toSet());
             Map<Long, String> projectNames = new HashMap<>();
@@ -951,7 +952,7 @@ public class ProjectServiceImpl implements ProjectService {
 
     /**
      * 历史记录业务标题（2026-10-23 通用化：按流程 key 分发查表；V63 补收款/发票）。
-     * project_initiate → 项目名；shipment_approval → 批次号 · 项目名；
+     * project_initiate → 项目名；shipment_approval → 批次编号 · 项目名；
      * receipt_approval → 收款单号 · 项目名；invoice_approval → 发票号 · 项目名。
      */
     private String bizTitleOf(String processCode, String bizKey) {
@@ -1141,6 +1142,10 @@ public class ProjectServiceImpl implements ProjectService {
         private final Map<Long, BigDecimal> received = new HashMap<>();
         private final Map<Long, BigDecimal> invoiced = new HashMap<>();
         private final Map<Long, BigDecimal> receivable = new HashMap<>();
+        // V80：红冲额（docDirection=RED 的金额绝对值汇总），与净额并列展示，使红字行可见
+        private final Map<Long, BigDecimal> redReceived = new HashMap<>();
+        private final Map<Long, BigDecimal> redInvoiced = new HashMap<>();
+        private final Map<Long, BigDecimal> redReceivable = new HashMap<>();
 
         BigDecimal receivedOf(Long projectId) {
             return received.getOrDefault(projectId, BigDecimal.ZERO);
@@ -1152,6 +1157,18 @@ public class ProjectServiceImpl implements ProjectService {
 
         BigDecimal receivableOf(Long projectId) {
             return receivable.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+
+        BigDecimal redReceivedOf(Long projectId) {
+            return redReceived.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+
+        BigDecimal redInvoicedOf(Long projectId) {
+            return redInvoiced.getOrDefault(projectId, BigDecimal.ZERO);
+        }
+
+        BigDecimal redReceivableOf(Long projectId) {
+            return redReceivable.getOrDefault(projectId, BigDecimal.ZERO);
         }
     }
 
@@ -1180,6 +1197,10 @@ public class ProjectServiceImpl implements ProjectService {
             BigDecimal amt = "RED".equals(r.getDocDirection())
                     ? nz(r.getReceiptAmount()).negate() : nz(r.getReceiptAmount());
             a.received.merge(r.getProjectId(), amt, BigDecimal::add);
+            // V80：红冲额单独拎出（取绝对值），供详情面板红字行展示
+            if ("RED".equals(r.getDocDirection())) {
+                a.redReceived.merge(r.getProjectId(), nz(r.getReceiptAmount()), BigDecimal::add);
+            }
         }
         for (Invoice iv : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                 .select(Invoice::getProjectId, Invoice::getInvoiceAmount, Invoice::getDocDirection)
@@ -1188,6 +1209,9 @@ public class ProjectServiceImpl implements ProjectService {
             BigDecimal amt = "RED".equals(iv.getDocDirection())
                     ? nz(iv.getInvoiceAmount()).negate() : nz(iv.getInvoiceAmount());
             a.invoiced.merge(iv.getProjectId(), amt, BigDecimal::add);
+            if ("RED".equals(iv.getDocDirection())) {
+                a.redInvoiced.merge(iv.getProjectId(), nz(iv.getInvoiceAmount()), BigDecimal::add);
+            }
         }
         for (Receivable rv : receivableMapper.selectList(new LambdaQueryWrapper<Receivable>()
                 .select(Receivable::getProjectId, Receivable::getReceivableAmount,
@@ -1198,6 +1222,9 @@ public class ProjectServiceImpl implements ProjectService {
             BigDecimal amt = "RED".equals(rv.getDocDirection())
                     ? nz(rv.getReceivableAmount()).negate() : nz(rv.getReceivableAmount());
             a.receivable.merge(rv.getProjectId(), amt, BigDecimal::add);
+            if ("RED".equals(rv.getDocDirection())) {
+                a.redReceivable.merge(rv.getProjectId(), nz(rv.getReceivableAmount()), BigDecimal::add);
+            }
         }
         return a;
     }
@@ -1259,6 +1286,10 @@ public class ProjectServiceImpl implements ProjectService {
         vo.setCollectedAmount(amounts.receivedOf(p.getId()));
         vo.setInvoicedAmount(amounts.invoicedOf(p.getId()));
         vo.setReceivableAmount(amounts.receivableOf(p.getId()));
+        // V80：红冲额单独下推，与净额并列，供详情面板红字行展示
+        vo.setRedReceivedAmount(amounts.redReceivedOf(p.getId()));
+        vo.setRedInvoicedAmount(amounts.redInvoicedOf(p.getId()));
+        vo.setRedReceivableAmount(amounts.redReceivableOf(p.getId()));
         vo.setAllowInvoiceBeforeReceipt(p.getAllowInvoiceBeforeReceipt());
         vo.setReturnedAmount(returned);
         vo.setContractDesc(p.getContractDesc());
@@ -1321,5 +1352,25 @@ public class ProjectServiceImpl implements ProjectService {
     /** 当前登录用户名（JwtAuthenticationFilter 写入 SecurityContext） */
     private String currentUsername() {
         return SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
+    /**
+     * 项目下拉选项（看板「按项目筛选」用，V80；仿 customerOptions）。
+     * 返回所有未删除项目（id/projectNo/projectName），按项目编号升序。
+     */
+    @Override
+    public List<ProjectOptionVO> projectOptions() {
+        List<Project> list = mapper.selectList(new LambdaQueryWrapper<Project>()
+                .select(Project::getId, Project::getProjectNo, Project::getProjectName)
+                .orderByAsc(Project::getProjectNo));
+        List<ProjectOptionVO> vos = new ArrayList<>();
+        for (Project p : list) {
+            ProjectOptionVO vo = new ProjectOptionVO();
+            vo.setId(p.getId());
+            vo.setProjectNo(p.getProjectNo());
+            vo.setProjectName(p.getProjectName());
+            vos.add(vo);
+        }
+        return vos;
     }
 }

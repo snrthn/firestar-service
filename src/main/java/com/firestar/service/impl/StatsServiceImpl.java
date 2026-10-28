@@ -157,23 +157,28 @@ public class StatsServiceImpl implements StatsService {
                     .collect(Collectors.toList());
         }
 
-        // 指定单项目：若同时指定货物且单项目不在货物集合内 → 空集早退
-        if (q.getProjectId() != null) {
-            if (byGoods != null && !byGoods.contains(q.getProjectId())) return List.of();
-            return List.of(q.getProjectId());
-        }
-
-        boolean needFilter = q.getCustomerId() != null || q.getManagerId() != null;
-        List<Long> pids = null;
-        if (needFilter) {
+        // 客户/经理 → 收敛出的项目集合（与货物集合、单项目三者求交）
+        List<Long> byCustomerManager = null;
+        if (q.getCustomerId() != null || q.getManagerId() != null) {
             LambdaQueryWrapper<Project> w = new LambdaQueryWrapper<>();
             if (q.getCustomerId() != null) w.eq(Project::getCustomerId, q.getCustomerId());
             if (q.getManagerId() != null) w.eq(Project::getSalesManagerId, q.getManagerId());
-            pids = projectMapper.selectList(w.select(Project::getId)).stream()
+            byCustomerManager = projectMapper.selectList(w.select(Project::getId)).stream()
                     .map(Project::getId).collect(Collectors.toList());
         }
 
-        // 与货物集合求交：pids==null（不过滤）→ 直接取货物集合；否则取交集
+        // 指定单项目：必须同时满足 货物集合 与 客户/经理集合（取交），否则空集早退
+        // （修复：原逻辑指定 projectId 后直接 return [projectId]，把 customerId/managerId 整个吞掉，
+        //  导致「项目+客户」联动筛选时客户条件被静默丢弃，看板明细与总览对不上）
+        if (q.getProjectId() != null) {
+            if (byGoods != null && !byGoods.contains(q.getProjectId())) return List.of();
+            if (byCustomerManager != null && !byCustomerManager.contains(q.getProjectId())) return List.of();
+            return List.of(q.getProjectId());
+        }
+
+        // 未指定单项目：取 货物集合 ∩ 客户/经理集合（任一为 null 表示该维度不过滤）
+        List<Long> pids = null;
+        if (byCustomerManager != null) pids = byCustomerManager;
         if (byGoods != null) {
             if (pids == null) {
                 pids = byGoods;
@@ -216,11 +221,18 @@ public class StatsServiceImpl implements StatsService {
             return v;
         }
 
-        // F-01 合同签约额（approved，累计）
-        for (Project pr : projectMapper.selectList(new LambdaQueryWrapper<Project>()
-                .select(Project::getContractAmount)
-                .eq(Project::getApprovalStatus, "APPROVED"))) {
-            v.setContractAmount(v.getContractAmount().add(nz(pr.getContractAmount())));
+        // F-01 合同签约额（approved，随筛选收敛：projectId/客户/经理/货物 + 签约日期区间）
+        // 修复前：遍历全部 approved 项目，既不用 pids 也不用期间，导致「按项目/期间筛选」对 F-01 完全失效；
+        //         与 F-02..F-08 的 AND 收敛口径不一致，筛选无匹配时也无法归零。
+        {
+            LambdaQueryWrapper<Project> w = new LambdaQueryWrapper<Project>()
+                    .select(Project::getContractAmount)
+                    .eq(Project::getApprovalStatus, "APPROVED");
+            inProject(w, Project::getId, pids);
+            betweenDateTime(w, Project::getContractSignedAt, p);
+            for (Project pr : projectMapper.selectList(w)) {
+                v.setContractAmount(v.getContractAmount().add(nz(pr.getContractAmount())));
+            }
         }
 
         // F-02 本期发货额（区间，排除 REJECTED）
@@ -271,12 +283,12 @@ public class StatsServiceImpl implements StatsService {
             }
         }
 
-        // F-08 本期回款额（核销口径：区间、NORMAL）。
-        // 注：fin_write_off 无 projectId 列，无法随主体过滤下推；一期按"公司级"汇总
-        // （总览页通常不过滤主体），与 F-07 叠加的差异池在主体过滤下为近似。
+        // F-08 本期回款额（核销口径：区间、NORMAL）。V80 起 fin_write_off 带 project_id，
+        // 已可随项目/客户/经理筛选下推（与 F-02..F-07、B-01..B-03 口径一致）。
         {
             LambdaQueryWrapper<WriteOff> w = new LambdaQueryWrapper<WriteOff>()
                     .select(WriteOff::getAmount).eq(WriteOff::getStatus, "NORMAL");
+            inProject(w, WriteOff::getProjectId, pids);
             betweenDate(w, WriteOff::getWriteOffDate, p);
             for (WriteOff wo : writeOffMapper.selectList(w)) {
                 v.setWriteOffAmount(v.getWriteOffAmount().add(nz(wo.getAmount())));
@@ -374,10 +386,11 @@ public class StatsServiceImpl implements StatsService {
         }
         v.setCollectionRate(rate(v.getReceiptPeriod(), v.getReceivablePeriod()));
 
-        // F-08 本期回款（核销口径）
+        // F-08 本期回款（核销口径）。V80 起 write_off 带 project_id，随项目/客户/经理下推
         {
             LambdaQueryWrapper<WriteOff> w = new LambdaQueryWrapper<WriteOff>()
                     .select(WriteOff::getAmount).eq(WriteOff::getStatus, "NORMAL");
+            inProject(w, WriteOff::getProjectId, pids);
             betweenDate(w, WriteOff::getWriteOffDate, p);
             for (WriteOff wo : writeOffMapper.selectList(w)) {
                 v.setWriteOffPeriod(v.getWriteOffPeriod().add(nz(wo.getAmount())));

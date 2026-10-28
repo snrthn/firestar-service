@@ -7,6 +7,7 @@ import com.firestar.common.SecurityContextUtils;
 import com.firestar.dto.ApprovalHistoryVO;
 import com.firestar.dto.ProjectRequest;
 import com.firestar.dto.ProjectSignRequest;
+import com.firestar.dto.ProjectOptionVO;
 import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
@@ -93,6 +94,15 @@ public class ProjectController {
     }
 
     /** 详情（含字典翻译） */
+    /**
+     * 项目下拉选项（看板「按项目筛选」用，V80；仿 customerOptions）。
+     * 返回所有未删除项目（id/projectNo/projectName），按项目编号升序。
+     */
+    @GetMapping("/options")
+    public Result<List<ProjectOptionVO>> options() {
+        return Result.success(projectService.projectOptions());
+    }
+
     @GetMapping("/{id}")
     public Result<ProjectVO> detail(@PathVariable Long id) {
         return Result.success(projectService.detail(id,

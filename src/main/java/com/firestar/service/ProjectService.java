@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.dto.ApprovalHistoryVO;
 import com.firestar.dto.ProjectRequest;
 import com.firestar.dto.ProjectSignRequest;
+import com.firestar.dto.ProjectOptionVO;
 import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
@@ -103,4 +104,7 @@ public interface ProjectService {
      */
     IPage<ApprovalHistoryVO> myApprovedHistoryPage(String username, Integer pageNum, Integer pageSize,
                                                   String bizTitleKw, String taskNameKw);
+
+    /** 项目下拉选项（看板「按项目筛选」用，V80；仿 customerOptions） */
+    List<ProjectOptionVO> projectOptions();
 }
