@@ -26,7 +26,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -210,10 +212,44 @@ public class RoleServiceImpl implements RoleService {
                 throw new BizException("所选菜单不存在");
             }
         }
-        // 整体替换：先删后插，同事务
-        roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
-                .eq(RoleMenu::getRoleId, roleId));
+        // 整体替换：先删后插，同事务。
+        //
+        // 加固（2026-10-31 虎哥拍板「后端修复」）：按钮节点若其【父菜单不在本次提交集】里，
+        // 说明它根本没出现在授权弹窗的树上，管理员无从表达「保留/取消」的意图 —— 此时若
+        // 按原逻辑整体替换，会把他没看见的按钮授权静默删掉。
+        // 真实事故：V81 建 file:upload 等 BUTTON 节点时按父菜单 component='system/file'
+        // 定位，而该 component 早在 V19 就被改成 'file/list'（见 V91 注释），节点从未建成
+        // → 角色即便持有 file:upload 操作权限，重新保存授权时该行也会被无声清空。
+        // 处理：这类「视野外按钮」保持原状不删；提交集为空视为「明确清空」意图，全量删除。
+        if (menuIds.isEmpty()) {
+            roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
+                    .eq(RoleMenu::getRoleId, roleId));
+        } else {
+            Set<Long> submitted = new HashSet<>(menuIds);
+            Set<Long> invisibleButtonIds = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
+                            .eq(Menu::getMenuType, "BUTTON")
+                            .isNotNull(Menu::getParentId))
+                    .stream()
+                    .filter(m -> !submitted.contains(m.getParentId()))
+                    .map(Menu::getId)
+                    .collect(Collectors.toSet());
+            roleMenuMapper.selectList(new LambdaQueryWrapper<RoleMenu>()
+                            .eq(RoleMenu::getRoleId, roleId))
+                    .forEach(rm -> {
+                        Long mid = rm.getMenuId();
+                        if (!submitted.contains(mid) && !invisibleButtonIds.contains(mid)) {
+                            roleMenuMapper.deleteById(rm.getId());
+                        }
+                    });
+        }
+        // 插入提交集中尚缺的行（上面已保留的行不会重复插）
+        Set<Long> owned = roleMenuMapper.selectList(new LambdaQueryWrapper<RoleMenu>()
+                        .eq(RoleMenu::getRoleId, roleId))
+                .stream().map(RoleMenu::getMenuId).collect(Collectors.toSet());
         for (Long menuId : menuIds) {
+            if (owned.contains(menuId)) {
+                continue;
+            }
             RoleMenu rm = new RoleMenu();
             rm.setRoleId(roleId);
             rm.setMenuId(menuId);
