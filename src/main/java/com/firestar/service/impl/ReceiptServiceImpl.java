@@ -892,12 +892,19 @@ public class ReceiptServiceImpl implements ReceiptService {
         return vos;
     }
 
-    /** 核销单号：WO-yyyyMMdd-NNN（同 generateReceiptNo 的 count+1 范式） */
+    /**
+     * 核销单号 WO-yyyyMMdd-NNN：取【含逻辑删除行】的当日最大序号 +1（同 generateReceiptNo 范式）。
+     *
+     * <p>⚠️ 不能用 BaseMapper.selectCount + 1：MP 逻辑删除拦截器会追加 is_deleted=0，
+     * 而 uk_tenant_write_off_no(tenant_id, write_off_no) 唯一键不区分 is_deleted。
+     * 收款单 update(:309) / withdraw(:341) 都是「软删旧核销行 → 重新生成单号」，
+     * 用 count 会复用刚软删的号撞唯一键（与发票 IA- 同款故障，2026-10-31 一并修复）。</p>
+     */
     private String generateWriteOffNo() {
         String date = LocalDateTime.now().format(RECEIPT_NO_DATE_FMT);
-        Long count = writeOffMapper.selectCount(new LambdaQueryWrapper<WriteOff>()
-                .likeRight(WriteOff::getWriteOffNo, "WO-" + date + "-"));
-        return String.format("WO-%s-%03d", date, (count == null ? 0 : count) + 1);
+        Integer maxSeq = writeOffMapper.selectMaxDailySeq(date);
+        int next = (maxSeq == null ? 0 : maxSeq) + 1;
+        return String.format("WO-%s-%03d", date, next);
     }
 
     /** 查 ENABLED 的收款审批流程定义（与 ProjectServiceImpl.submit 同范式） */

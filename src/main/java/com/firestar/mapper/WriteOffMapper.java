@@ -5,6 +5,7 @@ import com.firestar.dto.WriteOffLedgerVO;
 import com.firestar.entity.WriteOff;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -38,4 +39,18 @@ public interface WriteOffMapper extends BaseMapper<WriteOff> {
                      @Param("keyword") String keyword,
                      @Param("dateFrom") LocalDate dateFrom,
                      @Param("dateTo") LocalDate dateTo);
+
+    /**
+     * 取指定日期当天所有核销单（含逻辑删除）中的最大序号数字。
+     * write_off_no 形如 WO-yyyyMMdd-NNN，序号取最后一个 '-' 之后部分。
+     * 无记录时返回 0，调用方 +1 即为下一个序号。
+     *
+     * <p>为何用 @Select 原生 SQL（同 InvoiceMapper / InvoiceAllocationMapper 范式）：
+     * uk_tenant_write_off_no(tenant_id, write_off_no) 唯一键不区分 is_deleted，软删行仍物理占键；
+     * BaseMapper.selectCount 会被逻辑删除拦截器追加 is_deleted=0，导致复用以删号撞唯一键。
+     * 收款单 update/withdraw 同样是「软删旧核销行 → 重新生成单号」，与原发票同款故障面。</p>
+     */
+    @Select("SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(write_off_no, '-', -1) AS UNSIGNED)), 0) " +
+            "FROM fin_write_off WHERE write_off_no LIKE CONCAT('WO-', #{date}, '-%')")
+    Integer selectMaxDailySeq(@Param("date") String date);
 }

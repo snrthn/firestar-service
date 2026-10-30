@@ -807,11 +807,20 @@ public class InvoiceServiceImpl implements InvoiceService {
         return String.format("FP-%s-%03d", date, next);
     }
 
+    /**
+     * 核销明细单号 IA-yyyyMMdd-NNN：取【含逻辑删除行】的当日最大序号 +1（同 generateInvoiceNo 范式）。
+     *
+     * <p>⚠️ 不能用 BaseMapper.selectCount + 1：MP 逻辑删除拦截器会给它追加 is_deleted=0，
+     * 而 uk_tenant_allocation_no(tenant_id, allocation_no) 唯一键不区分 is_deleted ——
+     * 软删行仍物理占键。发票编辑（update）正是「软删旧分配行 → 重新生成单号」，
+     * 用 count 会把刚软删的号当成可用号复用 → DuplicateKey 撞键（2026-10-31 实锤：
+     * Duplicate entry '0-IA-20261031-001'，编辑已驳回发票必然失败）。走原生 SQL 取 MAX+1 即根治。</p>
+     */
     private String generateAllocationNo() {
         String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
-        Long count = invoiceAllocationMapper.selectCount(new LambdaQueryWrapper<InvoiceAllocation>()
-                .likeRight(InvoiceAllocation::getAllocationNo, "IA-" + date + "-"));
-        return String.format("IA-%s-%03d", date, (count == null ? 0 : count) + 1);
+        Integer maxSeq = invoiceAllocationMapper.selectMaxDailySeq(date);
+        int next = (maxSeq == null ? 0 : maxSeq) + 1;
+        return String.format("IA-%s-%03d", date, next);
     }
 
     private InvoiceVO toVO(Invoice r, Map<String, DictData> statusDict, Map<String, DictData> typeDict,
