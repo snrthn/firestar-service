@@ -63,10 +63,21 @@ public class HelpManageController {
 
     /** 更新 */
     @PutMapping("/{id}")
-    @RequirePerm({"help:edit", "help:create"})
+    @RequirePerm("help:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody HelpRequest req) {
         helpArticleService.update(currentUserId(), id, req.getTitle(), req.getContent(),
                 req.getCategory(), req.getSortNo(), req.getStatus());
+        return Result.success();
+    }
+
+    /**
+     * 启停切换（方案 B：独立权限点 help:toggle，与前端「启用/停用」按钮 code 对齐）。
+     * 方法级注解覆盖类级 system:help —— 按 PermissionInterceptor 规则，本方法只需 help:toggle。
+     */
+    @PutMapping("/{id}/toggle")
+    @RequirePerm("help:toggle")
+    public Result<Void> toggle(@PathVariable Long id) {
+        helpArticleService.toggleStatus(currentUserId(), id);
         return Result.success();
     }
 

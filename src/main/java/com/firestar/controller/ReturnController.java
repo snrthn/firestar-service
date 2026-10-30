@@ -117,6 +117,7 @@ public class ReturnController {
 
     /** 审批通过回调（三级推进；末节点通过自动执行三冲减链） */
     @PostMapping("/task/{taskId}/complete")
+    @RequirePerm("return:approve")
     public Result<Void> complete(@PathVariable String taskId,
                                 @RequestBody(required = false) Map<String, Object> variables) {
         returnService.completeTask(taskId, variables);
@@ -125,6 +126,7 @@ public class ReturnController {
 
     /** 审批驳回（终结实例 + REJECTED + 通知申请人） */
     @PostMapping("/task/{taskId}/reject")
+    @RequirePerm("return:reject")
     public Result<Void> reject(@PathVariable String taskId,
                               @RequestParam(required = false) String toNode,
                               @RequestParam String comment) {

@@ -117,7 +117,7 @@ public class ProjectController {
 
     /** 编辑草稿（仅 DRAFT / REJECTED 态可改） */
     @PutMapping("/{id}")
-    @RequirePerm({"project:edit", "project:create"})
+    @RequirePerm("project:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody ProjectRequest req) {
         projectService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());

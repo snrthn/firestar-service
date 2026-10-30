@@ -55,7 +55,7 @@ public class RoleController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"role:edit", "role:create"})
+    @RequirePerm("role:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody RoleRequest req) {
         roleService.updateRole(id, req);
         return Result.success();

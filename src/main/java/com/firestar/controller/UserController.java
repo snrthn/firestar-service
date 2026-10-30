@@ -64,7 +64,7 @@ public class UserController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"user:edit", "user:create"})
+    @RequirePerm("user:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody UserRequest req) {
         userService.updateUser(id, req);
         return Result.success();

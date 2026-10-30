@@ -100,7 +100,7 @@ public class ReceiptController {
 
     /** 编辑收款单（仅草稿态；仅本人/admin） */
     @PutMapping("/{id}")
-    @RequirePerm({"receipt:edit", "receipt:create"})
+    @RequirePerm("receipt:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody ReceiptRequest req) {
         receiptService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());

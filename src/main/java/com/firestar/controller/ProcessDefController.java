@@ -68,7 +68,7 @@ public class ProcessDefController {
         return Result.success(service.create(def));
     }
 
-    @RequirePerm({"process:edit", "process:config"})
+    @RequirePerm("process:edit")
     @PutMapping("/{id}")
     public Result<ProcessDef> update(@PathVariable Long id, @RequestBody ProcessDef def) {
         def.setUpdatedBy(currentUserId());

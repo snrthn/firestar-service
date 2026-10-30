@@ -90,7 +90,7 @@ public class InvoiceController {
 
     /** 编辑发票（仅草稿态；仅本人/admin） */
     @PutMapping("/{id}")
-    @RequirePerm({"invoice:edit", "invoice:create"})
+    @RequirePerm("invoice:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody InvoiceRequest req) {
         invoiceService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());

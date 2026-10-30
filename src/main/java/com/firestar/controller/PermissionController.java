@@ -60,7 +60,7 @@ public class PermissionController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"permission:edit", "permission:create"})
+    @RequirePerm("permission:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody PermissionRequest req) {
         permissionService.update(id, req);
         return Result.success();

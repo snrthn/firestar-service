@@ -52,7 +52,7 @@ public class PostController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"post:edit", "post:create"})
+    @RequirePerm("post:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody PostRequest req) {
         postService.updatePost(id, req);
         return Result.success();

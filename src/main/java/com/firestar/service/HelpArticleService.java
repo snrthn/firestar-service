@@ -26,6 +26,12 @@ public interface HelpArticleService {
     void update(Long operatorId, Long id, String title, String content, String category,
                 Integer sortNo, String status);
 
+    /**
+     * 启停切换（管理端）：翻转 status（ENABLED ⇄ DISABLED），不改动标题/正文等字段。
+     * 独立方法 + 独立权限点 help:toggle（方案 B：按钮 code == 接口 code 一一对应）。
+     */
+    void toggleStatus(Long operatorId, Long id);
+
     /** 删除（管理端，物理删除） */
     void delete(Long id);
 }

@@ -72,6 +72,16 @@ public class HelpArticleServiceImpl implements HelpArticleService {
     }
 
     @Override
+    public void toggleStatus(Long operatorId, Long id) {
+        HelpArticle a = detail(id);
+        // 翻转：非 ENABLED 一律回 ENABLED（脏数据兜底，避免未知状态卡死）
+        String next = "ENABLED".equals(a.getStatus()) ? "DISABLED" : "ENABLED";
+        apply(a, null, null, null, null, next);
+        a.setUpdatedBy(operatorId);
+        mapper.updateById(a);
+    }
+
+    @Override
     public void delete(Long id) {
         detail(id);
         mapper.deleteById(id);

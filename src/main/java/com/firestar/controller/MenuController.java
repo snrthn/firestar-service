@@ -49,7 +49,7 @@ public class MenuController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"menu:edit", "menu:create"})
+    @RequirePerm("menu:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody MenuRequest req) {
         menuService.update(id, req);
         return Result.success();

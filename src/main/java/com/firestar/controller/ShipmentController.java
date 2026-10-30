@@ -129,7 +129,7 @@ public class ShipmentController {
 
     /** 编辑发货单（2026-10-23 虎哥要求补入口）：仅 PENDING（待发货）可改，项目不可更换 */
     @PutMapping("/{id}")
-    @RequirePerm({"shipment:edit", "shipment:create"})
+    @RequirePerm("shipment:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody ShipmentCreateReq req) {
         shipmentService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());

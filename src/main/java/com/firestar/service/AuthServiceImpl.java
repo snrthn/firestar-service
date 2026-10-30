@@ -50,6 +50,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -436,6 +437,18 @@ public class AuthServiceImpl implements AuthService {
                 .anyMatch(r -> "ROLE_ADMIN".equals(r.getRoleCode()));
     }
 
+    /**
+     * 组装「按钮展示」权限 code 集合（ProfileVO.permissions 来源）。
+     *
+     * <p>方案 B-③ 严格分离（2026-10-30 虎哥拍板）：按钮展示【只认菜单权限】——
+     * role → sys_role_menu → sys_menu(menu_type='BUTTON' 且 perm_code 非空)。
+     * 操作权限（sys_role_permission）不再并入本集合，它只负责后端接口放行
+     * （见 PermissionResolverImpl.resolve）。两条线各管一摊、不再 union。
+     *
+     * <p>⚠️ 强依赖 V88 回填：存量角色历史上从未被分配过菜单 BUTTON 节点
+     * （V81 只建节点、从未 INSERT sys_role_menu），必须由 V88 把「已持有某 perm_code
+     * 操作权限」的角色回填成对应的菜单 BUTTON 勾选，否则存量按钮会全部消失。
+     */
     private List<String> loadPermissions(List<String> roleCodes) {
         if (roleCodes.isEmpty()) {
             return List.of();
@@ -445,11 +458,20 @@ public class AuthServiceImpl implements AuthService {
         if (roleIds.isEmpty()) {
             return List.of();
         }
-        List<RolePermission> rps = rolePermissionMapper.selectList(
-                new LambdaQueryWrapper<RolePermission>().in(RolePermission::getRoleId, roleIds));
-        Set<Long> permIds = rps.stream().map(RolePermission::getPermissionId).collect(Collectors.toSet());
-        List<Permission> perms = permissionMapper.selectList(new LambdaQueryWrapper<Permission>()
-                .in(Permission::getId, permIds));
-        return perms.stream().map(Permission::getPermCode).collect(Collectors.toList());
+        // 按钮展示：仅取菜单权限勾选到的 BUTTON 节点 perm_code（严格分离，不并入操作权限）
+        List<RoleMenu> roleMenus = roleMenuMapper.selectList(
+                new LambdaQueryWrapper<RoleMenu>().in(RoleMenu::getRoleId, roleIds));
+        Set<Long> menuIds = roleMenus.stream().map(RoleMenu::getMenuId).collect(Collectors.toSet());
+        if (menuIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Set<String> codes = new LinkedHashSet<>();
+        menuMapper.selectList(new LambdaQueryWrapper<Menu>()
+                        .in(Menu::getId, menuIds)
+                        .eq(Menu::getMenuType, "BUTTON")
+                        .isNotNull(Menu::getPermCode)
+                        .ne(Menu::getPermCode, ""))
+                .forEach(m -> codes.add(m.getPermCode()));
+        return new ArrayList<>(codes);
     }
 }

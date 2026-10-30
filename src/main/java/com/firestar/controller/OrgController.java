@@ -48,7 +48,7 @@ public class OrgController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"org:edit", "org:create"})
+    @RequirePerm("org:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody OrgRequest req) {
         orgService.update(id, req);
         return Result.success();

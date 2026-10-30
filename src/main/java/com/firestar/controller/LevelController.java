@@ -53,7 +53,7 @@ public class LevelController {
     }
 
     @PutMapping("/{id}")
-    @RequirePerm({"level:edit", "level:create"})
+    @RequirePerm("level:edit")
     public Result<Void> update(@PathVariable Long id, @RequestBody LevelRequest req) {
         levelService.updateLevel(id, req);
         return Result.success();

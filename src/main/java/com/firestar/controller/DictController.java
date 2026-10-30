@@ -74,7 +74,7 @@ public class DictController {
     }
 
     @PutMapping("/type/{id}")
-    @RequirePerm({"dict:edit", "dict:create"})
+    @RequirePerm("dict:edit")
     public Result<Void> updateType(@PathVariable Long id, @RequestBody DictTypeRequest req) {
         dictService.updateType(id, req);
         return Result.success();
@@ -108,7 +108,7 @@ public class DictController {
     }
 
     @PutMapping("/data/{id}")
-    @RequirePerm({"dict:data:edit", "dict:data:create"})
+    @RequirePerm("dict:data:edit")
     public Result<Void> updateData(@PathVariable Long id, @RequestBody DictDataRequest req) {
         dictService.updateData(id, req);
         return Result.success();
