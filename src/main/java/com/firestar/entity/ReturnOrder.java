@@ -44,6 +44,12 @@ public class ReturnOrder extends LogicDeleteEntity {
     /** 发起人 ID */
     private Long applicantId;
 
+    /** 退货人 ID（=项目客户 customer_id，货权方；V86） */
+    private Long returnerId;
+
+    /** 发货人 ID（=关联发货单 shipped_by_id；V86） */
+    private Long shipperId;
+
     /** 发起时间 */
     private LocalDateTime appliedAt;
 }

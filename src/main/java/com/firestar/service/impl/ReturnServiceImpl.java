@@ -238,6 +238,10 @@ public class ReturnServiceImpl implements ReturnService {
         ro.setReturnAmount(amount);
         ro.setReturnReason(req.getReturnReason());
         ro.setApplicantId(operatorId);
+        // V86：用户级隔离归属字段（退货人 OR 发货人 OR 申请人可见）
+        Project returnProject = projectMapper.selectById(shipment.getProjectId());
+        ro.setReturnerId(returnProject != null ? returnProject.getCustomerId() : null);
+        ro.setShipperId(shipment.getShippedById());
         ro.setAppliedAt(LocalDateTime.now());
         ro.setCreatedBy(operatorId);
         ro.setExecuteStatus("NOT_EXECUTED");
@@ -631,6 +635,18 @@ public class ReturnServiceImpl implements ReturnService {
             qw.in(ReturnOrder::getProjectId, pids);
         }
         qw.orderByDesc(ReturnOrder::getId);
+        // V86：用户级隔离（2026-10-30 虎哥）：非管理员仅看「退货人 OR 发货人 OR 申请人」
+        Long me = currentUserId();
+        if (!viewAll && me == null) {
+            return new Page<>(current, size, 0);
+        }
+        if (!viewAll) {
+            qw.and(w -> {
+                w.eq(ReturnOrder::getApplicantId, me)
+                 .or().eq(ReturnOrder::getShipperId, me)
+                 .or().eq(ReturnOrder::getReturnerId, me);
+            });
+        }
         IPage<ReturnOrder> p = returnOrderMapper.selectPage(new Page<>(current, size), qw);
         return toVOPage(p, username);
     }
@@ -641,8 +657,11 @@ public class ReturnServiceImpl implements ReturnService {
         if (ro == null) {
             throw new IllegalArgumentException("退货单不存在：" + id);
         }
-        // 归属三选一：申请人本人 / 数据隔离放行（viewAll）/ 审批流程处理人
-        boolean mine = Objects.equals(ro.getApplicantId(), currentUserId());
+        // 归属四选一：申请人 / 发货人 / 退货人（本人）/ 数据隔离放行（isAdmin）/ 审批流程处理人
+        Long me = currentUserId();
+        boolean mine = Objects.equals(ro.getApplicantId(), me)
+                || Objects.equals(ro.getShipperId(), me)
+                || Objects.equals(ro.getReturnerId(), me);
         if (!mine && !isAdmin && !engine.isCandidate(RETURN_PROCESS_CODE, String.valueOf(ro.getId()), username)) {
             throw new IllegalArgumentException("退货单不存在或无权操作：" + id);
         }

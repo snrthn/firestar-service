@@ -64,4 +64,10 @@ public class Receivable extends LogicDeleteEntity {
 
     /** 来源类型（字典 receivable_source：FROM_SHIPMENT/FROM_RETURN） */
     private String sourceType;
+
+    /** 申请人 ID（用户级隔离：生成来源——发货单申请人 / 退货单申请人；V85） */
+    private Long applicantId;
+
+    /** 发货人 ID（用户级隔离：蓝字应收取自发货单 shipped_by_id；红字留 NULL；V85） */
+    private Long shipperId;
 }

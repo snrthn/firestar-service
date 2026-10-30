@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.firestar.common.BatchLoader;
+import com.firestar.common.DataScopeHelper;
+import com.firestar.common.SecurityContextUtils;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.entity.DictData;
 import com.firestar.entity.Project;
@@ -15,6 +17,7 @@ import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.ShipmentLineMapper;
 import com.firestar.mapper.ShipmentMapper;
+import com.firestar.mapper.UserMapper;
 import com.firestar.service.ReceivableService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,18 +63,21 @@ public class ReceivableServiceImpl implements ReceivableService {
     private final ShipmentLineMapper shipmentLineMapper;
     private final ProjectMapper projectMapper;
     private final DictDataMapper dictDataMapper;
+    private final UserMapper userMapper;
 
     @Autowired
     public ReceivableServiceImpl(ReceivableMapper receivableMapper,
                                 ShipmentMapper shipmentMapper,
                                 ShipmentLineMapper shipmentLineMapper,
                                 ProjectMapper projectMapper,
-                                DictDataMapper dictDataMapper) {
+                                DictDataMapper dictDataMapper,
+                                UserMapper userMapper) {
         this.receivableMapper = receivableMapper;
         this.shipmentMapper = shipmentMapper;
         this.shipmentLineMapper = shipmentLineMapper;
         this.projectMapper = projectMapper;
         this.dictDataMapper = dictDataMapper;
+        this.userMapper = userMapper;
     }
 
     @Override
@@ -110,6 +116,9 @@ public class ReceivableServiceImpl implements ReceivableService {
         r.setProjectId(shipment.getProjectId());
         r.setShipmentId(shipmentId);
         r.setDocDirection("BLUE");         // 蓝字（V2 字典 doc_direction=BLUE）
+        // V85：用户级隔离归属字段（申请人 OR 发货人可见）
+        r.setApplicantId(shipment.getApplicantId());
+        r.setShipperId(shipment.getShippedById());
         r.setSourceType("FROM_SHIPMENT");  // 发货生成（V2 字典 receivable_source=FROM_SHIPMENT）
         r.setReceivableAmount(amount);
         r.setWrittenOffAmount(BigDecimal.ZERO);
@@ -168,16 +177,26 @@ public class ReceivableServiceImpl implements ReceivableService {
             }
         }
 
-        IPage<Receivable> page = receivableMapper.selectPage(new Page<>(current, size),
-                new LambdaQueryWrapper<Receivable>()
-                        .eq(projectId != null, Receivable::getProjectId, projectId)
-                        .eq(statusEq != null, Receivable::getStatus, statusEq)
-                        .eq(sourceEq != null, Receivable::getSourceType, sourceEq)
-                        .like(noKw != null, Receivable::getReceivableNo, noKw)
-                        .in(nameIds != null, Receivable::getProjectId, nameIds)
-                        .ge(dateFrom != null, Receivable::getReceivableDate, dateFrom)
-                        .le(dateTo != null, Receivable::getReceivableDate, dateTo)
-                        .orderByDesc(Receivable::getCreatedAt));
+        Long me = DataScopeHelper.currentUserId(userMapper);
+        if (DataScopeHelper.denyAll(me)) {
+            return new Page<>(current, size, 0);
+        }
+        LambdaQueryWrapper<Receivable> qw = new LambdaQueryWrapper<Receivable>()
+                .eq(projectId != null, Receivable::getProjectId, projectId)
+                .eq(statusEq != null, Receivable::getStatus, statusEq)
+                .eq(sourceEq != null, Receivable::getSourceType, sourceEq)
+                .like(noKw != null, Receivable::getReceivableNo, noKw)
+                .in(nameIds != null, Receivable::getProjectId, nameIds)
+                .ge(dateFrom != null, Receivable::getReceivableDate, dateFrom)
+                .le(dateTo != null, Receivable::getReceivableDate, dateTo)
+                .orderByDesc(Receivable::getCreatedAt);
+        // V85：用户级隔离（2026-10-30 虎哥）：非管理员仅看「申请人 OR 发货人」
+        if (!SecurityContextUtils.isAdmin()) {
+            qw.and(w -> {
+                w.eq(Receivable::getApplicantId, me).or().eq(Receivable::getShipperId, me);
+            });
+        }
+        IPage<Receivable> page = receivableMapper.selectPage(new Page<>(current, size), qw);
         Map<String, DictData> statusDict = dictMap(DICT_RECEIVABLE_STATUS);
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
         Map<String, DictData> sourceDict = dictMap(DICT_RECEIVABLE_SOURCE);
