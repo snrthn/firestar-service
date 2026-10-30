@@ -103,11 +103,11 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("3. 种子数据条数与当前迁移（V73 发货审批状态字典 + V74 归一）一致")
+    @DisplayName("3. 种子数据条数与当前迁移（V73/V74 归一 + V84 合同附件字典项）一致")
     void seedDataCountsMatchBaseline() {
         Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
         assertEquals(32L, seed.get("dictTypeCount"));
-        assertEquals(127L, seed.get("dictDataCount"));
+        assertEquals(128L, seed.get("dictDataCount"));
         assertEquals(13L, seed.get("configCount"));
         assertEquals(7L, seed.get("roleCount"));
         assertEquals(4L, seed.get("roleConflictCount"));
