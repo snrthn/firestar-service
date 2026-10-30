@@ -100,6 +100,14 @@ public class ProjectVO {
     /** 签约人展示名（nickname 兜底 username；V46） */
     private String contractSignedByName;
 
+    /**
+     * 合同附件文件 ID 列表（V84；软关联 sys_file_storage：bizType='contract' + bizId=项目ID）。
+     *
+     * <p>与发票 attachmentFileIds 同口径：**仅详情返回**，列表页不填充以避 N+1；
+     * 前端按 id 调 /files/{id} 取文件名与下载/预览链接。</p>
+     */
+    private List<Long> contractFileIds;
+
     /** 审批状态（字典 approval_status：DRAFT/PENDING_APPROVAL/APPROVING/REJECTED/APPROVED/CANCELLED） */
     private String approvalStatus;
 

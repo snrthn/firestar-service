@@ -18,6 +18,7 @@ import com.firestar.dto.ProjectVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.entity.DictData;
+import com.firestar.entity.FileStorage;
 import com.firestar.entity.Invoice;
 import com.firestar.entity.Item;
 import com.firestar.entity.ProcessDef;
@@ -27,6 +28,7 @@ import com.firestar.entity.Receivable;
 import com.firestar.entity.User;
 import com.firestar.mapper.DictDataMapper;
 import com.firestar.mapper.CustomerMapper;
+import com.firestar.mapper.FileStorageMapper;
 import com.firestar.mapper.GoodsMapper;
 import com.firestar.entity.Customer;
 import com.firestar.entity.Goods;
@@ -98,6 +100,13 @@ public class ProjectServiceImpl implements ProjectService {
     /** 单页上限，与 MybatisPlusConfig.MAX_PAGE_SIZE 对齐 */
     private static final long MAX_PAGE_SIZE = 500L;
 
+    /**
+     * 合同附件的业务类型字面量（V84）。必须与下列三处严格一致，否则文件在文件管理页不可筛：
+     *   ① 本常量  ② sys_dict_data 的 file_biz_type 字典值（V84__project_contract.sql 种入）
+     *   ③ 前端签约弹窗上传时 FormData 的 bizType（views/project/list.vue）
+     */
+    public static final String CONTRACT_ATTACH_BIZ_TYPE = "contract";
+
     /** 项目编号日期格式（PJ-{yyyyMMdd}-{id}） */
     private static final DateTimeFormatter PROJECT_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -118,6 +127,11 @@ public class ProjectServiceImpl implements ProjectService {
     private final ReceivableMapper receivableMapper;
     /** 退货审批的业务标题 enrich（V67）：bizKey 是退货单 ID */
     private final ReturnOrderMapper returnOrderMapper;
+    /**
+     * 合同附件（V84）：签约时上传的合同文件挂载到 sys_file_storage。
+     * 与发票附件（InvoiceServiceImpl.INVOICE_ATTACH_BIZ_TYPE）同构的软关联，不占业务表列。
+     */
+    private final FileStorageMapper fileStorageMapper;
     /** 客户主表（V68）：立项/编辑时按名称 upsert，给看板提供可聚合的客户维度 */
     private final CustomerMapper customerMapper;
     /** 货物主表（V71）：立项/编辑时按货物名 upsert，给看板提供可聚合的货物维度 */
@@ -132,7 +146,8 @@ public class ProjectServiceImpl implements ProjectService {
                               ReceiptMapper receiptMapper, InvoiceMapper invoiceMapper,
                               ReceivableMapper receivableMapper,
                               ReturnOrderMapper returnOrderMapper,
-                              CustomerMapper customerMapper, GoodsMapper goodsMapper) {
+                              CustomerMapper customerMapper, GoodsMapper goodsMapper,
+                              FileStorageMapper fileStorageMapper) {
         this.mapper = mapper;
         this.processDefMapper = processDefMapper;
         this.dictDataMapper = dictDataMapper;
@@ -149,6 +164,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.returnOrderMapper = returnOrderMapper;
         this.customerMapper = customerMapper;
         this.goodsMapper = goodsMapper;
+        this.fileStorageMapper = fileStorageMapper;
     }
 
     @Override
@@ -409,6 +425,8 @@ public class ProjectServiceImpl implements ProjectService {
                         ? Collections.emptyList() : List.of(p.getSalesManagerId())));
         // 列表页不填充 items（避 N+1），仅详情回填（编辑/展示用）
         vo.setItems(loadItems(p.getId()));
+        // 合同附件（V84）：同为 N+1 敏感，只详情回填
+        vo.setContractFileIds(loadContractFileIds(p.getId()));
         return vo;
     }
 
@@ -661,6 +679,12 @@ public class ProjectServiceImpl implements ProjectService {
         if (desc != null && desc.length() > 500) {
             throw new IllegalArgumentException("签约描述不能超过 500 字");
         }
+        // V84（2026-10-30 虎哥拍板）：合同必传 —— 项目得有合同支撑，没合同文件不许签约。
+        // 校验在状态回写之前，避免「先置 SIGNED 再发现没合同」留下脏终态（签约终态不可撤销）。
+        List<Long> contractFileIds = req.getContractFileIds();
+        if (contractFileIds == null || contractFileIds.isEmpty()) {
+            throw new IllegalArgumentException("请上传合同附件后再签约");
+        }
         exist.setContractStatus("SIGNED");
         // b 拍板：签约时可修正最终合同金额（建项填的是预估）；null 保持原值
         if (req.getContractAmount() != null) {
@@ -670,7 +694,45 @@ public class ProjectServiceImpl implements ProjectService {
         exist.setContractSignedAt(LocalDateTime.now());
         exist.setContractSignedBy(currentUserId());
         mapper.updateById(exist);
-        log.info("[project] 签约 id={} amount={} signedBy={}", id, exist.getContractAmount(), currentUsername());
+        // 合同附件挂载（V84）：前端上传时已带 bizId=项目ID，此处统一改写 bizType 收口，
+        // 保证文件管理页能按「合同」筛到；只认本次提交的列表，不做差分解绑（签约是终态）。
+        bindContractFiles(id, contractFileIds);
+        log.info("[project] 签约 id={} amount={} files={} signedBy={}", id, exist.getContractAmount(),
+                contractFileIds.size(), currentUsername());
+    }
+
+    /**
+     * 挂载合同附件（V84）：把签约时提交的文件改写 bizType='contract' + bizId=项目ID。
+     *
+     * <p>项目在签约时早已存在（建项/审批在前），故前端上传即带 bizId，这里只做 bizType 收口 +
+     * 存在性校验（防伪造 id 把别人的文件挂过来：文件必须属于本项目或尚无归属）。</p>
+     */
+    private void bindContractFiles(Long projectId, List<Long> fileIds) {
+        for (Long fid : fileIds) {
+            if (fid == null) {
+                continue;
+            }
+            FileStorage f = fileStorageMapper.selectById(fid);
+            if (f == null) {
+                throw new IllegalArgumentException("合同附件不存在：" + fid);
+            }
+            // 归属校验：只接受「本项目已挂的文件」或「新建未挂归属的文件」（bizId 为空）
+            if (f.getBizId() != null && !Objects.equals(f.getBizId(), projectId)) {
+                throw new IllegalArgumentException("合同附件不属于本项目：" + fid);
+            }
+            f.setBizType(CONTRACT_ATTACH_BIZ_TYPE);
+            f.setBizId(projectId);
+            fileStorageMapper.updateById(f);
+        }
+    }
+
+    /** 按 bizType='contract' + bizId 回查合同附件 ID 列表（顺序稳定：按文件主键升序） */
+    private List<Long> loadContractFileIds(Long projectId) {
+        List<FileStorage> files = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                .eq(FileStorage::getBizType, CONTRACT_ATTACH_BIZ_TYPE)
+                .eq(FileStorage::getBizId, projectId)
+                .orderByAsc(FileStorage::getId));
+        return files.stream().map(FileStorage::getId).collect(Collectors.toList());
     }
 
     @Override
