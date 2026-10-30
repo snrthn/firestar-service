@@ -171,9 +171,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (req.getInvoiceDate() == null) {
             throw new IllegalArgumentException("开票日期不能为空");
         }
-        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
-            throw new IllegalArgumentException("发票文件附件不能为空");
-        }
+        // 发票文件附件改为选填（2026-10-31 虎哥拍板）：开票申请阶段常常还没拿到票面扫描件，
+        // 强制必传会卡住流程；附件可在后续环节补传。空列表直接跳过 bindAttachments，不报错。
         if (req.getInvoiceType() == null || req.getInvoiceType().isBlank()) {
             throw new IllegalArgumentException("发票类型不能为空");
         }
@@ -285,9 +284,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (req.getInvoiceDate() == null) {
             throw new IllegalArgumentException("开票日期不能为空");
         }
-        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
-            throw new IllegalArgumentException("发票文件附件不能为空");
-        }
+        // 附件选填（同 create 口径）：空列表走 rebindAttachments 的差分解绑，即"清空附件"，不报错。
         r.setInvoiceAmount(req.getInvoiceAmount());
         r.setTaxRate(req.getTaxRate());
         r.setTaxAmount(taxOf(req.getInvoiceAmount(), req.getTaxRate()));
