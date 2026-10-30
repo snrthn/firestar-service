@@ -54,6 +54,7 @@ public class HelpManageController {
 
     /** 新建 */
     @PostMapping
+    @RequirePerm("help:create")
     public Result<Long> create(@RequestBody HelpRequest req) {
         return Result.success(helpArticleService.create(
                 currentUserId(), req.getTitle(), req.getContent(),
@@ -62,6 +63,7 @@ public class HelpManageController {
 
     /** 更新 */
     @PutMapping("/{id}")
+    @RequirePerm({"help:edit", "help:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody HelpRequest req) {
         helpArticleService.update(currentUserId(), id, req.getTitle(), req.getContent(),
                 req.getCategory(), req.getSortNo(), req.getStatus());
@@ -70,6 +72,7 @@ public class HelpManageController {
 
     /** 删除 */
     @DeleteMapping("/{id}")
+    @RequirePerm("help:delete")
     public Result<Void> delete(@PathVariable Long id) {
         helpArticleService.delete(id);
         return Result.success();

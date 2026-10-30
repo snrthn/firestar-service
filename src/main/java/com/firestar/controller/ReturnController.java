@@ -4,6 +4,11 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
+import com.firestar.common.ExcelExportUtil;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.io.IOException;
 import com.firestar.dto.ReturnCreateReq;
 import com.firestar.dto.ReturnVO;
 import com.firestar.dto.ReturnWriteoffDetailVO;
@@ -97,12 +102,14 @@ public class ReturnController {
 
     /** 发起退货申请（挂在发货单下；创建即三级审批，接口文档 9.） */
     @PostMapping("/shipments/{shipmentId}/returns")
+    @RequirePerm("return:create")
     public Result<Long> create(@PathVariable Long shipmentId, @RequestBody ReturnCreateReq req) {
         return Result.success(returnService.create(shipmentId, req));
     }
 
     /** 撤销退货申请（仅审批中可撤；引擎三道闸：发起人身份 + 流程运行中 + 并发） */
     @PutMapping("/{id}/cancel")
+    @RequirePerm("return:cancel")
     public Result<Void> cancel(@PathVariable Long id) {
         returnService.cancel(id);
         return Result.success();
@@ -123,5 +130,45 @@ public class ReturnController {
                               @RequestParam String comment) {
         returnService.rejectTask(taskId, comment);
         return Result.success();
+    }
+
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> RETURN_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("退货单号", "returnNo"),
+            new ExcelExportUtil.Column("项目编号", "projectNo"),
+            new ExcelExportUtil.Column("项目名称", "projectName"),
+            new ExcelExportUtil.Column("发货批次", "shipmentBatchNo"),
+            new ExcelExportUtil.Column("退货金额", "returnAmount"),
+            new ExcelExportUtil.Column("退货原因", "returnReason"),
+            new ExcelExportUtil.Column("审批状态", "approvalStatusName"),
+            new ExcelExportUtil.Column("执行状态", "executeStatusName"),
+            new ExcelExportUtil.Column("申请人", "applicantName"),
+            new ExcelExportUtil.Column("申请时间", "appliedAt"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 page 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 return:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("return:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) String projectNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String returnNo,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String executeStatus,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<ReturnVO> list = returnService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                1, Integer.MAX_VALUE, projectNo, projectName, returnNo, status, executeStatus, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, RETURN_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"return_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

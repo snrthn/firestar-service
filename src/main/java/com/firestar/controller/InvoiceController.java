@@ -4,6 +4,11 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
+import com.firestar.common.ExcelExportUtil;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.io.IOException;
 import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.TimelineNodeVO;
@@ -78,12 +83,14 @@ public class InvoiceController {
 
     /** 创建发票草稿（不拉审批） */
     @PostMapping
+    @RequirePerm("invoice:create")
     public Result<Long> create(@RequestBody InvoiceRequest req) {
         return Result.success(invoiceService.create(req));
     }
 
     /** 编辑发票（仅草稿态；仅本人/admin） */
     @PutMapping("/{id}")
+    @RequirePerm({"invoice:edit", "invoice:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody InvoiceRequest req) {
         invoiceService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
@@ -119,5 +126,50 @@ public class InvoiceController {
                               @RequestParam String comment) {
         invoiceService.rejectTask(taskId, comment);
         return Result.success();
+    }
+
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> INVOICE_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("发票号码", "invoiceNo"),
+            new ExcelExportUtil.Column("项目名称", "projectName"),
+            new ExcelExportUtil.Column("关联应收单号", "receivableNo"),
+            new ExcelExportUtil.Column("开票金额", "invoiceAmount"),
+            new ExcelExportUtil.Column("税率", "taxRate"),
+            new ExcelExportUtil.Column("税额", "taxAmount"),
+            new ExcelExportUtil.Column("发票类型", "invoiceTypeName"),
+            new ExcelExportUtil.Column("单据方向", "docDirectionName"),
+            new ExcelExportUtil.Column("开票日期", "invoiceDate"),
+            new ExcelExportUtil.Column("开票状态", "approvalStatusName"),
+            new ExcelExportUtil.Column("申请人", "applicantName"),
+            new ExcelExportUtil.Column("开票员", "clerkName"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 page 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 invoice:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("invoice:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) Long receivableId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String invoiceType,
+            @RequestParam(required = false) String docDirection,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<InvoiceVO> list = invoiceService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                1, Integer.MAX_VALUE, projectId, receivableId, status,
+                invoiceNo, projectName, invoiceType, docDirection, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, INVOICE_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoice_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

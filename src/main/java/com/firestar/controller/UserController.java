@@ -58,17 +58,20 @@ public class UserController {
     }
 
     @PostMapping
+    @RequirePerm("user:create")
     public Result<Long> create(@RequestBody UserRequest req) {
         return Result.success(userService.createUser(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"user:edit", "user:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody UserRequest req) {
         userService.updateUser(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("user:delete")
     public Result<Void> delete(@PathVariable Long id) {
         userService.deleteUser(id);
         return Result.success();

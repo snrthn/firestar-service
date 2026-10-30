@@ -1,6 +1,7 @@
 package com.firestar.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.firestar.common.ExcelExportUtil;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
@@ -9,6 +10,9 @@ import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.service.ShipmentService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +65,48 @@ public class ShipmentController {
                 pageNum, pageSize, batchNo, projectNo, projectName, status, approvalStatus, dateFrom, dateTo));
     }
 
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> SHIPMENT_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("项目编号", "projectNo"),
+            new ExcelExportUtil.Column("项目名称", "projectName"),
+            new ExcelExportUtil.Column("客户名称", "customerName"),
+            new ExcelExportUtil.Column("批次编号", "batchNo"),
+            new ExcelExportUtil.Column("发货金额", "shipmentAmount"),
+            new ExcelExportUtil.Column("已收金额", "receivedAmount"),
+            new ExcelExportUtil.Column("退货金额", "returnedAmount"),
+            new ExcelExportUtil.Column("发货状态", "shipmentStatusName"),
+            new ExcelExportUtil.Column("审批状态", "approvalStatusName"),
+            new ExcelExportUtil.Column("申请人", "applicantName"),
+            new ExcelExportUtil.Column("发货人", "shippedByName"),
+            new ExcelExportUtil.Column("确认人", "confirmedByName"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 page 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 shipment:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("shipment:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) String batchNo,
+            @RequestParam(required = false) String projectNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String approvalStatus,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<ShipmentVO> list = shipmentService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                1, Integer.MAX_VALUE, batchNo, projectNo, projectName, status, approvalStatus, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, SHIPMENT_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"shipment_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
+    }
+
     /** 详情（含明细行 + 关联应收单 + 字典翻译） */
     @GetMapping("/{id}")
     public Result<ShipmentVO> detail(@PathVariable Long id) {
@@ -75,12 +122,14 @@ public class ShipmentController {
 
     /** 创建发货申请并立即发起 P3 审批（决策#1） */
     @PostMapping
+    @RequirePerm("shipment:create")
     public Result<Long> create(@RequestBody ShipmentCreateReq req) {
         return Result.success(shipmentService.create(req));
     }
 
     /** 编辑发货单（2026-10-23 虎哥要求补入口）：仅 PENDING（待发货）可改，项目不可更换 */
     @PutMapping("/{id}")
+    @RequirePerm({"shipment:edit", "shipment:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody ShipmentCreateReq req) {
         shipmentService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
@@ -115,6 +164,7 @@ public class ShipmentController {
 
     /** 标记客户收货（决策#6 必传证据；支持按行部分收货；联动生成应收单） */
     @PostMapping("/{id}/confirm-receive")
+    @RequirePerm("shipment:receive")
     public Result<Void> confirmReceive(@PathVariable Long id, @RequestBody ShipmentConfirmReceiveReq req) {
         shipmentService.confirmReceive(req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());

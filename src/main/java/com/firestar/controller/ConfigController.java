@@ -41,7 +41,7 @@ public class ConfigController {
     }
 
     /** 批量更新配置值（管理员，前端以 key→value 扁平 map 提交） */
-    @RequirePerm("config:manage")
+    @RequirePerm("config:create")
     @PutMapping
     public Result<Void> update(@RequestBody Map<String, String> values) {
         configService.updateValues(values);
@@ -49,7 +49,7 @@ public class ConfigController {
     }
 
     /** 新建键值对（管理员；供后期扩展业务状态开关） */
-    @RequirePerm("config:manage")
+    @RequirePerm("config:create")
     @PostMapping
     public Result<Void> create(@RequestBody ConfigCreateRequest req) {
         configService.createConfig(req);
@@ -57,7 +57,7 @@ public class ConfigController {
     }
 
     /** 更新单个配置项（值 + 说明；键必须已存在，不存在抛错） */
-    @RequirePerm("config:manage")
+    @RequirePerm("config:create")
     @PutMapping("/item")
     public Result<Void> updateItem(@RequestBody ConfigCreateRequest req) {
         configService.updateConfigItem(req);
@@ -68,5 +68,11 @@ public class ConfigController {
     @GetMapping("/about")
     public Result<AboutVO> about() {
         return Result.success(configService.getAbout());
+    }
+
+    /** 特性开关（登录用户可见，无需 config:manage）：前端按开关显隐调试类模块，如工作台【系统状态】卡片。默认隐藏。 */
+    @GetMapping("/flags")
+    public Result<Map<String, String>> flags() {
+        return Result.success(configService.getFlags());
     }
 }

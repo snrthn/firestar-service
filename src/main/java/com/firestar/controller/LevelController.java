@@ -47,17 +47,20 @@ public class LevelController {
     }
 
     @PostMapping
+    @RequirePerm("level:create")
     public Result<Long> create(@RequestBody LevelRequest req) {
         return Result.success(levelService.createLevel(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"level:edit", "level:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody LevelRequest req) {
         levelService.updateLevel(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("level:delete")
     public Result<Void> delete(@PathVariable Long id) {
         levelService.deleteLevel(id);
         return Result.success();

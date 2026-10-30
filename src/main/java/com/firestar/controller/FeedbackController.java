@@ -55,6 +55,7 @@ public class FeedbackController {
 
     /** 创建反馈 */
     @PostMapping
+    @RequirePerm("feedback:create")
     public Result<Long> create(@RequestBody CreateRequest req) {
         return Result.success(feedbackService.create(
                 currentUserId(), req.getTitle(), req.getContent(), req.getReceiverId(), req.getCategory()));

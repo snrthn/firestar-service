@@ -43,17 +43,20 @@ public class MenuController {
     }
 
     @PostMapping
+    @RequirePerm("menu:create")
     public Result<Long> create(@RequestBody MenuRequest req) {
         return Result.success(menuService.create(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"menu:edit", "menu:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody MenuRequest req) {
         menuService.update(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("menu:delete")
     public Result<Void> delete(@PathVariable Long id) {
         menuService.delete(id);
         return Result.success();

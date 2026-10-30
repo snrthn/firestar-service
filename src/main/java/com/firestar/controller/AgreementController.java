@@ -89,7 +89,7 @@ public class AgreementController {
     }
 
     /** 发布新版本（管理员） */
-    @RequirePerm("config:manage")
+    @RequirePerm("agreement:publish")
     @PostMapping("/version")
     public Result<Long> publish(@RequestBody PublishVersionRequest req) {
         Long id = agreementService.publishVersion(req.getAgreementId(), req.getContent(),

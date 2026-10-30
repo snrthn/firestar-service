@@ -46,17 +46,20 @@ public class PostController {
     }
 
     @PostMapping
+    @RequirePerm("post:create")
     public Result<Long> create(@RequestBody PostRequest req) {
         return Result.success(postService.createPost(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"post:edit", "post:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody PostRequest req) {
         postService.updatePost(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("post:delete")
     public Result<Void> delete(@PathVariable Long id) {
         postService.deletePost(id);
         return Result.success();

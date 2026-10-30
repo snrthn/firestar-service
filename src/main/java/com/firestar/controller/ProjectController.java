@@ -4,6 +4,11 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
+import com.firestar.common.ExcelExportUtil;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.io.IOException;
 import com.firestar.dto.ApprovalHistoryVO;
 import com.firestar.dto.ProjectRequest;
 import com.firestar.dto.ProjectSignRequest;
@@ -89,6 +94,7 @@ public class ProjectController {
 
     /** 保存立项草稿（approvalStatus = DRAFT） */
     @PostMapping
+    @RequirePerm("project:create")
     public Result<Long> create(@RequestBody ProjectRequest req) {
         return Result.success(projectService.create(req));
     }
@@ -111,6 +117,7 @@ public class ProjectController {
 
     /** 编辑草稿（仅 DRAFT / REJECTED 态可改） */
     @PutMapping("/{id}")
+    @RequirePerm({"project:edit", "project:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody ProjectRequest req) {
         projectService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
@@ -142,6 +149,7 @@ public class ProjectController {
 
     /** 签约：审批通过后的独立动作（可修正最终合同金额 + 补录签约描述；终态不可撤销） */
     @PostMapping("/{id}/sign")
+    @RequirePerm("project:sign")
     public Result<Void> sign(@PathVariable Long id, @RequestBody ProjectSignRequest req) {
         projectService.sign(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
@@ -200,5 +208,49 @@ public class ProjectController {
         String username = SecurityContextHolder.getContext().getAuthentication().getName();
         return Result.success(
                 projectService.myApprovedHistoryPage(username, pageNum, pageSize, bizTitleKw, taskNameKw));
+    }
+
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> PROJECT_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("项目编号", "projectNo"),
+            new ExcelExportUtil.Column("项目名称", "projectName"),
+            new ExcelExportUtil.Column("客户名称", "customerName"),
+            new ExcelExportUtil.Column("销售经理", "salesManagerName"),
+            new ExcelExportUtil.Column("合同状态", "contractStatus"),
+            new ExcelExportUtil.Column("合同金额", "contractAmount"),
+            new ExcelExportUtil.Column("累计发货", "shippedAmount"),
+            new ExcelExportUtil.Column("累计已收", "collectedAmount"),
+            new ExcelExportUtil.Column("累计开票", "invoicedAmount"),
+            new ExcelExportUtil.Column("累计应收", "receivableAmount"),
+            new ExcelExportUtil.Column("审批状态", "approvalStatusName"),
+            new ExcelExportUtil.Column("签约人", "contractSignedByName"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 page 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 project:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("project:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) String projectNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String approvalStatus,
+            @RequestParam(required = false) String customerName,
+            @RequestParam(required = false) String contractStatus,
+            @RequestParam(required = false) Long salesManagerId,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<ProjectVO> list = projectService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                1, Integer.MAX_VALUE, projectNo, projectName, approvalStatus,
+                customerName, contractStatus, salesManagerId, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, PROJECT_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"project_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

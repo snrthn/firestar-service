@@ -42,17 +42,20 @@ public class OrgController {
     }
 
     @PostMapping
+    @RequirePerm("org:create")
     public Result<Long> create(@RequestBody OrgRequest req) {
         return Result.success(orgService.create(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"org:edit", "org:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody OrgRequest req) {
         orgService.update(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("org:delete")
     public Result<Void> delete(@PathVariable Long id) {
         orgService.delete(id);
         return Result.success();

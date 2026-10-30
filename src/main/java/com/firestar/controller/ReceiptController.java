@@ -4,6 +4,11 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
+import com.firestar.common.ExcelExportUtil;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.io.IOException;
 import com.firestar.dto.AllocationItem;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ReceiptVO;
@@ -88,12 +93,14 @@ public class ReceiptController {
 
     /** 创建收款单草稿（不拉审批） */
     @PostMapping
+    @RequirePerm("receipt:create")
     public Result<Long> create(@RequestBody ReceiptRequest req) {
         return Result.success(receiptService.create(req));
     }
 
     /** 编辑收款单（仅草稿态；仅本人/admin） */
     @PutMapping("/{id}")
+    @RequirePerm({"receipt:edit", "receipt:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody ReceiptRequest req) {
         receiptService.update(id, req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
@@ -129,5 +136,48 @@ public class ReceiptController {
                               @RequestParam String comment) {
         receiptService.rejectTask(taskId, comment);
         return Result.success();
+    }
+
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> RECEIPT_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("收款单号", "receiptNo"),
+            new ExcelExportUtil.Column("项目编号", "projectNo"),
+            new ExcelExportUtil.Column("项目名称", "projectName"),
+            new ExcelExportUtil.Column("客户名称", "customerName"),
+            new ExcelExportUtil.Column("收款金额", "receiptAmount"),
+            new ExcelExportUtil.Column("款项类型", "receiptTypeName"),
+            new ExcelExportUtil.Column("单据方向", "docDirectionName"),
+            new ExcelExportUtil.Column("收款日期", "receiptDate"),
+            new ExcelExportUtil.Column("审批状态", "approvalStatusName"),
+            new ExcelExportUtil.Column("收款业务状态", "receiptStatusName"),
+            new ExcelExportUtil.Column("申请人", "applicantName"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 page 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 receipt:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("receipt:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String receiptNo,
+            @RequestParam(required = false) String projectName,
+            @RequestParam(required = false) String receiptType,
+            @RequestParam(required = false) String docDirection,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<ReceiptVO> list = receiptService.page(
+                SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin(),
+                1, Integer.MAX_VALUE, projectId, status, receiptNo, projectName,
+                receiptType, docDirection, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, RECEIPT_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"receipt_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

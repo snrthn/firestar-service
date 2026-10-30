@@ -3,6 +3,11 @@ package com.firestar.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
+import com.firestar.common.ExcelExportUtil;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.io.IOException;
 import com.firestar.dto.AutoMatchResultVO;
 import com.firestar.dto.DifferencePoolVO;
 import com.firestar.dto.ReverseRequest;
@@ -71,6 +76,7 @@ public class WriteOffController {
      * 结果回传配对明细供前端展示「这轮自动核销干了什么」。</p>
      */
     @PostMapping("/auto-match")
+    @RequirePerm("writeoff:writeoff")
     public Result<AutoMatchResultVO> autoMatch(@RequestParam Long projectId) {
         return Result.success(writeOffService.autoMatch(projectId));
     }
@@ -80,8 +86,47 @@ public class WriteOffController {
      * 原单为红冲单时回滚方向取反（V1「一层不可删只能反核销」范式）。
      */
     @PostMapping("/reverse")
+    @RequirePerm("writeoff:reverse")
     public Result<Void> reverse(@RequestBody ReverseRequest req) {
         writeOffService.reverse(req);
         return Result.success();
+    }
+
+    /** 导出列定义（任务2：与列表可见字段对齐，中文标题 → VO 属性名） */
+    private static final List<ExcelExportUtil.Column> WRITEOFF_EXPORT_COLUMNS = List.of(
+            new ExcelExportUtil.Column("台账类型", "ledgerType"),
+            new ExcelExportUtil.Column("核销单号", "ledgerNo"),
+            new ExcelExportUtil.Column("项目编号", "projectNo"),
+            new ExcelExportUtil.Column("主单号", "bizNo"),
+            new ExcelExportUtil.Column("应收单号", "receivableNo"),
+            new ExcelExportUtil.Column("核销金额", "amount"),
+            new ExcelExportUtil.Column("状态", "status"),
+            new ExcelExportUtil.Column("核销方式", "method"),
+            new ExcelExportUtil.Column("核销日期", "ledgerDate"),
+            new ExcelExportUtil.Column("创建人", "createdByName"),
+            new ExcelExportUtil.Column("创建时间", "createdAt")
+    );
+
+    /**
+     * 导出 Excel（任务2）：复用 pageLedger 查询拿全量（pageSize=MAX 取 records），
+     * 带与列表相同的筛选条件；权限点 writeoff:export。
+     */
+    @GetMapping("/export")
+    @RequirePerm("writeoff:export")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String ledgerType,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) LocalDate dateFrom,
+            @RequestParam(required = false) LocalDate dateTo) throws IOException {
+        List<WriteOffLedgerVO> list = writeOffService.pageLedger(
+                1, Integer.MAX_VALUE, projectId, ledgerType, status, keyword, dateFrom, dateTo
+        ).getRecords();
+        byte[] xlsx = ExcelExportUtil.export(list, WRITEOFF_EXPORT_COLUMNS);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"writeoff_export.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

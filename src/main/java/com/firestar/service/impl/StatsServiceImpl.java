@@ -12,6 +12,7 @@ import com.firestar.entity.Customer;
 import com.firestar.entity.Goods;
 import com.firestar.entity.Invoice;
 import com.firestar.entity.Item;
+import com.firestar.entity.LoginLog;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receipt;
 import com.firestar.entity.Receivable;
@@ -24,6 +25,7 @@ import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.GoodsMapper;
 import com.firestar.mapper.InvoiceMapper;
 import com.firestar.mapper.ItemMapper;
+import com.firestar.mapper.LoginLogMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceiptMapper;
 import com.firestar.mapper.ReceivableMapper;
@@ -56,6 +58,7 @@ import java.util.Set;
 
 import com.firestar.dto.AgeingVO;
 import com.firestar.dto.AgeingSegmentVO;
+import com.firestar.dto.PlatformStatsVO;
 
 /**
  * 看板只读统计层实现（L1）。
@@ -88,6 +91,7 @@ public class StatsServiceImpl implements StatsService {
     private final WriteOffMapper writeOffMapper;
     private final ReturnOrderMapper returnOrderMapper;
     private final ItemMapper itemMapper;
+    private final LoginLogMapper loginLogMapper;
 
     // ===================== 工具 =====================
 
@@ -773,6 +777,28 @@ public class StatsServiceImpl implements StatsService {
         v.setDso(dso);
         v.setTurnover(dso.compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
                 : BigDecimal.valueOf(365).divide(dso, 2, RoundingMode.HALF_UP));
+        return v;
+    }
+
+    // ===================== 工作台平台指标 =====================
+
+    /**
+     * 工作台横幅展示用的平台级指标（与经营看板解耦的独立端点）：
+     * - userCount：活跃用户数（status='ENABLED'，MP 自动追加逻辑删除过滤）；
+     * - todayLoginCount：今日（本地时区 00:00 起）成功登录次数，作为「访问指标」。
+     * 只读，不写库。
+     */
+    @Override
+    public PlatformStatsVO platformStats() {
+        PlatformStatsVO v = new PlatformStatsVO();
+        v.setUserCount(userMapper.selectCount(
+                new LambdaQueryWrapper<User>().eq(User::getStatus, "ENABLED")));
+        LocalDate today = LocalDate.now();
+        v.setTodayLoginCount(loginLogMapper.selectCount(new LambdaQueryWrapper<LoginLog>()
+                .eq(LoginLog::getLoginStatus, "SUCCESS")
+                .ge(LoginLog::getLoginAt, today.atStartOfDay())));
+        v.setHistoryVisitCount(loginLogMapper.selectCount(new LambdaQueryWrapper<LoginLog>()
+                .eq(LoginLog::getLoginStatus, "SUCCESS")));
         return v;
     }
 

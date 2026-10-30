@@ -118,6 +118,13 @@
             <version>${hutool.version}</version>
         </dependency>
 
+        <!-- Excel 导出（任务2：业务数据页导出 xlsx，Apache POI 5.2.5 兼容 Java 17） -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+
         <!-- 阿里云 OSS 对象存储（文件管理模块）
              3.18.5 为 2026-01 发布的最新稳定版，兼容 Java 17 / Spring Boot 3。
              ⚠️ 部署前提：Bucket 在北京、ECS 在张家口 → 跨地域，内网 Endpoint 不可用

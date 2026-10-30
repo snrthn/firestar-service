@@ -43,7 +43,7 @@ public class FileController {
 
     /** 上传文件（multipart/form-data）。服务端中转，见 FileServiceImpl 注释。 */
     @PostMapping("/upload")
-    @RequirePerm("file:manage")
+    @RequirePerm("file:upload")
     public Result<FileVO> upload(@RequestParam("file") MultipartFile file,
                                  @RequestParam(required = false) String bizType,
                                  @RequestParam(required = false) Long bizId,
@@ -70,6 +70,7 @@ public class FileController {
     }
 
     /** 下载：返回带时效的签名 URL，并记录下载日志（红线 5）。 */
+    @RequirePerm("file:download")
     @GetMapping("/{id}/download")
     public Result<String> download(@PathVariable Long id, HttpServletRequest request) {
         return Result.success(fileService.accessUrl(id, false, request));
@@ -91,7 +92,7 @@ public class FileController {
      * 接口文档口径为「仅管理员」，故收紧到 file:manage。
      */
     @DeleteMapping("/{id}")
-    @RequirePerm("file:manage")
+    @RequirePerm("file:delete")
     public Result<Void> delete(@PathVariable Long id) {
         fileService.delete(id);
         return Result.success();
@@ -99,7 +100,7 @@ public class FileController {
 
     /** 更新文件别名（V23；文件管理处维护，仅展示/审计用；传空串清空回退 originalName）。 */
     @PutMapping("/{id}/alias")
-    @RequirePerm("file:manage")
+    @RequirePerm("file:alias")
     public Result<FileVO> updateAlias(@PathVariable Long id, @RequestParam String alias) {
         return Result.success(fileService.updateAlias(id, alias));
     }

@@ -22,6 +22,9 @@ public interface ConfigService {
     /** 关于我们弹窗聚合数据（登录用户可见，无需 config:manage） */
     AboutVO getAbout();
 
+    /** 特性开关（登录用户可见，无需 config:manage）：返回白名单内的布尔型功能开关，缺省 "false" */
+    Map<String, String> getFlags();
+
     /** 按配置键读取单个配置值（如 sys_initialized / trial_mode），不存在返回 null */
     String getConfigValue(String key);
 

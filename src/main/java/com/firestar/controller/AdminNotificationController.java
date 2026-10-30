@@ -48,7 +48,7 @@ public class AdminNotificationController {
     }
 
     /** 手动发布：type/标题/正文/链接/级别/接收人多选（P2 验收操作入口） */
-    @RequirePerm("notify:manage")
+    @RequirePerm("notify:publish")
     @PostMapping("/publish")
     public Result<Map<String, Object>> publish(@RequestBody PublishNotificationRequest req) {
         int inserted;
@@ -86,7 +86,7 @@ public class AdminNotificationController {
     }
 
     /** 保存模板文案/开关（改后新通知用新文案，历史不改写） */
-    @RequirePerm("notify:template")
+    @RequirePerm("notify:template:edit")
     @PutMapping("/templates/{id}")
     public Result<Void> saveTemplate(@PathVariable Long id, @RequestBody TemplateSaveRequest req) {
         try {

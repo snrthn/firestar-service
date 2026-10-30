@@ -68,17 +68,20 @@ public class DictController {
     }
 
     @PostMapping("/type")
+    @RequirePerm("dict:create")
     public Result<Long> createType(@RequestBody DictTypeRequest req) {
         return Result.success(dictService.createType(req));
     }
 
     @PutMapping("/type/{id}")
+    @RequirePerm({"dict:edit", "dict:create"})
     public Result<Void> updateType(@PathVariable Long id, @RequestBody DictTypeRequest req) {
         dictService.updateType(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/type/{id}")
+    @RequirePerm("dict:delete")
     public Result<Void> deleteType(@PathVariable Long id) {
         dictService.deleteType(id);
         return Result.success();
@@ -99,17 +102,20 @@ public class DictController {
     }
 
     @PostMapping("/data")
+    @RequirePerm("dict:data:create")
     public Result<Long> createData(@RequestBody DictDataRequest req) {
         return Result.success(dictService.createData(req));
     }
 
     @PutMapping("/data/{id}")
+    @RequirePerm({"dict:data:edit", "dict:data:create"})
     public Result<Void> updateData(@PathVariable Long id, @RequestBody DictDataRequest req) {
         dictService.updateData(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/data/{id}")
+    @RequirePerm("dict:data:delete")
     public Result<Void> deleteData(@PathVariable Long id) {
         dictService.deleteData(id);
         return Result.success();

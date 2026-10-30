@@ -54,17 +54,20 @@ public class PermissionController {
     }
 
     @PostMapping
+    @RequirePerm("permission:create")
     public Result<Long> create(@RequestBody PermissionRequest req) {
         return Result.success(permissionService.create(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"permission:edit", "permission:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody PermissionRequest req) {
         permissionService.update(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("permission:delete")
     public Result<Void> delete(@PathVariable Long id) {
         permissionService.delete(id);
         return Result.success();

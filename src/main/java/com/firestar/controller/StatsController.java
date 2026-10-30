@@ -9,6 +9,7 @@ import com.firestar.dto.OverviewVO;
 import com.firestar.dto.ProjectRankingVO;
 import com.firestar.dto.StatsQuery;
 import com.firestar.dto.AgeingVO;
+import com.firestar.dto.PlatformStatsVO;
 import com.firestar.service.StatsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -64,5 +65,11 @@ public class StatsController {
     @PostMapping("/ageing")
     public Result<AgeingVO> ageing(@RequestBody(required = false) StatsQuery q) {
         return Result.success(statsService.ageing(q == null ? new StatsQuery() : q));
+    }
+
+    /** 工作台平台指标：活跃用户总数 + 今日登录次数 */
+    @PostMapping("/platform")
+    public Result<PlatformStatsVO> platform() {
+        return Result.success(statsService.platformStats());
     }
 }

@@ -60,7 +60,7 @@ public class ProcessDefController {
         return Result.success(service.detail(id));
     }
 
-    @RequirePerm("process:manage")
+    @RequirePerm("process:create")
     @PostMapping
     public Result<ProcessDef> create(@RequestBody ProcessDef def) {
         def.setCreatedBy(currentUserId());
@@ -68,20 +68,20 @@ public class ProcessDefController {
         return Result.success(service.create(def));
     }
 
-    @RequirePerm("process:manage")
+    @RequirePerm({"process:edit", "process:config"})
     @PutMapping("/{id}")
     public Result<ProcessDef> update(@PathVariable Long id, @RequestBody ProcessDef def) {
         def.setUpdatedBy(currentUserId());
         return Result.success(service.update(id, def));
     }
 
-    @RequirePerm("process:manage")
+    @RequirePerm("process:deploy")
     @PostMapping("/{id}/deploy")
     public Result<DeployResult> deploy(@PathVariable Long id) {
         return Result.success(service.deploy(id));
     }
 
-    @RequirePerm("process:manage")
+    @RequirePerm("process:toggle")
     @PostMapping("/{id}/disable")
     public Result<ProcessDef> toggleStatus(@PathVariable Long id) {
         return Result.success(service.toggleStatus(id));

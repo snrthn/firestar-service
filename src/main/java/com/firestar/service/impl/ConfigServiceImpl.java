@@ -25,6 +25,9 @@ public class ConfigServiceImpl implements ConfigService {
     private static final List<String> ABOUT_KEYS = Arrays.asList(
             "system_name", "icp_no", "support_contact", "about_us", "app_version", "logo_url");
 
+    /** 特性开关白名单：登录用户可读取的布尔型功能开关（不暴露管理员配置细节）。缺省 "false"。 */
+    private static final List<String> FLAG_KEYS = Arrays.asList("dashboard_status_visible");
+
     private final ConfigMapper configMapper;
 
     public ConfigServiceImpl(ConfigMapper configMapper) {
@@ -83,6 +86,19 @@ public class ConfigServiceImpl implements ConfigService {
         Config c = configMapper.selectOne(
                 new LambdaQueryWrapper<Config>().eq(Config::getConfigKey, key));
         return c == null ? null : c.getConfigValue();
+    }
+
+    @Override
+    public Map<String, String> getFlags() {
+        List<Config> list = configMapper.selectList(
+                new LambdaQueryWrapper<Config>().in(Config::getConfigKey, FLAG_KEYS));
+        // 白名单内每一项先给缺省 "false"（隐藏），再被已存在的配置值覆盖。
+        Map<String, String> m = new HashMap<>();
+        for (String k : FLAG_KEYS) m.put(k, "false");
+        for (Config c : list) {
+            m.put(c.getConfigKey(), c.getConfigValue() == null ? "false" : c.getConfigValue());
+        }
+        return m;
     }
 
     @Override

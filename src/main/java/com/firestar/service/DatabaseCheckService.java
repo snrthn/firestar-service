@@ -300,6 +300,8 @@ public class DatabaseCheckService {
          *    ⚠️ 计数口径提示：本类按「实际行数」校验，而 V67 迁移注释曾按「INSERT 语句数」
          *       记 +3——凡迁移里出现 ON DUPLICATE KEY UPDATE，行数增量 ≠ 语句行数，
          *       必须以 SELECT COUNT(*) 实测为准，不能数 INSERT。
+         * V83（工作台系统状态开关）新增 1 个配置种子（sys_config: dashboard_status_visible，
+         *   默认 false、仅调试用）→ configCount 13→14。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
@@ -308,7 +310,7 @@ public class DatabaseCheckService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dictTypeCount", countOf(conn, "sys_dict_type", 33, errors));
         result.put("dictDataCount", countOf(conn, "sys_dict_data", 127, errors));
-        result.put("configCount", countOf(conn, "sys_config", 13, errors));
+        result.put("configCount", countOf(conn, "sys_config", 14, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
         return result;

@@ -49,17 +49,20 @@ public class RoleController {
     }
 
     @PostMapping
+    @RequirePerm("role:create")
     public Result<Long> create(@RequestBody RoleRequest req) {
         return Result.success(roleService.createRole(req));
     }
 
     @PutMapping("/{id}")
+    @RequirePerm({"role:edit", "role:create"})
     public Result<Void> update(@PathVariable Long id, @RequestBody RoleRequest req) {
         roleService.updateRole(id, req);
         return Result.success();
     }
 
     @DeleteMapping("/{id}")
+    @RequirePerm("role:delete")
     public Result<Void> delete(@PathVariable Long id) {
         roleService.deleteRole(id);
         return Result.success();
@@ -73,6 +76,7 @@ public class RoleController {
 
     /** 分配权限（整体替换语义，空集合 = 清空） */
     @PutMapping("/{id}/perms")
+    @RequirePerm("role:assign")
     public Result<Void> assignPerms(@PathVariable Long id, @RequestBody RolePermRequest req) {
         roleService.assignPerms(id, req);
         return Result.success();
@@ -86,6 +90,7 @@ public class RoleController {
 
     /** 分配菜单（整体替换语义，空集合 = 清空） */
     @PutMapping("/{id}/menus")
+    @RequirePerm("role:assign")
     public Result<Void> assignMenus(@PathVariable Long id, @RequestBody RoleMenuRequest req) {
         roleService.assignMenus(id, req);
         return Result.success();
