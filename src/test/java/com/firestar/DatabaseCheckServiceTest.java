@@ -103,13 +103,16 @@ class DatabaseCheckServiceTest {
     }
 
     @Test
-    @DisplayName("3. 种子数据条数与当前迁移一致（V73/V74 归一 + V78 字典类型 + V83 配置 + V84 合同附件字典项）")
+    @DisplayName("3. 种子数据条数与当前迁移一致（V73/V74 归一 + V78 字典类型 + V83 配置 + V84 合同附件字典项 + V95 发票三级状态机字典）")
     void seedDataCountsMatchBaseline() {
         Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
-        // 期望值口径与 DatabaseCheckService.readSeedData 对齐（33/128/14/7/4）：
-        // 32L / 13L 是 V78（dictType 32→33）、V83（config 13→14）之前的历史值，此处同步补齐。
+        // 期望值口径与 DatabaseCheckService.readSeedData 对齐（33/130/14/7/4）：
+        // V95（发票 DRAFT→SUBMITTED→ISSUED 三级状态机）向既有 approval_status 字典追加
+        // SUBMITTED（待开票）/ ISSUED（已开票）2 项 → dictDataCount 128→130，
+        // 未新增字典类型，故 dictTypeCount 保持 33。
+        // ⚠️ 这里跟 DatabaseCheckService 是同一个期望值的两份拷贝，改了那边务必同步改这里。
         assertEquals(33L, seed.get("dictTypeCount"));
-        assertEquals(128L, seed.get("dictDataCount"));
+        assertEquals(130L, seed.get("dictDataCount"));
         assertEquals(14L, seed.get("configCount"));
         assertEquals(7L, seed.get("roleCount"));
         assertEquals(4L, seed.get("roleConflictCount"));
