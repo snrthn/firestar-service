@@ -423,8 +423,9 @@ public class ReturnServiceImpl implements ReturnService {
         if (invRemain.compareTo(BigDecimal.ZERO) > 0) {
             List<Invoice> blueInvoices = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                     .eq(Invoice::getReceivableId, origin.getId())
+                    // V95：可冲的前提是「已开票」= ISSUED；原判 APPROVED 会一张蓝票都捞不到
                     .eq(Invoice::getDocDirection, "BLUE")
-                    .eq(Invoice::getApprovalStatus, "APPROVED")
+                    .eq(Invoice::getApprovalStatus, "ISSUED")
                     .orderByAsc(Invoice::getId));
             for (Invoice blue : blueInvoices) {
                 if (invRemain.compareTo(BigDecimal.ZERO) <= 0) {

@@ -413,10 +413,17 @@ public class WriteOffServiceImpl implements WriteOffService {
                 : receiptMapper.selectList(new LambdaQueryWrapper<Receipt>()
                                 .in(Receipt::getId, receiptIds))
                         .stream().collect(Collectors.toMap(Receipt::getId, Receipt::getReceiptNo, (a, b) -> a));
-        Map<Long, String> invoiceNos = invoiceIds.isEmpty() ? Map.of()
-                : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
-                                .in(Invoice::getId, invoiceIds))
-                        .stream().collect(Collectors.toMap(Invoice::getId, Invoice::getInvoiceNo, (a, b) -> a));
+        // ⚠️ 这里不能用 Collectors.toMap：它的 value 不允许为 null，而 V95 之后
+        // invoice_no 允许为空 —— 发票处于「申请 / 待开票」时尚未取得税务票号，
+        // 用 toMap 会让核销台账分页接口直接 NPE（2026-11-01 实锤 WriteOffController.page）。
+        // 改用 HashMap 逐条 put：容忍 null value，未开票的行在台账里显示为「—」即可。
+        Map<Long, String> invoiceNos = new HashMap<>();
+        if (!invoiceIds.isEmpty()) {
+            for (Invoice iv : invoiceMapper.selectList(
+                    new LambdaQueryWrapper<Invoice>().in(Invoice::getId, invoiceIds))) {
+                invoiceNos.put(iv.getId(), iv.getInvoiceNo());
+            }
+        }
         Set<Long> projectIds = recvMap.values().stream()
                 .map(Receivable::getProjectId).filter(Objects::nonNull).collect(Collectors.toSet());
         Map<Long, String> projectNos = projectNosOf(projectIds);

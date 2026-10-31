@@ -1270,8 +1270,9 @@ public class ProjectServiceImpl implements ProjectService {
         }
         for (Invoice iv : invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
                 .select(Invoice::getProjectId, Invoice::getInvoiceAmount, Invoice::getDocDirection)
+                // V95 状态机：「已开票」= ISSUED（开票节点落票后才算），不再是 APPROVED
                 .in(Invoice::getProjectId, projectIds)
-                .eq(Invoice::getApprovalStatus, "APPROVED"))) {
+                .eq(Invoice::getApprovalStatus, "ISSUED"))) {
             BigDecimal amt = "RED".equals(iv.getDocDirection())
                     ? nz(iv.getInvoiceAmount()).negate() : nz(iv.getInvoiceAmount());
             a.invoiced.merge(iv.getProjectId(), amt, BigDecimal::add);

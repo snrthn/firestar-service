@@ -304,6 +304,12 @@ public class InvoiceServiceImpl implements InvoiceService {
         r.setInvoiceCode(req.getInvoiceCode());
         r.setInvoiceType(req.getInvoiceType());
         r.setInvoiceDate(req.getInvoiceDate());
+        // V95：购方六要素同步 —— 编辑态可修正抬头/税号等信息，
+        // 一并 upsert 客户主表（下次申请自动带出）并覆盖本单快照。
+        // ⚠️ 纪律：V95 初版只在 create 调用、update 完全没碰 buyer*，导致「编辑改了不生效」
+        //    （2026-11-01 实锤）。凡 create 落库的 V95 字段，update 必须同步处理。
+        Project project = r.getProjectId() == null ? null : projectMapper.selectById(r.getProjectId());
+        upsertAndSnapshotBuyer(r, req, project);
         // invoice_file_path 已废弃（V62 真上传），不再写该列
         r.setUpdatedBy(operatorId);
         invoiceMapper.updateById(r);
@@ -382,7 +388,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                 r.setUpdatedBy(currentUserId());
                 invoiceMapper.updateById(r);
                 log.info("[invoice] 审批通过进入待开票 id={} amount={}", r.getId(), r.getInvoiceAmount());
-                notifyResult(r, "INVOICE_DONE", "待开票", null);
+                // V97：模板由 INVOICE_DONE 改为 INVOICE_PENDING_ISSUE。
+                // 原模板 content_tpl 定死「…的发票已开具，发票号：{{invoiceNo}}」，而审批通过时票还没开
+                // （invoice_no 恒 null）→ 申请人收到「已开具」的空票号通知，语义错误且误导。
+                notifyResult(r, "INVOICE_PENDING_ISSUE", "待开票", null);
+                // V97 开票闭环：开票员侧补一条引导通知（审批人本人 + 全体 ROLE_INVOICER）
+                notifyPendingIssue(r);
             } else {
                 log.warn("[invoice] 审批通过但未回写：bizKey={} 找不到发票 instanceId={}", bizKey, instanceId);
             }
@@ -419,6 +430,14 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (!"SUBMITTED".equals(r.getApprovalStatus())) {
             throw new IllegalArgumentException("仅「待开票(SUBMITTED)」态可开票，当前：" + r.getApprovalStatus());
         }
+        // V97 职责分离（虎哥 2026-11-01 拍板「做硬性拦截」）：开票人不得为申请人本人。
+        // 否则「申请 → 审批 → 开票」三节点实际由同一人闭环，事前申请与事后开票的相互制衡形同虚设。
+        // 注意 applicantId 为 null 的老数据不拦（无法判定归属，按放行处理，避免历史单开不出票）。
+        Long clerk = currentUserId();
+        if (clerk != null && clerk.equals(r.getApplicantId())) {
+            throw new IllegalArgumentException(
+                    "开票人与申请人不可为同一人（职责分离），请由其他开票员开具该发票");
+        }
         // 税务发票号查重（含逻辑删除行），防撞 uk_tenant_invoice_no → 500
         if (invoiceMapper.selectIdByInvoiceNo(req.getInvoiceNo(), id) != null) {
             throw new IllegalArgumentException("发票号码已存在：" + req.getInvoiceNo() + "，请更换");
@@ -426,9 +445,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         r.setInvoiceNo(req.getInvoiceNo());
         r.setInvoiceCode(req.getInvoiceCode());
         r.setInvoiceDate(req.getInvoiceDate());
-        r.setClerkId(currentUserId());
+        r.setClerkId(clerk);
         r.setApprovalStatus("ISSUED");
-        r.setUpdatedBy(currentUserId());
+        r.setUpdatedBy(clerk);
         invoiceMapper.updateById(r);
         // 附件软关联挂载
         bindAttachments(r.getId(), req.getAttachmentFileIds());
@@ -499,20 +518,24 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (DataScopeHelper.denyAll(me)) {
             return new Page<>(current, size, 0);
         }
-        IPage<Invoice> page = invoiceMapper.selectPage(new Page<>(current, size),
-                DataScopeHelper.own(
-                        new LambdaQueryWrapper<Invoice>()
-                                .eq(projectId != null, Invoice::getProjectId, projectId)
-                                .eq(receivableId != null, Invoice::getReceivableId, receivableId)
-                                .eq(statusEq != null, Invoice::getApprovalStatus, statusEq)
-                                .eq(typeEq != null, Invoice::getInvoiceType, typeEq)
-                                .eq(dirEq != null, Invoice::getDocDirection, dirEq)
-                                .like(noKw != null, Invoice::getInvoiceNo, noKw)
-                                .in(nameIds != null, Invoice::getProjectId, nameIds)
-                                .ge(dateFrom != null, Invoice::getInvoiceDate, dateFrom)
-                                .le(dateTo != null, Invoice::getInvoiceDate, dateTo)
-                                .orderByDesc(Invoice::getCreatedAt),
-                        Invoice::getApplicantId, me));
+        LambdaQueryWrapper<Invoice> w = new LambdaQueryWrapper<Invoice>()
+                .eq(projectId != null, Invoice::getProjectId, projectId)
+                .eq(receivableId != null, Invoice::getReceivableId, receivableId)
+                .eq(statusEq != null, Invoice::getApprovalStatus, statusEq)
+                .eq(typeEq != null, Invoice::getInvoiceType, typeEq)
+                .eq(dirEq != null, Invoice::getDocDirection, dirEq)
+                .like(noKw != null, Invoice::getInvoiceNo, noKw)
+                .in(nameIds != null, Invoice::getProjectId, nameIds)
+                .ge(dateFrom != null, Invoice::getInvoiceDate, dateFrom)
+                .le(dateTo != null, Invoice::getInvoiceDate, dateTo)
+                .orderByDesc(Invoice::getCreatedAt);
+        // V97 开票闭环：开票员（ROLE_INVOICER）必须能遍历全部待开票单才能履行开票职责，
+        // 若按 applicantId 隔离则开票员永远看不到别人申请的单 → 开票链路从源头断开（2026-11-01 实测）。
+        // 故开票员放行全量；其余人（申请人等）仍按归属列隔离；admin 由 DataScopeHelper.own 内部放行。
+        if (!isInvoicer(me)) {
+            DataScopeHelper.own(w, Invoice::getApplicantId, me);
+        }
+        IPage<Invoice> page = invoiceMapper.selectPage(new Page<>(current, size), w);
         Map<String, DictData> statusDict = dictMap(DICT_INVOICE_STATUS);
         Map<String, DictData> typeDict = dictMap(DICT_INVOICE_TYPE);
         Map<String, DictData> docDict = dictMap(DICT_DOC_DIRECTION);
@@ -600,8 +623,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (original == null) {
             throw new IllegalArgumentException("原发票不存在：" + req.getOriginalInvoiceId());
         }
-        if (!"APPROVED".equals(original.getApprovalStatus())) {
-            throw new IllegalArgumentException("仅已完成开票（审批通过）的发票可红冲，原单当前状态：" + original.getApprovalStatus());
+        // V95 状态机：审批通过=SUBMITTED（待开票），真正开票完成后=ISSUED。
+        // 红冲必须针对「已开票」单据，故校验 ISSUED —— 原判 APPROVED 会让所有已开票单都冲不了。
+        if (!"ISSUED".equals(original.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅已开票（ISSUED）的发票可红冲，原单当前状态：" + original.getApprovalStatus());
         }
         if (!Objects.equals(original.getProjectId(), project.getId())) {
             throw new IllegalArgumentException("红冲单必须与原单同项目，请新建");
@@ -873,7 +898,10 @@ public class InvoiceServiceImpl implements InvoiceService {
      * 3) 将六要素快照到发票 buyer* 列（客户改名不影响历史发票）。
      */
     private void upsertAndSnapshotBuyer(Invoice invoice, InvoiceRequest req, Project project) {
-        Long customerId = req.getCustomerId() != null ? req.getCustomerId() : project.getCustomerId();
+        // project 允许为 null（编辑态项目没换时能取到；为 null 时退化成只靠 req.customerId 反查）
+        Long customerId = req.getCustomerId() != null
+                ? req.getCustomerId()
+                : (project != null ? project.getCustomerId() : null);
         Customer customer = (customerId != null) ? customerMapper.selectById(customerId) : null;
         if (customer == null) {
             return;
@@ -926,6 +954,16 @@ public class InvoiceServiceImpl implements InvoiceService {
         InvoiceVO vo = new InvoiceVO();
         vo.setId(r.getId());
         vo.setInvoiceNo(r.getInvoiceNo());
+        // V95：业务申请单号（创建即生成 FP-yyyyMMdd-NNN）—— 与税务发票号 invoiceNo 是两个东西
+        vo.setApplyNo(r.getApplyNo());
+        // V95：购方六要素走「发票侧快照」。客户主表后续变更不得反向改写已开票单据，
+        // 故详情/编辑一律读快照，不实时联客户表 —— 这是当初做快照的唯一目的。
+        vo.setBuyerName(r.getBuyerName());
+        vo.setBuyerTaxNo(r.getBuyerTaxNo());
+        vo.setBuyerAddress(r.getBuyerAddress());
+        vo.setBuyerPhone(r.getBuyerPhone());
+        vo.setBuyerBankName(r.getBuyerBankName());
+        vo.setBuyerBankAccount(r.getBuyerBankAccount());
         vo.setInvoiceCode(r.getInvoiceCode());
         vo.setProjectId(r.getProjectId());
         vo.setReceivableId(r.getReceivableId());
@@ -1028,6 +1066,56 @@ public class InvoiceServiceImpl implements InvoiceService {
         notificationService.notify(cmd);
     }
 
+    /**
+     * V97 开票闭环：审批通过进入待开票时，引导开票员前往开票管理开票。
+     *
+     * <p><b>为何需要</b>：审批通过原本只走 {@link #notifyResult}（receivers 恒等于 applicantId），
+     * 开票员侧零通知 —— 批完之后没人知道还要去开票，链路断在中间。这里用专用模板
+     * {@code INVOICE_PENDING_ISSUE} 补链，linkUrl 指向开票管理 {@code /invoice}，点击直达。</p>
+     *
+     * <p><b>收件人</b>（虎哥 2026-11-01 拍板「审批人本人 + 全体开票员」）：本次审批人 +
+     * 全体 ROLE_INVOICER，用 LinkedHashSet 去重（审批人本身通常就是开票员），保证顺序稳定。</p>
+     */
+    private void notifyPendingIssue(Invoice r) {
+        LinkedHashSet<Long> receivers = new LinkedHashSet<>();
+        Long approver = currentUserId();
+        if (approver != null) {
+            receivers.add(approver);
+        }
+        receivers.addAll(resolveRoleUserIds(ROLE_INVOICER));
+        if (receivers.isEmpty()) {
+            log.warn("[invoice] 待开票引导通知无接收人：role={} 下无用户且取不到审批人，请检查 sys_user_role 角色绑定 invoiceId={}",
+                    ROLE_INVOICER, r.getId());
+            return;
+        }
+        Project p = projectMapper.selectById(r.getProjectId());
+        NotifyCommand cmd = new NotifyCommand();
+        cmd.setCode("INVOICE_PENDING_ISSUE");
+        cmd.setReceivers(new ArrayList<>(receivers));
+        cmd.setBizType("INVOICE");
+        cmd.setBizId(String.valueOf(r.getId()));
+        cmd.setLinkUrl("/invoice");
+        cmd.setDedupKey("INVOICE_PENDING_ISSUE:INVOICE:" + r.getId());
+        cmd.setVars(Map.of(
+                "bizTitle", p != null && p.getProjectName() != null ? p.getProjectName() : "",
+                "applyNo", r.getApplyNo() == null ? "" : r.getApplyNo()));
+        cmd.setOperatorId(approver);
+        notificationService.notify(cmd);
+    }
+
+    /**
+     * V97：当前用户是否为开票员（ROLE_INVOICER）。
+     *
+     * <p>仅用于列表数据放行判定 —— admin 通常不挂业务角色，即便不是开票员也会由
+     * {@link DataScopeHelper#own} 内部按 isAdmin 放行，故此处无需特判 admin。</p>
+     */
+    private boolean isInvoicer(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+        return resolveRoleUserIds(ROLE_INVOICER).contains(userId);
+    }
+
     /** 审批通过/驳回通知申请人（模板 code） */
     private void notifyResult(Invoice r, String code, String result, String comment) {
         Long applicantId = r.getApplicantId();
@@ -1044,7 +1132,9 @@ public class InvoiceServiceImpl implements InvoiceService {
         cmd.setDedupKey(code + ":INVOICE:" + r.getId());
         cmd.setVars(Map.of(
                 "bizTitle", p != null && p.getProjectName() != null ? p.getProjectName() : "",
-                "invoiceNo", r.getInvoiceNo() == null ? "" : r.getInvoiceNo()));
+                "invoiceNo", r.getInvoiceNo() == null ? "" : r.getInvoiceNo(),
+                // V97：INVOICE_PENDING_ISSUE 模板变量（审批通过时尚无 invoice_no，用业务单号指引）
+                "applyNo", r.getApplyNo() == null ? "" : r.getApplyNo()));
         cmd.setOperatorId(currentUserId());
         notificationService.notify(cmd);
     }
