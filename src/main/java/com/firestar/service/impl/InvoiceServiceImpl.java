@@ -449,8 +449,12 @@ public class InvoiceServiceImpl implements InvoiceService {
         r.setApprovalStatus("ISSUED");
         r.setUpdatedBy(clerk);
         invoiceMapper.updateById(r);
-        // 附件软关联挂载
-        bindAttachments(r.getId(), req.getAttachmentFileIds());
+        // 附件软关联：必须以「本次提交为准」做差分解绑（rebind），不能用只挂不摘的 bindAttachments。
+        // 原因：弹窗上传时前端传了 bizId（InvoiceIssueDialog:85），文件在用户尚未点「确定」时
+        // 就已挂到本单（FileServiceImpl.upload 第 167 行 直接 setBizId）；而前端「移除」只是
+        // splice 本地列表、不调后端（InvoiceIssueDialog:96-98）。若此处只 bind 不解绑，前几次传错
+        // 被移除的文件会永久留在本单，详情 loadAttachmentIds 按 bizType+bizId 回查时全部列出。
+        rebindAttachments(r.getId(), req.getAttachmentFileIds());
         // 金额纪律：开票节点才滚项目已开票金额 + 核销生效
         accumulateProjectInvoiced(r.getProjectId(), r.getInvoiceAmount(), r.getDocDirection());
         applyInvoiceAllocations(r);

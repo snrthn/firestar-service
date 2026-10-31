@@ -477,7 +477,44 @@ public class ShipmentServiceImpl implements ShipmentService {
         Long receivableId = receivableService.createFromShipment(s.getId(), operatorId);
         s.setReceivableId(receivableId);
         shipmentMapper.updateById(s);
+        // 签收证据软关联：提交时统一挂载。此前 proofFileIds 契约存在却从未真正绑定，
+        // 全靠前端上传时直接传 bizId 硬写，导致"上传后移除 / 关窗重传"留下的废文件永久挂在本单。
+        bindProofFiles(s.getId(), req.getProofFileIds());
         log.info("[shipment] 客户收货 id={} status={} receivableId={}", s.getId(), s.getShipmentStatus(), receivableId);
+    }
+
+    /**
+     * 挂载签收证据（**只绑不解绑**，务必保持）：bizType 收口 + 归属校验，不做差分解绑。
+     *
+     * <p>为什么不做差分解绑：发货单支持「部分收货后续再收」（2026-10-24 虎哥：玻璃水本次收 0 后期补给），
+     * confirmReceive 可被调用多次；而前端 ShipmentDetailDialog 每次打开都清空 recvFiles，提交的
+     * proofFileIds 只含本次新上传的文件。若按「本次提交为准」做差分解绑，第二轮收货时头一轮的证据
+     * 会被全部抹掉 —— 这是比多显示几个废文件严重得多的数据丢失，故这里只挂载。</p>
+     *
+     * <p>配套的防污染手段放在前端：上传不再传 bizId（ShipmentDetailDialog 已改），
+     * 未点「确认收货」的文件保持无归属，不会提前挂到发货单上。</p>
+     */
+    private void bindProofFiles(Long shipmentId, List<Long> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return;
+        }
+        for (Long fid : fileIds) {
+            if (fid == null) {
+                continue;
+            }
+            FileStorage f = fileStorageMapper.selectById(fid);
+            if (f == null) {
+                throw new IllegalArgumentException("签收证据文件不存在：" + fid);
+            }
+            // 归属校验：允许无归属（本次新上传）；已归属本单 OK；挂给别人或其
+            // 他单据的一律拒绝（防伪造 id 把别处的文件挂过来）
+            if (f.getBizId() != null && !Objects.equals(f.getBizId(), shipmentId)) {
+                throw new IllegalArgumentException("签收证据不属于本发货单：" + fid);
+            }
+            f.setBizType("shipment_receive_proof");
+            f.setBizId(shipmentId);
+            fileStorageMapper.updateById(f);
+        }
     }
 
     // ===================== 审批通过回调（决策#2） =====================
