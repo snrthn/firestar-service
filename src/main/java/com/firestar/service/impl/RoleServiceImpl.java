@@ -26,7 +26,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -212,44 +211,19 @@ public class RoleServiceImpl implements RoleService {
                 throw new BizException("所选菜单不存在");
             }
         }
-        // 整体替换：先删后插，同事务。
+        // 整体替换：先删后插，同事务。语义 = 授权弹窗所见即所得，提交集就是最终授权集。
         //
-        // 加固（2026-10-31 虎哥拍板「后端修复」）：按钮节点若其【父菜单不在本次提交集】里，
-        // 说明它根本没出现在授权弹窗的树上，管理员无从表达「保留/取消」的意图 —— 此时若
-        // 按原逻辑整体替换，会把他没看见的按钮授权静默删掉。
-        // 真实事故：V81 建 file:upload 等 BUTTON 节点时按父菜单 component='system/file'
-        // 定位，而该 component 早在 V19 就被改成 'file/list'（见 V91 注释），节点从未建成
-        // → 角色即便持有 file:upload 操作权限，重新保存授权时该行也会被无声清空。
-        // 处理：这类「视野外按钮」保持原状不删；提交集为空视为「明确清空」意图，全量删除。
-        if (menuIds.isEmpty()) {
-            roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
-                    .eq(RoleMenu::getRoleId, roleId));
-        } else {
-            Set<Long> submitted = new HashSet<>(menuIds);
-            Set<Long> invisibleButtonIds = menuMapper.selectList(new LambdaQueryWrapper<Menu>()
-                            .eq(Menu::getMenuType, "BUTTON")
-                            .isNotNull(Menu::getParentId))
-                    .stream()
-                    .filter(m -> !submitted.contains(m.getParentId()))
-                    .map(Menu::getId)
-                    .collect(Collectors.toSet());
-            roleMenuMapper.selectList(new LambdaQueryWrapper<RoleMenu>()
-                            .eq(RoleMenu::getRoleId, roleId))
-                    .forEach(rm -> {
-                        Long mid = rm.getMenuId();
-                        if (!submitted.contains(mid) && !invisibleButtonIds.contains(mid)) {
-                            roleMenuMapper.deleteById(rm.getId());
-                        }
-                    });
-        }
-        // 插入提交集中尚缺的行（上面已保留的行不会重复插）
-        Set<Long> owned = roleMenuMapper.selectList(new LambdaQueryWrapper<RoleMenu>()
-                        .eq(RoleMenu::getRoleId, roleId))
-                .stream().map(RoleMenu::getMenuId).collect(Collectors.toSet());
+        // ⚠️ 这里曾加过一层「视野外按钮保护」（2026-10-31 上午），已撤销，勿再引入：
+        //   原逻辑把「父菜单不在提交集」的 BUTTON 节点判定为「管理员在树上看不到」并保留原授权。
+        //   但父菜单没提交 == 管理员明确取消了整个模块，此时保留子按钮在语义上完全相反 ——
+        //   真实事故：取消「文件管理」模块并保存后重新打开，文件上传/下载/别名/删除（364-367）
+        //   四个按钮被悄悄保留、重新勾上，与保存时渲染不一致。
+        //   且后端无从区分「树上没渲染」与「管理员明确取消」——两者提交的数据完全相同。
+        //   故恢复严格整体替换；前端已确认 listTree 返回全量（含 BUTTON）且提交集完整收集，
+        //   所见即所得才是正确口径。孤儿行（menuId 已不在 sys_menu）顺带被清掉，属期望行为。
+        roleMenuMapper.delete(new LambdaQueryWrapper<RoleMenu>()
+                .eq(RoleMenu::getRoleId, roleId));
         for (Long menuId : menuIds) {
-            if (owned.contains(menuId)) {
-                continue;
-            }
             RoleMenu rm = new RoleMenu();
             rm.setRoleId(roleId);
             rm.setMenuId(menuId);
