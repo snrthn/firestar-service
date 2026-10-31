@@ -64,8 +64,16 @@ public interface NotificationService {
             Integer pageNum, Integer pageSize, String type, String receiver,
             java.time.LocalDateTime from, java.time.LocalDateTime to);
 
-    /** 模板列表（管理页） */
+    /** 模板列表（管理页下拉：全量，不分页） */
     List<NotificationTemplate> listTemplates();
+
+    /**
+     * 模板分页检索（管理页列表：分页 + 编码/模板名称模糊筛选）。
+     * 与 listTemplates() 区分：列表页需要分页与筛选，下拉只需全量。
+     * 返回实体分页（IPage 序列化结构 records + total，与 records 接口一致）。
+     */
+    com.baomidou.mybatisplus.core.metadata.IPage<NotificationTemplate> pageTemplates(
+            Integer pageNum, Integer pageSize, String code, String templateName);
 
     /** 保存模板文案/开关（改后新通知用新文案，历史不改写） */
     void updateTemplate(Long id, TemplateSaveRequest req);

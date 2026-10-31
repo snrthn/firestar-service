@@ -330,6 +330,20 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     @Override
+    public com.baomidou.mybatisplus.core.metadata.IPage<NotificationTemplate> pageTemplates(
+            Integer pageNum, Integer pageSize, String code, String templateName) {
+        long current = pageNum == null || pageNum < 1 ? 1 : pageNum;
+        long size = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(pageSize, MAX_PAGE_SIZE);
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<NotificationTemplate> qw =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        qw.like(code != null && !code.isBlank(), NotificationTemplate::getCode, code)
+                .like(templateName != null && !templateName.isBlank(), NotificationTemplate::getTemplateName, templateName)
+                .orderByAsc(NotificationTemplate::getCode);
+        return notificationTemplateMapper.selectPage(
+                new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(current, size), qw);
+    }
+
+    @Override
     public void updateTemplate(Long id, TemplateSaveRequest req) {
         NotificationTemplate exist = notificationTemplateMapper.selectById(id);
         if (exist == null) {

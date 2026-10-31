@@ -78,11 +78,22 @@ public class AdminNotificationController {
                 notificationService.listRecords(pageNum, pageSize, type, receiver, from, to));
     }
 
-    /** 模板列表 */
+    /** 模板列表（下拉全量） */
     @RequirePerm("notify:template")
     @GetMapping("/templates")
     public Result<List<NotificationTemplate>> templates() {
         return Result.success(notificationService.listTemplates());
+    }
+
+    /** 模板分页检索（列表页：编码/模板名称模糊筛选 + 分页，通用查询页） */
+    @RequirePerm("notify:template")
+    @GetMapping("/templates/page")
+    public Result<com.baomidou.mybatisplus.core.metadata.IPage<NotificationTemplate>> pageTemplates(
+            @RequestParam(required = false) Integer pageNum,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) String code,
+            @RequestParam(required = false) String templateName) {
+        return Result.success(notificationService.pageTemplates(pageNum, pageSize, code, templateName));
     }
 
     /** 保存模板文案/开关（改后新通知用新文案，历史不改写） */
