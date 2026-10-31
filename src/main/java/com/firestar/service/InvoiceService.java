@@ -1,6 +1,7 @@
 package com.firestar.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.firestar.dto.InvoiceIssueRequest;
 import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.TimelineNodeVO;
@@ -56,4 +57,13 @@ public interface InvoiceService {
 
     /** 审批时间线（按 businessKey=发票 ID 聚合） */
     List<TimelineNodeVO> timeline(Long id);
+
+    /**
+     * 开票（独立节点，V95 发票流程重构）。
+     *
+     * <p>审批通过进入 SUBMITTED（待开票）后由开票员（ROLE_INVOICER）调用：填报真实税务发票号/
+     * 代码/日期并上传电子票，回写 invoiceNo/invoiceCode/invoiceDate/invoiceFilePath + clerkId，
+     * 状态置 ISSUED，累加 fin_project.invoiced_amount 并核销生效。税务发票号绝不随机生成。</p>
+     */
+    void issue(Long id, InvoiceIssueRequest req);
 }

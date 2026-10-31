@@ -74,4 +74,25 @@ public class Invoice extends LogicDeleteEntity {
 
     /** 下载时间 */
     private LocalDateTime downloadedAt;
+
+    /** 业务申请单号（创建即生成 FP-yyyyMMdd-NNNN，系统唯一，区别于税务发票号 invoiceNo） */
+    private String applyNo;
+
+    /** 购方名称（发票抬头，快照自客户表，客户改名不影响历史发票） */
+    private String buyerName;
+
+    /** 购方纳税人识别号（快照） */
+    private String buyerTaxNo;
+
+    /** 购方地址（快照） */
+    private String buyerAddress;
+
+    /** 购方电话（快照） */
+    private String buyerPhone;
+
+    /** 购方开户银行（快照） */
+    private String buyerBankName;
+
+    /** 购方银行账号（快照） */
+    private String buyerBankAccount;
 }

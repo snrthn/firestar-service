@@ -9,6 +9,7 @@ import com.firestar.common.DataScopeHelper;
 import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.AllocationItem;
 import com.firestar.dto.AllocationVO;
+import com.firestar.dto.InvoiceIssueRequest;
 import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.NotifyCommand;
@@ -19,6 +20,7 @@ import com.firestar.entity.FileStorage;
 import com.firestar.entity.Invoice;
 import com.firestar.entity.InvoiceAllocation;
 import com.firestar.entity.ProcessDef;
+import com.firestar.entity.Customer;
 import com.firestar.entity.Project;
 import com.firestar.entity.Receivable;
 import com.firestar.entity.Role;
@@ -30,6 +32,7 @@ import com.firestar.mapper.ProcessDefMapper;
 import com.firestar.mapper.ProjectMapper;
 import com.firestar.mapper.ReceivableMapper;
 import com.firestar.mapper.InvoiceMapper;
+import com.firestar.mapper.CustomerMapper;
 import com.firestar.mapper.InvoiceAllocationMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.UserMapper;
@@ -105,6 +108,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     private final RoleMapper roleMapper;
     private final UserRoleMapper userRoleMapper;
     private final InvoiceAllocationMapper invoiceAllocationMapper;
+    private final CustomerMapper customerMapper;
 
     @Autowired
     public InvoiceServiceImpl(InvoiceMapper invoiceMapper, FileStorageMapper fileStorageMapper,
@@ -113,7 +117,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                              ProcessDefMapper processDefMapper, WorkflowEngineService engine,
                              NotificationService notificationService, UserMapper userMapper,
                              RoleMapper roleMapper, UserRoleMapper userRoleMapper,
-                             InvoiceAllocationMapper invoiceAllocationMapper) {
+                             InvoiceAllocationMapper invoiceAllocationMapper,
+                             CustomerMapper customerMapper) {
         this.invoiceMapper = invoiceMapper;
         this.fileStorageMapper = fileStorageMapper;
         this.receivableMapper = receivableMapper;
@@ -126,6 +131,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         this.roleMapper = roleMapper;
         this.userRoleMapper = userRoleMapper;
         this.invoiceAllocationMapper = invoiceAllocationMapper;
+        this.customerMapper = customerMapper;
     }
 
     // ===================== 创建（草稿，不拉审批） =====================
@@ -168,9 +174,6 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须大于 0");
         }
-        if (req.getInvoiceDate() == null) {
-            throw new IllegalArgumentException("开票日期不能为空");
-        }
         // 发票文件附件改为选填（2026-10-31 虎哥拍板）：开票申请阶段常常还没拿到票面扫描件，
         // 强制必传会卡住流程；附件可在后续环节补传。空列表直接跳过 bindAttachments，不报错。
         if (req.getInvoiceType() == null || req.getInvoiceType().isBlank()) {
@@ -183,19 +186,23 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setInvoiceAmount(total);
         invoice.setTaxRate(req.getTaxRate());
         invoice.setTaxAmount(taxOf(req.getInvoiceAmount(), req.getTaxRate()));
-        // 业务单号：未手填时系统自动生成 FP-yyyyMMdd-NNN（MAX+1 含逻辑删除占位，不复用已删号）；
-        // 手填场景 = 录纸质发票票号，必须业务层查重（含逻辑删除行）防唯一键冲突 500（2026-10-27 实锤）
-        String invoiceNo = (req.getInvoiceNo() == null || req.getInvoiceNo().isBlank())
-                ? generateInvoiceNo() : req.getInvoiceNo();
-        if (req.getInvoiceNo() != null && !req.getInvoiceNo().isBlank()
+        // V95：税务发票号（invoice_no）申请阶段不填、不随机生成，由开票员在「开票」节点回填。
+        // 若申请人手填了纸质票号，业务层查重（含逻辑删除行）防撞 uk_tenant_invoice_no → 500。
+        String invoiceNo = req.getInvoiceNo();
+        if (invoiceNo != null && !invoiceNo.isBlank()
                 && invoiceMapper.selectIdByInvoiceNo(invoiceNo, null) != null) {
             throw new IllegalArgumentException("发票号码已存在：" + invoiceNo
-                    + "，请更换或留空由系统自动生成");
+                    + "，请更换或留空由开票员在开票节点填写");
         }
-        invoice.setInvoiceNo(invoiceNo);
+        invoice.setInvoiceNo(invoiceNo);  // 申请阶段通常为空
         invoice.setInvoiceCode(req.getInvoiceCode());
         invoice.setInvoiceType(req.getInvoiceType());
+        // V95：申请阶段税务开票日期尚不可知，留空（开票节点才填）；列允许 NULL。
         invoice.setInvoiceDate(req.getInvoiceDate());
+        // V95：业务单号创建即生成（系统唯一，不可空、不可改）
+        invoice.setApplyNo(generateApplyNo());
+        // V95：购方六要素带出 + upsert 客户表 + 快照到发票
+        upsertAndSnapshotBuyer(invoice, req, project);
         // invoice_file_path 已废弃（V62 真上传），附件走软关联，落库前不再写该列
         // 单据方向：默认 BLUE（蓝字）；RED（红字）= 红冲单，须挂已审批通过的原单
         // （2026-10-25 红冲入口：正数金额+方向标记，汇总/核销时按方向代数运算）
@@ -280,9 +287,6 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
         if (req.getInvoiceAmount() == null || req.getInvoiceAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("开票金额必须为正");
-        }
-        if (req.getInvoiceDate() == null) {
-            throw new IllegalArgumentException("开票日期不能为空");
         }
         // 附件选填（同 create 口径）：空列表走 rebindAttachments 的差分解绑，即"清空附件"，不报错。
         r.setInvoiceAmount(req.getInvoiceAmount());
@@ -372,21 +376,67 @@ public class InvoiceServiceImpl implements InvoiceService {
             String bizKey = bizKeyUpfront != null ? bizKeyUpfront : engine.getBusinessKey(instanceId);
             Invoice r = (bizKey != null) ? invoiceMapper.selectById(Long.parseLong(bizKey)) : null;
             if (r != null) {
-                r.setApprovalStatus("APPROVED");
-                // 开票员 = 当前操作人（审批通过人）
-                r.setClerkId(currentUserId());
+                // V95：审批通过进入「待开票」态，金额/核销延后到「开票」节点（issue）才滚，
+                // 不再此处累加项目已开票金额与核销。clerkId 也在 issue 时置（开票员=实际开票人）。
+                r.setApprovalStatus("SUBMITTED");
                 r.setUpdatedBy(currentUserId());
                 invoiceMapper.updateById(r);
-                // 累加 fin_project.invoiced_amount（金额纪律：null 当 0，add）
-                accumulateProjectInvoiced(r.getProjectId(), r.getInvoiceAmount(), r.getDocDirection());
-                // 核销生效（V65）：按分配明细滚各应收单已开票/未开票
-                applyInvoiceAllocations(r);
-                log.info("[invoice] 审批通过回写 id={} amount={}", r.getId(), r.getInvoiceAmount());
-                notifyResult(r, "INVOICE_DONE", "已开具", null);
+                log.info("[invoice] 审批通过进入待开票 id={} amount={}", r.getId(), r.getInvoiceAmount());
+                notifyResult(r, "INVOICE_DONE", "待开票", null);
             } else {
                 log.warn("[invoice] 审批通过但未回写：bizKey={} 找不到发票 instanceId={}", bizKey, instanceId);
             }
         }
+    }
+
+    // ===================== 开票（独立节点，V95） =====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    @Auditable(operationType = "UPDATE", targetType = "INVOICE", targetIdSpEl = "#id",
+            entityClass = Invoice.class,
+            fields = {"invoiceNo", "invoiceCode", "invoiceDate", "approvalStatus", "clerkId"})
+    public void issue(Long id, InvoiceIssueRequest req) {
+        if (req == null) {
+            throw new IllegalArgumentException("开票请求不能为空");
+        }
+        if (req.getInvoiceNo() == null || req.getInvoiceNo().isBlank()) {
+            throw new IllegalArgumentException("税务发票号码不能为空（由开票员手填，不随机生成）");
+        }
+        if (req.getInvoiceCode() == null || req.getInvoiceCode().isBlank()) {
+            throw new IllegalArgumentException("发票代码不能为空");
+        }
+        if (req.getInvoiceDate() == null) {
+            throw new IllegalArgumentException("开票日期不能为空");
+        }
+        if (req.getAttachmentFileIds() == null || req.getAttachmentFileIds().isEmpty()) {
+            throw new IllegalArgumentException("电子发票附件不能为空（开票产物，必传）");
+        }
+        Invoice r = invoiceMapper.selectById(id);
+        if (r == null) {
+            throw new IllegalArgumentException("发票不存在：" + id);
+        }
+        if (!"SUBMITTED".equals(r.getApprovalStatus())) {
+            throw new IllegalArgumentException("仅「待开票(SUBMITTED)」态可开票，当前：" + r.getApprovalStatus());
+        }
+        // 税务发票号查重（含逻辑删除行），防撞 uk_tenant_invoice_no → 500
+        if (invoiceMapper.selectIdByInvoiceNo(req.getInvoiceNo(), id) != null) {
+            throw new IllegalArgumentException("发票号码已存在：" + req.getInvoiceNo() + "，请更换");
+        }
+        r.setInvoiceNo(req.getInvoiceNo());
+        r.setInvoiceCode(req.getInvoiceCode());
+        r.setInvoiceDate(req.getInvoiceDate());
+        r.setClerkId(currentUserId());
+        r.setApprovalStatus("ISSUED");
+        r.setUpdatedBy(currentUserId());
+        invoiceMapper.updateById(r);
+        // 附件软关联挂载
+        bindAttachments(r.getId(), req.getAttachmentFileIds());
+        // 金额纪律：开票节点才滚项目已开票金额 + 核销生效
+        accumulateProjectInvoiced(r.getProjectId(), r.getInvoiceAmount(), r.getDocDirection());
+        applyInvoiceAllocations(r);
+        log.info("[invoice] 开票完成 id={} invoiceNo={} amount={}", r.getId(), req.getInvoiceNo(), r.getInvoiceAmount());
+        notifyResult(r, "INVOICE_DONE", "已开具", null);
     }
 
     // ===================== 审批驳回 =====================
@@ -802,6 +852,56 @@ public class InvoiceServiceImpl implements InvoiceService {
         Integer maxSeq = invoiceMapper.selectMaxDailySeq(date);
         int next = (maxSeq == null ? 0 : maxSeq) + 1;
         return String.format("FP-%s-%03d", date, next);
+    }
+
+    /**
+     * 业务申请单号（V95 发票流程重构）：FP-yyyyMMdd-NNN，创建即生成、不可空、不可改。
+     * 与税务发票号 invoice_no 同前缀但落不同列（apply_no vs invoice_no），
+     * 查 selectMaxApplyDailySeq（原生 SQL 含逻辑删除行，防撞 uk_tenant_apply_no）。
+     */
+    private String generateApplyNo() {
+        String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
+        Integer maxSeq = invoiceMapper.selectMaxApplyDailySeq(date);
+        int next = (maxSeq == null ? 0 : maxSeq) + 1;
+        return String.format("FP-%s-%03d", date, next);
+    }
+
+    /**
+     * V95 发票流程重构：购方六要素处理。
+     * 1) 按 req.customerId 或 project.customerId 反查客户；
+     * 2) 若 req 的 buyer* 非空则 upsert 回写客户主表（新客户填一次、后续自动带出）；
+     * 3) 将六要素快照到发票 buyer* 列（客户改名不影响历史发票）。
+     */
+    private void upsertAndSnapshotBuyer(Invoice invoice, InvoiceRequest req, Project project) {
+        Long customerId = req.getCustomerId() != null ? req.getCustomerId() : project.getCustomerId();
+        Customer customer = (customerId != null) ? customerMapper.selectById(customerId) : null;
+        if (customer == null) {
+            return;
+        }
+        invoice.setBuyerName(firstNonBlank(req.getBuyerName(), customer.getCustomerName()));
+        invoice.setBuyerTaxNo(firstNonBlank(req.getBuyerTaxNo(), customer.getTaxNo()));
+        invoice.setBuyerAddress(firstNonBlank(req.getBuyerAddress(), customer.getAddress()));
+        invoice.setBuyerPhone(firstNonBlank(req.getBuyerPhone(), customer.getBuyerPhone()));
+        invoice.setBuyerBankName(firstNonBlank(req.getBuyerBankName(), customer.getBankName()));
+        invoice.setBuyerBankAccount(firstNonBlank(req.getBuyerBankAccount(), customer.getBankAccount()));
+        boolean dirty = false;
+        if (isNotBlank(req.getBuyerName())) { customer.setCustomerName(req.getBuyerName()); dirty = true; }
+        if (isNotBlank(req.getBuyerTaxNo())) { customer.setTaxNo(req.getBuyerTaxNo()); dirty = true; }
+        if (isNotBlank(req.getBuyerAddress())) { customer.setAddress(req.getBuyerAddress()); dirty = true; }
+        if (isNotBlank(req.getBuyerPhone())) { customer.setBuyerPhone(req.getBuyerPhone()); dirty = true; }
+        if (isNotBlank(req.getBuyerBankName())) { customer.setBankName(req.getBuyerBankName()); dirty = true; }
+        if (isNotBlank(req.getBuyerBankAccount())) { customer.setBankAccount(req.getBuyerBankAccount()); dirty = true; }
+        if (dirty) {
+            customerMapper.updateById(customer);
+        }
+    }
+
+    private static boolean isNotBlank(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return isNotBlank(a) ? a : (b == null ? "" : b);
     }
 
     /**

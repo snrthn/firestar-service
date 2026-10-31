@@ -9,6 +9,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import java.io.IOException;
+import com.firestar.dto.InvoiceIssueRequest;
 import com.firestar.dto.InvoiceRequest;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.TimelineNodeVO;
@@ -101,6 +102,14 @@ public class InvoiceController {
     @PostMapping("/{id}/submit")
     public Result<Void> submit(@PathVariable Long id) {
         invoiceService.submit(id);
+        return Result.success();
+    }
+
+    /** 开票（独立节点）：审批通过进入 SUBMITTED 后，由开票员（invoice:issue）填报真实票号/代码/日期 + 上传电子票 */
+    @PostMapping("/{id}/issue")
+    @RequirePerm("invoice:issue")
+    public Result<Void> issue(@PathVariable Long id, @RequestBody InvoiceIssueRequest req) {
+        invoiceService.issue(id, req);
         return Result.success();
     }
 

@@ -45,4 +45,14 @@ public interface InvoiceMapper extends BaseMapper<Invoice> {
     @Select("SELECT id FROM fin_invoice WHERE invoice_no = #{invoiceNo} " +
             "AND (#{excludeId} IS NULL OR id <> #{excludeId}) LIMIT 1")
     Long selectIdByInvoiceNo(@Param("invoiceNo") String invoiceNo, @Param("excludeId") Long excludeId);
+
+    /**
+     * 取指定日期当天所有发票（含逻辑删除）中业务单号 apply_no 的最大序号。
+     * apply_no 形如 FP-yyyyMMdd-NNN，序号取最后一个 '-' 之后部分。
+     * 与 selectMaxDailySeq 同范式：@Select 原生 SQL 天然含已删行，不撞 uk_tenant_apply_no。
+     * 无记录时返回 0，调用方 +1 即为下一个序号。
+     */
+    @Select("SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(apply_no, '-', -1) AS UNSIGNED)), 0) " +
+            "FROM fin_invoice WHERE apply_no LIKE CONCAT('FP-', #{date}, '-%')")
+    Integer selectMaxApplyDailySeq(@Param("date") String date);
 }

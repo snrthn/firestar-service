@@ -472,7 +472,9 @@ public class ProjectServiceImpl implements ProjectService {
         // V72：客户名按 id 批量翻译（与 userNames 同范式，免 N+1）
         Map<Long, String> customerNames = customerDisplayNames(page.getRecords().stream()
                 .map(Project::getCustomerId).collect(Collectors.toList()));
-        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames));
+        Map<Long, Customer> customers = customerMapByIds(page.getRecords().stream()
+                .map(Project::getCustomerId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames, customers));
     }
 
     @Override
@@ -508,7 +510,9 @@ public class ProjectServiceImpl implements ProjectService {
         // V72：客户名按 id 批量翻译（与 userNames 同范式，免 N+1）
         Map<Long, String> customerNames = customerDisplayNames(page.getRecords().stream()
                 .map(Project::getCustomerId).collect(Collectors.toList()));
-        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames));
+        Map<Long, Customer> customers = customerMapByIds(page.getRecords().stream()
+                .map(Project::getCustomerId).collect(Collectors.toList()));
+        return page.convert(p -> toVO(p, approvalDict, userNames, amounts, customerNames, customers));
     }
 
     @Override
@@ -1296,7 +1300,9 @@ public class ProjectServiceImpl implements ProjectService {
         // 单项目场景（detail）自助聚合；列表走预聚合重载，避免逐项目 N+1
         Map<Long, String> customerNames = customerDisplayNames(
                 p.getCustomerId() == null ? List.of() : List.of(p.getCustomerId()));
-        return toVO(p, approvalDict, userNames, amountsOf(List.of(p.getId())), customerNames);
+        Map<Long, Customer> customers = customerMapByIds(
+                p.getCustomerId() == null ? List.of() : List.of(p.getCustomerId()));
+        return toVO(p, approvalDict, userNames, amountsOf(List.of(p.getId())), customerNames, customers);
     }
 
     /**
@@ -1305,19 +1311,32 @@ public class ProjectServiceImpl implements ProjectService {
      */
     /** V72：按客户 id 批量翻译客户名（id<=0 或 null 跳过），一页一次查询避免 N+1 */
     private Map<Long, String> customerDisplayNames(List<Long> ids) {
+        Map<Long, Customer> map = customerMapByIds(ids);
+        Map<Long, String> m = new HashMap<>(map.size());
+        for (Map.Entry<Long, Customer> e : map.entrySet()) {
+            m.put(e.getKey(), e.getValue().getCustomerName());
+        }
+        return m;
+    }
+
+    /**
+     * V95 发票流程重构：按客户 id 批量加载客户主表（id<=0 或 null 跳过），一页一次查询避免 N+1。
+     * 供发票申请弹窗「自动带出」购方六要素 —— 选完项目后直接从已加载的 ProjectVO 取客户六要素预填。
+     */
+    private Map<Long, Customer> customerMapByIds(List<Long> ids) {
         Set<Long> set = ids.stream().filter(Objects::nonNull).filter(id -> id > 0)
                 .collect(Collectors.toSet());
         if (set.isEmpty()) return Collections.emptyMap();
         List<Customer> list = customerMapper.selectList(
                 new LambdaQueryWrapper<Customer>().in(Customer::getId, set));
-        Map<Long, String> m = new HashMap<>(list.size());
-        for (Customer c : list) m.put(c.getId(), c.getCustomerName());
+        Map<Long, Customer> m = new HashMap<>(list.size());
+        for (Customer c : list) m.put(c.getId(), c);
         return m;
     }
 
     private ProjectVO toVO(Project p, Map<String, DictData> approvalDict,
                            Map<Long, String> userNames, ProjectAmounts amounts,
-                           Map<Long, String> customerNames) {
+                           Map<Long, String> customerNames, Map<Long, Customer> customers) {
         ProjectVO vo = new ProjectVO();
         vo.setId(p.getId());
         vo.setProjectNo(p.getProjectNo());
@@ -1325,6 +1344,15 @@ public class ProjectServiceImpl implements ProjectService {
         // V72：客户名不再存 fin_project，按 customer_id 联 fin_customer 翻译（批量传入免 N+1）
         vo.setCustomerName(p.getCustomerId() != null ? customerNames.get(p.getCustomerId()) : null);
         vo.setCustomerId(p.getCustomerId());
+        // V95 发票流程重构：购方六要素快照进 ProjectVO，供发票申请弹窗「自动带出」预填
+        Customer c = p.getCustomerId() != null ? customers.get(p.getCustomerId()) : null;
+        if (c != null) {
+            vo.setCustomerTaxNo(c.getTaxNo());
+            vo.setCustomerAddress(c.getAddress());
+            vo.setCustomerBuyerPhone(c.getBuyerPhone());
+            vo.setCustomerBankName(c.getBankName());
+            vo.setCustomerBankAccount(c.getBankAccount());
+        }
         vo.setSalesManagerId(p.getSalesManagerId());
         vo.setSalesManagerName(p.getSalesManagerId() != null
                 ? userNames.get(p.getSalesManagerId()) : null);

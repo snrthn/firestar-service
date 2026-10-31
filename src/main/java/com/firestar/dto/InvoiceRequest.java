@@ -96,4 +96,26 @@ public class InvoiceRequest {
      * BLUE 单传了也忽略。</p>
      */
     private Long originalInvoiceId;
+
+    /**
+     * 关联客户 ID（V95 发票流程重构）。
+     *
+     * <p>用于从客户主表带出购方六要素：为空时由业务层按 project.customerId 反查；
+     * 前端选完项目后应带出该值。申请提交时，若 buyer* 字段非空则 upsert 回写客户表，
+     * 实现「新客户填一次、后续自动带出」。</p>
+     */
+    private Long customerId;
+
+    /**
+     * 购方六要素（V95 发票流程重构）。
+     *
+     * <p>申请阶段填写/编辑，提交时 upsert 进客户主表并快照到发票 buyer* 列。
+     * 申请阶段不填税务发票号/代码/日期（那些是开票节点由开票员回填）。</p>
+     */
+    private String buyerName;
+    private String buyerTaxNo;
+    private String buyerAddress;
+    private String buyerPhone;
+    private String buyerBankName;
+    private String buyerBankAccount;
 }

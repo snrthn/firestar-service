@@ -67,4 +67,7 @@ public class Customer extends LogicDeleteEntity {
 
     /** 备注 */
     private String remark;
+
+    /** 购方电话（发票抬头用，区别于联系人电话 contactPhone） */
+    private String buyerPhone;
 }

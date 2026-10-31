@@ -112,6 +112,27 @@ public class InvoiceVO {
     /** 开票员展示名 */
     private String clerkName;
 
+    /** 业务申请单号（创建即生成，系统唯一，区别于税务发票号 invoiceNo） */
+    private String applyNo;
+
+    /** 购方名称（发票抬头，快照自客户表） */
+    private String buyerName;
+
+    /** 购方纳税人识别号 */
+    private String buyerTaxNo;
+
+    /** 购方地址 */
+    private String buyerAddress;
+
+    /** 购方电话 */
+    private String buyerPhone;
+
+    /** 购方开户银行 */
+    private String buyerBankName;
+
+    /** 购方银行账号 */
+    private String buyerBankAccount;
+
     private LocalDateTime createdAt;
 
     /** 当前登录用户在流程实例上的待办任务 ID（无则 null） */

@@ -31,6 +31,18 @@ public class ProjectVO {
      */
     private Long customerId;
 
+    /**
+     * 客户购方六要素（V95 发票流程重构；只读快照，供发票申请弹窗「自动带出」预填）。
+     *
+     * <p>发票申请时按所选项目的 customerId 反查客户主表带出，用户可就地编辑并提交 upsert 回写。
+     * 仅当项目已关联客户时有值，未关联则为空。改名/改地址等以发票申请提交时的 buyer* 为准。</p>
+     */
+    private String customerTaxNo;
+    private String customerAddress;
+    private String customerBuyerPhone;
+    private String customerBankName;
+    private String customerBankAccount;
+
     private Long salesManagerId;
 
     /** 销售经理展示名（nickname，兜底 username；列表批量翻译，2026-10-22 虎哥要求不再裸显 ID） */
