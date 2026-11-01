@@ -53,11 +53,11 @@ docs/云效率流水线配置.yaml            # 阿里云效 Flow CI/CD（PaC）
 docs/git-workflow.md                 # 分支同步 SOP
 ```
 
-## 当前进度（截至 2026-10-21）
+## 当前进度（截至 2026-11-01）
 
-- **数据层 / 基础设施：已就绪** —— 41 张业务表 DDL 全落地（V1 基线 25 + V5/V10/V19/V25/V30/V32/V39/V65/V67/V68/V71 累计新增 16）、44 实体、41 Mapper、72 个 Flyway 迁移（含字典种子与 V36 初始化/重置菜单种子）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
-- **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及**系统初始化与重置向导**（`InitResetController` + `InitResetServiceImpl` + V36 菜单/权限种子；轻度重置清业务表 + Flowable 运行/历史 + 上传文件，完整重置走 Flyway `clean()+migrate()` 恢复出厂）。
-- **财务业务域（`fin_*`）仅有表结构与空壳 Service，待开发**；Flowable 仅建表，流程定义 / 任务处理未动。
+- **数据层 / 基础设施：已就绪** —— 业务表 DDL 全落地、实体 / Mapper 与库严格对齐、Flyway 迁移持续累积（截至本会话含 V98 发货承运商 + 附件迁移）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
+- **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知（含 `notify_global_switch` 总闸 fail-close）、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及**系统初始化与重置向导**（`InitResetController` + `InitResetServiceImpl` + V36 菜单/权限种子；轻度重置清业务表 + Flowable 运行/历史 + 上传文件，完整重置走 Flyway `clean()+migrate()` 恢复出厂）。
+- **财务业务域（`fin_*`）已随多轮迭代推进**：发货流程落地「承运商 + 运单号 + 附件」三部曲（V98 迁移：新增 `logistics_carrier` 字典 + 10 条热门承运商、`fin_shipment` 加 `tracking_no`/`carrier`、文件业务类型 `shipment_dispatch`、审计目标 `SHIPMENT`；`markShipped` 改为接收 `ShipmentMarkShippedReq` 并校验运单号库内唯一 + 附件必填）；其余 fin_* 业务（应收 / 收款 / 开票 / 核销 / 退货）随接口逐步补齐。
 - ⚠️ **路径前缀约定**：前端经 vite proxy / 生产 nginx 以 `/api` 转发并去前缀；**后端真实路径不含 `/api`**（如 `/system/init/status`），白名单与安全配置一律按后端真实路径书写。
 - ⚠️ **安全项（2026-10-19 已收口）**：`/system/db-check` 需有效 JWT（登录即可，不再要求细粒度权限点）；
   `/v3/api-docs`、`/doc.html`、`/swagger-ui/**` 由 `springdoc.api-docs.enabled` 控制（默认关闭，仅 dev 打开）；
@@ -103,3 +103,11 @@ bash bin/start.sh 2025 /actuator/health/liveness
 
 与参考项目一致：`develop → test →（人工确认）→ master → main → develop`。
 详见 [`docs/git-workflow.md`](docs/git-workflow.md)。
+
+## 近期变更（截至 2026-11-01，代码已落地、待 git 提交与部署重启）
+
+> 以下改动均已写入工作区源码，但尚未 commit / 未部署；上线需提交后停服重打 jar（Flyway 会自动执行 V98 迁移），并与前端改动同次生效。
+
+- **V98 发货承运商 + 附件迁移**（`db/migration/V98__shipment_dispatch_carrier_and_attachment.sql`）：`logistics_carrier` 字典 + 10 条热门承运商（SF / YTO / ZTO / STO / YD / JD / EMS / BEST / DBL / JT，均 ENABLED，按热门排序）；`fin_shipment` 加 `tracking_no` / `carrier`；`sys_file_storage` 业务类型加 `shipment_dispatch`；`audit_target_type` 加 `SHIPMENT`。
+- **发货服务改造**：`Shipment.java` 加 `trackingNo` / `carrier`；`ShipmentVO` 加 `trackingNo` / `carrier` / `carrierName` / `dispatchFileIds`；新增 `ShipmentMarkShippedReq`（`trackingNo` / `carrier` / `fileIds`）；`markShipped` 签名改为接收该 req，并校验运单号非空 + 库内唯一 + 承运商须为启用态字典值 + 附件至少 1 件；落库后 `@Auditable` 写 `sys_audit_log`。⚠️ **探针常量同步**：`DatabaseCheckService.readSeedData` 的 `dictTypeCount` 33→34、`dictDataCount` 130→142（V98 新增 1 类字典 + 12 条字典项），否则 `/system/db-check` 会因条数对不上报 503。
+- **系统公告只读端点**：`ConfigController` 新增 `GET /system/config/announcement`（无 `@RequirePerm`，登录即可访问），复用 `ConfigService.getConfigValue("login_notice")` 返回公告文本；与既有 `/config/flags` 同范式。
