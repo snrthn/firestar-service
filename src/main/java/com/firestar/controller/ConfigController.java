@@ -75,4 +75,11 @@ public class ConfigController {
     public Result<Map<String, String>> flags() {
         return Result.success(configService.getFlags());
     }
+
+    /** 系统公告（登录用户可见，无需 config:manage）：返回 login_notice 文本，缺省空串。用于工作台全员弱提示。 */
+    @GetMapping("/announcement")
+    public Result<String> announcement() {
+        String v = configService.getConfigValue("login_notice");
+        return Result.success(v == null ? "" : v);
+    }
 }
