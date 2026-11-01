@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.annotation.Auditable;
 import com.firestar.common.DataScopeHelper;
 import com.firestar.common.FlowNodeUtil;
 import com.firestar.dto.NotifyCommand;
@@ -13,6 +14,7 @@ import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentLineCreateReq;
 import com.firestar.dto.ShipmentLineReceiveReq;
 import com.firestar.dto.ShipmentLineVO;
+import com.firestar.dto.ShipmentMarkShippedReq;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.dto.TaskInfo;
@@ -388,11 +390,15 @@ public class ShipmentServiceImpl implements ShipmentService {
         log.info("[shipment] 编辑发货单 id={} amount={} user={}", id, newAmount, currentUsername());
     }
 
-    // ===================== 标记已发货 =====================
+    // ===================== 标记已发货（三部曲：承运商 + 运单号 + 附件）=====================
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void markShipped(Long shipmentId, String username, boolean isAdmin) {
+    @Auditable(operationType = "UPDATE", targetType = "SHIPMENT",
+            targetIdSpEl = "#req.shipmentId", entityClass = Shipment.class,
+            fields = {"trackingNo", "carrier"})
+    public void markShipped(ShipmentMarkShippedReq req, String username, boolean isAdmin) {
+        Long shipmentId = req.getShipmentId();
         Long operatorId = currentUserId();
         Shipment s = shipmentMapper.selectById(shipmentId);
         if (s == null) {
@@ -411,12 +417,48 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (!"APPROVED".equals(s.getApprovalStatus())) {
             throw new IllegalArgumentException("发货审批通过后才可标记发货，当前审批状态：" + s.getApprovalStatus());
         }
+
+        // ---- 三部曲硬约束（决策#6 同构：发货也得留凭据，否则审计例规审查无依据）----
+        // 1) 承运商：必须是 logistics_carrier 字典里【启用态】的项（禁用项不进下拉，此处兜底拦截）
+        String carrier = req.getCarrier();
+        if (carrier == null || carrier.isBlank()) {
+            throw new IllegalArgumentException("标记已发货必须选择承运商");
+        }
+        long carrierHit = dictDataMapper.selectCount(new LambdaQueryWrapper<DictData>()
+                .eq(DictData::getTypeCode, "logistics_carrier")
+                .eq(DictData::getDictValue, carrier)
+                .eq(DictData::getStatus, "ENABLED"));
+        if (carrierHit == 0) {
+            throw new IllegalArgumentException("承运商非法或已停用：" + carrier);
+        }
+        // 2) 运单号：必填 + 库内唯一（防一个单号发两单）
+        String trackingNo = req.getTrackingNo();
+        if (trackingNo == null || trackingNo.isBlank()) {
+            throw new IllegalArgumentException("运单号必填");
+        }
+        long dup = shipmentMapper.selectCount(new LambdaQueryWrapper<Shipment>()
+                .eq(Shipment::getTrackingNo, trackingNo)
+                .ne(Shipment::getId, shipmentId));
+        if (dup > 0) {
+            throw new IllegalArgumentException("运单号已存在，请勿重复发货：" + trackingNo);
+        }
+        // 3) 附件：至少一件（bizType=shipment_dispatch，留内部凭据）
+        List<Long> fileIds = req.getFileIds();
+        if (fileIds == null || fileIds.isEmpty()) {
+            throw new IllegalArgumentException("标记已发货必须上传至少一件发货附件（bizType=shipment_dispatch）");
+        }
+
+        s.setCarrier(carrier);
+        s.setTrackingNo(trackingNo);
         s.setShipmentStatus("SHIPPED");
         s.setShipmentDate(LocalDateTime.now());
         s.setShippedById(operatorId); // 决策#2 澄清：发货人 = 操作人自身
         s.setUpdatedBy(operatorId);
         shipmentMapper.updateById(s);
-        log.info("[shipment] 标记已发货 id={} by={}", shipmentId, operatorId);
+        // 发货附件软关联：只绑不解绑（同 bindProofFiles 口径），统一挂载到本发货单
+        bindDispatchFiles(shipmentId, fileIds);
+        log.info("[shipment] 标记已发货 id={} carrier={} trackingNo={} by={}",
+                shipmentId, carrier, trackingNo, operatorId);
     }
 
     // ===================== 标记客户收货（决策#2/#6） =====================
@@ -512,6 +554,35 @@ public class ShipmentServiceImpl implements ShipmentService {
                 throw new IllegalArgumentException("签收证据不属于本发货单：" + fid);
             }
             f.setBizType("shipment_receive_proof");
+            f.setBizId(shipmentId);
+            fileStorageMapper.updateById(f);
+        }
+    }
+
+    /**
+     * 挂载发货附件（**只绑不解绑**，与 bindProofFiles 同口径）：bizType 收口 shipment_dispatch + 归属校验。
+     *
+     * <p>为什么复用「只绑不解绑」：发货单支持「部分收货后续再收」，confirmReceive 可多次调用，
+     * 前端每次打开重传时提交的 fileIds 只含本次新上传的文件；若做差分解绑，会把头一轮的发货
+     * 附件误删——比多挂几个废文件严重得多，故只挂载。</p>
+     */
+    private void bindDispatchFiles(Long shipmentId, List<Long> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return;
+        }
+        for (Long fid : fileIds) {
+            if (fid == null) {
+                continue;
+            }
+            FileStorage f = fileStorageMapper.selectById(fid);
+            if (f == null) {
+                throw new IllegalArgumentException("发货附件文件不存在：" + fid);
+            }
+            // 归属校验：允许无归属（本次新上传）；已归属本单 OK；挂给别人或其他单据的一律拒绝
+            if (f.getBizId() != null && !Objects.equals(f.getBizId(), shipmentId)) {
+                throw new IllegalArgumentException("发货附件不属于本发货单：" + fid);
+            }
+            f.setBizType("shipment_dispatch");
             f.setBizId(shipmentId);
             fileStorageMapper.updateById(f);
         }
@@ -762,6 +833,26 @@ public class ShipmentServiceImpl implements ShipmentService {
         vo.setApplicantName(s.getApplicantId() != null ? userNames.get(s.getApplicantId()) : null);
         vo.setShippedById(s.getShippedById());
         vo.setShippedByName(s.getShippedById() != null ? userNames.get(s.getShippedById()) : null);
+        // 物流信息（标记已发货后才有值；用于详情页展示运单号/承运商，审计可外部核验）
+        vo.setTrackingNo(s.getTrackingNo());
+        vo.setCarrier(s.getCarrier());
+        if (s.getCarrier() != null) {
+            DictData carrierDict = dictDataMapper.selectOne(new LambdaQueryWrapper<DictData>()
+                    .eq(DictData::getTypeCode, "logistics_carrier")
+                    .eq(DictData::getDictValue, s.getCarrier()));
+            vo.setCarrierName(carrierDict != null ? carrierDict.getDictLabel() : null);
+        }
+        // 发货附件 ID 列表（bizType=shipment_dispatch，shippedById 非空时按 bizType+bizId 回填；
+        // 供前端调文件接口拉详情/下载，与签收证据区同构）
+        if (s.getShippedById() != null) {
+            List<FileStorage> dispatches = fileStorageMapper.selectList(new LambdaQueryWrapper<FileStorage>()
+                    .eq(FileStorage::getBizType, "shipment_dispatch")
+                    .eq(FileStorage::getBizId, s.getId())
+                    .orderByAsc(FileStorage::getId));
+            if (!dispatches.isEmpty()) {
+                vo.setDispatchFileIds(dispatches.stream().map(FileStorage::getId).collect(Collectors.toList()));
+            }
+        }
         vo.setConfirmedById(s.getConfirmedById());
         vo.setConfirmedByName(s.getConfirmedById() != null ? userNames.get(s.getConfirmedById()) : null);
         vo.setCreatedAt(s.getCreatedAt());

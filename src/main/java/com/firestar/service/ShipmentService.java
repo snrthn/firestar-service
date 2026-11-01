@@ -3,6 +3,7 @@ package com.firestar.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
 import com.firestar.dto.ShipmentCreateReq;
+import com.firestar.dto.ShipmentMarkShippedReq;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
 
@@ -25,9 +26,9 @@ public interface ShipmentService {
     /** 创建发货申请并立即发起 P3 审批（shipment_approval，决策#1）。返回发货单 ID */
     Long create(ShipmentCreateReq req);
 
-    /** 标记已发货（审批通过后；shippedById = 当前操作人，决策#2 澄清发货人=操作人自身）；
+    /** 标记已发货（三部曲：选承运商 + 运单号 + 上传附件；审批通过后；shippedById = 当前操作人）；
      *  归属校验：仅申请人本人或 ROLE_ADMIN（写类不放开审批人） */
-    void markShipped(Long shipmentId, String username, boolean isAdmin);
+    void markShipped(ShipmentMarkShippedReq req, String username, boolean isAdmin);
 
     /** 标记客户收货（决策#6 必传证据；支持按行部分收货；联动生成应收单）；
      *  归属校验：仅申请人本人或 ROLE_ADMIN */

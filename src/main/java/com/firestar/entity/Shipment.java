@@ -53,6 +53,12 @@ public class Shipment extends LogicDeleteEntity {
     /** 发货人 ID */
     private Long shippedById;
 
+    /** 物流运单号（标记已发货必填，库内唯一；审计可去承运商核验真发没发） */
+    private String trackingNo;
+
+    /** 承运商（字典 logistics_carrier 的 dict_value，如 SF；标记已发货必选） */
+    private String carrier;
+
     /** 确认人 ID */
     private Long confirmedById;
 }

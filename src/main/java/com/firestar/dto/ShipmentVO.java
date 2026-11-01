@@ -87,6 +87,18 @@ public class ShipmentVO {
     /** 发货人展示名 */
     private String shippedByName;
 
+    /** 物流运单号（标记已发货必填；库内唯一） */
+    private String trackingNo;
+
+    /** 承运商（字典 logistics_carrier 的 dict_value，如 SF） */
+    private String carrier;
+
+    /** 承运商展示名（字典 logistics_carrier 的 dict_label） */
+    private String carrierName;
+
+    /** 发货附件文件 ID 列表（bizType=shipment_dispatch，shippedById 非空时有值） */
+    private List<Long> dispatchFileIds;
+
     /** 确认人 ID（客户已收货时写入 = 内部销售代确认） */
     private Long confirmedById;
 

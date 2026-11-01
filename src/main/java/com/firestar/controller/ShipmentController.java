@@ -7,6 +7,7 @@ import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
 import com.firestar.dto.ShipmentCreateReq;
+import com.firestar.dto.ShipmentMarkShippedReq;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
 import com.firestar.service.ShipmentService;
@@ -154,10 +155,11 @@ public class ShipmentController {
         return Result.success();
     }
 
-    /** 标记已发货（审批通过后；shippedById = 当前操作人，决策#2 澄清发货人=操作人自身） */
+    /** 标记已发货（三部曲：选承运商 + 运单号 + 上传附件；审批通过后；shippedById = 当前操作人） */
     @PostMapping("/{id}/ship")
-    public Result<Void> markShipped(@PathVariable Long id) {
-        shipmentService.markShipped(id,
+    public Result<Void> markShipped(@PathVariable Long id, @RequestBody ShipmentMarkShippedReq req) {
+        req.setShipmentId(id);
+        shipmentService.markShipped(req,
                 SecurityContextUtils.currentUsername(), SecurityContextUtils.isAdmin());
         return Result.success();
     }

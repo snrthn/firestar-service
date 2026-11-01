@@ -310,14 +310,20 @@ public class DatabaseCheckService {
  *   不新增字典类型，故 dictTypeCount 保持 33、dictDataCount 128→130。
  *   （2026-10-31 服务起来后首页探针报「应为 128 实际 130」，又是迁移动了字典没同步本段——
  *    注释里立的规矩自己没守住，第五次了。）
+ * V98（发货三部曲：承运商 + 运单号 + 附件）净变化：
+ *   新增 1 个字典类型（logistics_carrier）+ 12 个字典项
+ *   （logistics_carrier 10 项 + file_biz_type 补 shipment_dispatch 1 项
+ *    + audit_target_type 补 SHIPMENT 1 项）
+ *   → dictTypeCount 33→34、dictDataCount 130→142（已用真实库对账）。
+ *   此迁移刻意把期望值同步写进 readSeedData，杜绝第六次误报。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 33, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 130, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 34, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 142, errors));
         result.put("configCount", countOf(conn, "sys_config", 14, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
