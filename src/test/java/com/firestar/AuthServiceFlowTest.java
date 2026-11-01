@@ -5,7 +5,7 @@ import com.firestar.dto.LoginResponse;
 import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
 import com.firestar.service.AuthService;
-import com.firestar.util.JwtUtil;
+import com.firestar.common.JwtUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,8 +42,7 @@ class AuthServiceFlowTest {
         u.setUsername(TEST_USER);
         u.setPassword(new BCryptPasswordEncoder().encode(TEST_PWD));
         u.setNickname("auth-flow");
-        u.setStatus(1);
-        u.setDelFlag(0);
+        u.setStatus("ENABLED");
         userMapper.insert(u);
         userId = u.getId();
     }

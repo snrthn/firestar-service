@@ -1,6 +1,6 @@
 package com.firestar;
 
-import com.firestar.dto.InitRequest;
+import com.firestar.dto.ResetRequest;
 import com.firestar.service.InitResetService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,8 +30,8 @@ class InitResetFlowTest {
     void getStatus_readonly() {
         var status = initResetService.getStatus();
         assertNotNull(status);
-        // 至少能拿到 initialized 布尔字段
-        assertNotNull(status.getInitialized());
+        // 至少能拿到 initialized 布尔字段（primitive boolean → Lombok 生成 isInitialized()）
+        assertTrue(status.isInitialized());
     }
 
     @Test
@@ -47,7 +47,7 @@ class InitResetFlowTest {
         // 设置一个「无权限」的匿名身份上下文，确保 AOP @RequirePerm 拦截
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("guest", null, java.util.List.of()));
-        InitRequest req = new InitRequest();
+        ResetRequest req = new ResetRequest();
         assertThrows(AccessDeniedException.class,
                 () -> initResetService.reset("light", req, null));
     }
