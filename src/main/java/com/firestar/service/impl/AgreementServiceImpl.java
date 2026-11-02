@@ -61,12 +61,10 @@ public class AgreementServiceImpl implements AgreementService {
         for (Agreement a : agreements) {
             AgreementVersion v = activeVersion(a.getId());
             if (v == null) continue;
-            Long cnt = consentMapper.selectCount(new LambdaQueryWrapper<AgreementConsent>()
-                    .eq(AgreementConsent::getUserId, userId)
-                    .eq(AgreementConsent::getAgreementId, a.getId())
-                    .eq(AgreementConsent::getVersionId, v.getId())
-                    .eq(AgreementConsent::getAction, "AGREE"));
-            if (cnt == null || cnt == 0) {
+            // 以「最近一次操作」判定是否已同意：最近一条为 AGREE 才算确认；
+            // 撤回(WITHDRAW)或从未操作 → 重新进入待确认（支持撤回后重弹强制确认）
+            AgreementConsent c = lastConsent(userId, a.getId(), v.getId());
+            if (c == null || !"AGREE".equals(c.getAction())) {
                 AgreementVO vo = toVO(a, v, false);
                 vo.setNeedReconsent(v.getNeedReconsent());
                 pending.add(vo);
@@ -83,12 +81,7 @@ public class AgreementServiceImpl implements AgreementService {
         for (Agreement a : agreements) {
             AgreementVersion v = activeVersion(a.getId());
             if (v == null) continue;
-            AgreementConsent c = consentMapper.selectOne(new LambdaQueryWrapper<AgreementConsent>()
-                    .eq(AgreementConsent::getUserId, userId)
-                    .eq(AgreementConsent::getAgreementId, a.getId())
-                    .eq(AgreementConsent::getVersionId, v.getId())
-                    .orderByDesc(AgreementConsent::getId)
-                    .last("LIMIT 1"));
+            AgreementConsent c = lastConsent(userId, a.getId(), v.getId());
             AgreementVO vo = toVO(a, v, true);
             if (c != null) {
                 vo.setLastAction(c.getAction());
@@ -175,6 +168,20 @@ public class AgreementServiceImpl implements AgreementService {
                 .eq(AgreementVersion::getAgreementId, agreementId)
                 .eq(AgreementVersion::getStatus, "PUBLISHED")
                 .orderByDesc(AgreementVersion::getId)
+                .last("LIMIT 1"));
+    }
+
+    /**
+     * 取用户对某协议某版本「最近一次同意操作」记录（按主键倒序取最新一条）。
+     * 用于判定「当前是否已同意」：最近一条为 AGREE 才算确认，WITHDRAW 视为已撤回。
+     * listPending（待确认）与 listConsents（个人中心记录）共用，保证口径一致。
+     */
+    private AgreementConsent lastConsent(Long userId, Long agreementId, Long versionId) {
+        return consentMapper.selectOne(new LambdaQueryWrapper<AgreementConsent>()
+                .eq(AgreementConsent::getUserId, userId)
+                .eq(AgreementConsent::getAgreementId, agreementId)
+                .eq(AgreementConsent::getVersionId, versionId)
+                .orderByDesc(AgreementConsent::getId)
                 .last("LIMIT 1"));
     }
 
