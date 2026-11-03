@@ -118,6 +118,14 @@
             <version>${hutool.version}</version>
         </dependency>
 
+        <!-- 国密 SM4（AI 模型配置密钥加密，enc:v1: 前缀，满足密评/等保三级） -->
+        <!-- 本地 .m2 已缓存 1.79，离线可编译；BC Provider 在 CryptoService 静态注册 -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.79</version>
+        </dependency>
+
         <!-- Excel 导出（任务2：业务数据页导出 xlsx，Apache POI 5.2.5 兼容 Java 17） -->
         <dependency>
             <groupId>org.apache.poi</groupId>

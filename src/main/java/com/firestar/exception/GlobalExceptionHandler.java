@@ -50,7 +50,9 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateKeyException.class)
     public Result<Void> handleDuplicateKey(DuplicateKeyException e) {
         log.warn("唯一键冲突（已兜底为 400）：{}", e.getMessage());
-        return Result.error(400, "单据编号重复，请检查唯一编号后重试");
+        // 域无关文案：业务层（如 ModelConfigService）已对已知唯一键做精确查重并抛 IAE 友好提示，
+        // 此处仅作最后兜底，避免跨域窜成"单据编号重复"之类与当前表无关的误导文案。
+        return Result.error(400, "数据唯一键冲突，请检查是否重复录入（如单据号/编号/代码已被占用）");
     }
 
     @ExceptionHandler(AuthenticationException.class)

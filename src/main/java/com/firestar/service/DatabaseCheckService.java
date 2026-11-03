@@ -49,12 +49,21 @@ public class DatabaseCheckService {
      * start.sh（若以 /system/db-check 作探针）健康轮询永远等不到 200（启动超时）。
      *
      * 计数变更账：V67 新增 fin_return_line，38→39；V68 新增 fin_customer，39→40；
-     *            V71 新增 fin_goods，40→41（V32 三表此前漏记，已补正）。
+     *            V71 新增 fin_goods，40→41（V32 三表此前漏记，已补正）；
+     *            V99 新增 sys_model_config（AI 模型配置），41→42；
+     *            V100 新增 ai_conversations / ai_messages / ai_tool_calls（AI 会话三表），
+     *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）。
      */
-    private static final int EXPECTED_TABLE_COUNT = 41;
+    private static final int EXPECTED_TABLE_COUNT = 45;
 
-    /** 本项目业务表前缀 */
-    private static final List<String> BUSINESS_TABLE_PREFIXES = Arrays.asList("fin_", "sys_");
+    /**
+     * 本项目业务表前缀。
+     * ⚠️ 新增 AI 模块（V100 会话/消息/工具调用三表 ai_*）后必须把 ai_ 纳入业务前缀，
+     * 否则这三张表会落入 otherTables 被误报「存在非业务、非引擎的表 / 手工建表」
+     * （实测 2026-11-02 触发 /system/db-check 返回 503）。
+     */
+    private static final List<String> BUSINESS_TABLE_PREFIXES =
+            Arrays.asList("fin_", "sys_", "ai_");
 
     /**
      * 流程引擎表前缀（Flowable），不计入业务表统计。

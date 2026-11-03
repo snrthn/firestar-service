@@ -124,6 +124,13 @@ public class PermissionInterceptor implements HandlerInterceptor {
         }
         for (String prefix : PREFIX_WHITELIST) {
             if (path.startsWith(prefix)) {
+                // /sse/ 前缀整体放行：其余 SSE 端点（/sse/realtime、/sse/ping）走 SseEndpointSupport
+                // 内部鉴权，不依赖 @RequirePerm（见 SseController 类注释）。
+                // 但 /sse/ai/** 是 AI 对话流，走 JWT 过滤器 + @RequirePerm("ai:assistant:use")
+                // 接口权限，必须过本拦截器校验，故在此排除 —— 否则 @RequirePerm 形同虚设。
+                if (path.startsWith("/sse/ai/")) {
+                    continue;
+                }
                 return true;
             }
         }

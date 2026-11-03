@@ -21,7 +21,7 @@ import org.springframework.context.annotation.Configuration;
  * 避免误传 size=99999 把单表拖进全表扫描。
  */
 @Configuration
-@MapperScan("com.firestar.mapper")
+@MapperScan({"com.firestar.mapper", "com.firestar.ai.mapper"})
 public class MybatisPlusConfig {
 
     /** 单页最大条数上限，超出按此值截断 */

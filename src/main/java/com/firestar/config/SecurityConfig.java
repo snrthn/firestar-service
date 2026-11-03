@@ -24,7 +24,7 @@ import java.util.List;
  *   /ping                       冒烟探测（只回 app + UP，无任何业务信息）
  *   /actuator/health/liveness   部署门禁探针（bin/start.sh、deploy.sh 轮询）
  *   /actuator/health/readiness  就绪探针
- *   /sse/**                     实时流，鉴权下沉到 SseEndpointSupport 自己裁决
+ *   /sse/**                     实时流，鉴权下沉到 SseEndpointSupport 自己裁决（/sse/ai/** 例外：AI 对话流单列 authenticated，见 filterChain）
  *   /error                      错误转发（否则业务报错会被伪装成 401）
  *   /favicon.ico
  *   —— 仅当 springdoc 启用时（开发/测试环境）—— 
@@ -87,7 +87,12 @@ public class SecurityConfig {
             // ⚠️ 这里只放 liveness：application.properties 只配了 liveness 健康组，
             //    /actuator/health/readiness 并无对应分组（实测直接 404），别凭 k8s 习惯补一条。
             //    将来若新增 readiness 分组，记得同步加进本数组与 SecurityExposureTest。
-            "/actuator/health/liveness"
+            "/actuator/health/liveness",
+            // 扣子插件回调：AI 对话中扣子需要工具时会异步回调本端点。
+            // 本端点靠 HMAC-SHA256 签名鉴权（见 AiPluginController + CozePluginVerifier），
+            // 不依赖 JWT（扣子服务端无法携带我方用户 token）。放行到 Controller，
+            // 由端点内自行完成签名校验 + 会话反查用户身份，绝不能直接当公开接口裸返数据。
+            "/ai/coze/plugin"
     };
 
     /** 接口文档相关路径：只在 springdoc 开启的环境（dev/test）匿名可访问 */
@@ -125,6 +130,11 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // AI 对话流挂在 /sse/ai/** 下复用全站 SSE 前缀（nginx location /api/sse/），
+                        // 但它靠 JWT 过滤器鉴权而非内部 token 解析，必须单独声明 authenticated()，
+                        // 且必须排在 /sse/** permitAll 之前（RequestMatcherDelegatingAuthorizationManager
+                        // 取首个匹配），否则会被 /sse/** 的 permitAll 误放行成公开接口。
+                        .requestMatchers("/sse/ai/**").authenticated()
                         .requestMatchers(publicPaths.toArray(String[]::new)).permitAll()
                         .anyRequest().authenticated()
                 )

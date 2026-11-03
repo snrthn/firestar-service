@@ -3,6 +3,7 @@ package com.firestar.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
 import com.firestar.dto.ShipmentCreateReq;
+import com.firestar.dto.ShipmentDraftPreview;
 import com.firestar.dto.ShipmentMarkShippedReq;
 import com.firestar.dto.ShipmentVO;
 import com.firestar.dto.TimelineNodeVO;
@@ -76,6 +77,15 @@ public interface ShipmentService {
 
     /** 详情（含明细行 + 关联应收单 + 字典翻译）；可见性：申请人 / ROLE_ADMIN / 审批任务处理人 三选一 */
     ShipmentVO detail(Long shipmentId, String username, boolean isAdmin);
+
+    /**
+     * 发货单草稿预览（AI 拟单，阶段二）。
+     *
+     * <p>纯只读：校验项目存在 / 货物归属 / 超发 / 超合同，计算每行金额与合计，
+     * <b>不落库、不占额度、不触发任何写逻辑</b>。校验规则与 {@code validateAndOccupy} 同口径，
+     * 但只算不改；{@code errors} 非空代表无法创建。</p>
+     */
+    ShipmentDraftPreview buildDraftPreview(ShipmentCreateReq req, String username, boolean isAdmin);
 
     /** 审批时间线（按 businessKey=发货单 ID 聚合，含驳回历史） */
     List<TimelineNodeVO> timeline(Long shipmentId);

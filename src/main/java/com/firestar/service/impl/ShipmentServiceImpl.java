@@ -11,6 +11,7 @@ import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.dto.ShipmentConfirmReceiveReq;
 import com.firestar.dto.ShipmentCreateReq;
+import com.firestar.dto.ShipmentDraftPreview;
 import com.firestar.dto.ShipmentLineCreateReq;
 import com.firestar.dto.ShipmentLineReceiveReq;
 import com.firestar.dto.ShipmentLineVO;
@@ -207,6 +208,114 @@ public class ShipmentServiceImpl implements ShipmentService {
         log.info("[shipment] 创建草稿 id={} batchNo={} projectId={} amount={}",
                 shipment.getId(), batchNo, project.getId(), newAmount);
         return shipment.getId();
+    }
+
+    // ===================== 草稿预览（阶段二·AI 拟单，只读不写） =====================
+
+    /**
+     * 发货单草稿预览（AI 拟单工具 {@code draft_shipment_create} 调用）。
+     *
+     * <p>与 {@link #create} / {@link #validateAndOccupy} 同数据源（projectMapper + itemMapper），
+     * 校验口径完全一致（超发 / 超合同），但<b>不改写任何库存、不落库、不占额度</b>。
+     * 仅返回结构化预览，供前端渲染「待确认表单」卡片；真正落库走原 {@code POST /shipment}。</p>
+     *
+     * <p>注意：此处与 create 一致，仅按 projectId 直查项目（不做项目行级再校验），
+     * 因为创建发货单的闸门是功能权限 {@code shipment:create}（控制器层），而非项目行级可见性；
+     * 且 AI 调此工具前已通过 {@code query_project_detail} 取得 itemId，项目可见性已被前置工具把关。</p>
+     */
+    @Override
+    public ShipmentDraftPreview buildDraftPreview(ShipmentCreateReq req, String username, boolean isAdmin) {
+        ShipmentDraftPreview preview = new ShipmentDraftPreview();
+        if (req.getProjectId() == null) {
+            preview.getErrors().add("项目不能为空");
+            return preview;
+        }
+        if (req.getLines() == null || req.getLines().isEmpty()) {
+            preview.getErrors().add("发货明细不能为空");
+            return preview;
+        }
+        Project project = projectMapper.selectById(req.getProjectId());
+        if (project == null) {
+            preview.getErrors().add("项目不存在：" + req.getProjectId());
+            return preview;
+        }
+        preview.setProjectId(project.getId());
+        preview.setProjectNo(project.getProjectNo());
+        preview.setProjectName(project.getProjectName());
+        // V72：客户名按 customer_id 翻译（fin_project 已删该列）
+        Customer customer = project.getCustomerId() != null ? customerMapper.selectById(project.getCustomerId()) : null;
+        preview.setCustomerName(customer != null ? customer.getCustomerName() : null);
+        preview.setContractAmount(project.getContractAmount());
+
+        List<Item> items = itemMapper.selectList(new LambdaQueryWrapper<Item>()
+                .eq(Item::getProjectId, project.getId()));
+        Map<Long, Item> itemMap = items.stream().collect(Collectors.toMap(Item::getId, i -> i));
+
+        BigDecimal total = BigDecimal.ZERO;
+        List<ShipmentDraftPreview.ShipmentDraftLine> lines = new ArrayList<>();
+        for (ShipmentLineCreateReq line : req.getLines()) {
+            ShipmentDraftPreview.ShipmentDraftLine dl = new ShipmentDraftPreview.ShipmentDraftLine();
+            dl.setItemId(line.getItemId());
+            if (line.getItemId() == null) {
+                preview.getErrors().add("明细行缺少货物 ID");
+                lines.add(dl);
+                continue;
+            }
+            Item item = itemMap.get(line.getItemId());
+            if (item == null) {
+                preview.getErrors().add("货物不存在或不属于该项目：" + line.getItemId());
+                lines.add(dl);
+                continue;
+            }
+            int qty = line.getShipmentQty() == null ? 0 : line.getShipmentQty();
+            int shipped = item.getShippedQty() == null ? 0 : item.getShippedQty();
+            int quantity = item.getQuantity() == null ? 0 : item.getQuantity();
+            int remaining = quantity - shipped;
+            dl.setItemName(item.getItemName());
+            dl.setSpecModel(item.getSpecModel());
+            dl.setUnit(item.getUnit());
+            dl.setQuantity(quantity);
+            dl.setShippedQty(shipped);
+            dl.setRemaining(remaining);
+            dl.setShipmentQty(qty);
+            dl.setUnitPrice(item.getUnitPrice());
+            if (qty <= 0) {
+                preview.getErrors().add("发货数量必须为正：" + line.getItemId());
+                dl.setLineAmount(BigDecimal.ZERO);
+                lines.add(dl);
+                continue;
+            }
+            // 超发硬卡（决策#3，与 validateAndOccupy 同口径）
+            if (qty > remaining) {
+                preview.getErrors().add(String.format(
+                        "货物「%s」超发：合同量 %d，已发 %d，剩余 %d，本次申请 %d（超 %d）",
+                        item.getItemName(), quantity, shipped, remaining, qty, qty - remaining));
+            }
+            BigDecimal lineAmt = item.getUnitPrice() != null
+                    ? item.getUnitPrice().multiply(BigDecimal.valueOf(qty)) : BigDecimal.ZERO;
+            dl.setLineAmount(lineAmt);
+            total = total.add(lineAmt);
+            // 超合同金额硬卡（决策#4，与 validateAndOccupy 同口径：本货物已发+本次 vs 合同额）
+            if (project.getContractAmount() != null) {
+                BigDecimal shippedAmt = item.getUnitPrice() != null
+                        ? item.getUnitPrice().multiply(BigDecimal.valueOf(shipped)) : BigDecimal.ZERO;
+                if (shippedAmt.add(lineAmt).compareTo(project.getContractAmount()) > 0) {
+                    preview.getErrors().add(String.format(
+                            "货物「%s」将导致累计发货金额超过合同金额（合同 %s）",
+                            item.getItemName(), project.getContractAmount()));
+                }
+            }
+            // 接近耗尽软告警（剩余 <= 总量的 10%）
+            int threshold = Math.max(1, quantity / 10);
+            if (remaining - qty >= 0 && remaining - qty <= threshold) {
+                preview.getWarnings().add(String.format(
+                        "货物「%s」本次申请后剩余仅 %d", item.getItemName(), remaining - qty));
+            }
+            lines.add(dl);
+        }
+        preview.setLines(lines);
+        preview.setTotalAmount(total);
+        return preview;
     }
 
     // ===================== 提交审批（详情面板触发；仅草稿/驳回可提） =====================
