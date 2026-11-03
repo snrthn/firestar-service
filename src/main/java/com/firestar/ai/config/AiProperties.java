@@ -1,6 +1,8 @@
 package com.firestar.ai.config;
 
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -17,6 +19,8 @@ import java.util.List;
 @Component
 @ConfigurationProperties(prefix = "ai")
 public class AiProperties {
+
+    private static final Logger log = LoggerFactory.getLogger(AiProperties.class);
 
     /**
      * 对话系统指令（工具调用纪律）的唯一真源，供应商无关。
@@ -40,18 +44,24 @@ public class AiProperties {
     private Ollama ollama = new Ollama();
     private String cozePluginSecret;
 
+    /**
+     * 启动期配置自检（非致命）。
+     * AI 助手是可插拔模块：供应商/密钥优先级为「环境变量 → 数据库【模型配置】is_active 行」。
+     * 二者皆缺时不再抛致命异常扼杀整个应用上下文（否则 AI 未配置 = 财务系统整体起不来），
+     * 仅以 warn 记录，AI 模块降级为不可用；待【模型配置】页配置了 is_active 行后，
+     * ChatProviderManager 会从数据库动态加载并使 AI 功能自动生效。
+     */
     @PostConstruct
     void validate() {
         if (provider == null || provider.isBlank()) {
-            throw new IllegalStateException(
-                    "ai.provider 未配置：请通过环境变量 AI_PROVIDER 注入(coze|openai|deepseek|ollama)，"
-                            + "或由【模型配置】页设置 is_active 行。");
+            log.warn("[AI] ai.provider 未配置：AI 助手模块将降级为不可用。"
+                    + "可通过环境变量 AI_PROVIDER(coze|openai|deepseek|ollama) 固定供应商，"
+                    + "或在【模型配置】页设置 is_active 行后自动启用。");
         }
         boolean unresolved = kek != null && kek.contains("${");
         if (kek == null || kek.isBlank() || unresolved) {
-            throw new IllegalStateException(
-                    "ai.kek 未配置：请通过环境变量 AI_KEK 注入强随机密钥（SM4 KEK，建议 openssl rand -base64 32）。"
-                            + "缺失即启动失败，避免带病上线。");
+            log.warn("[AI] ai.kek 未配置：依赖密钥的 AI 加解密功能暂不可用。"
+                    + "建议通过环境变量 AI_KEK 注入强随机密钥（SM4 KEK，openssl rand -base64 32）。");
         }
     }
 
