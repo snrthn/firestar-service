@@ -8,12 +8,21 @@ import com.firestar.ai.spi.ChatChunk;
 import com.firestar.ai.spi.ChatProvider;
 import com.firestar.ai.spi.TurnRequest;
 import com.firestar.ai.tool.ToolExecutor;
+import com.firestar.entity.DictData;
+import com.firestar.mapper.DictDataMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * 供应商管理器（设计 §4.2 + §4.3 熔断降级）。
@@ -26,15 +35,29 @@ import java.util.function.Consumer;
  *       不再打供应商；冷却期后半开探测，恢复后自动回到 CLOSED（扣子积分续费即自动恢复）。</li>
  * </ul>
  * 供应商只干一件事，本管理器不感知业务逻辑。</p>
+ *
+ * <p>供应商注册表：能力边界以 {@code Map<String, Function<BuildCtx, ChatProvider>>} 表达，
+ * 新增供应商 = 在注册表加一行 + 字典 ai_provider 加一条数据（前端下拉零改动）。
+ * 字典声明了但注册表无实现的供应商，会在启动期 {@link #run(ApplicationArguments)} 告警，
+ * 选择该供应商时运行时抛"未知供应商类型"。</p>
  */
 @Service
-public class ChatProviderManager {
+public class ChatProviderManager implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatProviderManager.class);
 
     private final ModelConfigMapper modelConfigMapper;
     private final CryptoService cryptoService;
     private final ObjectMapper objectMapper;
     private final ToolExecutor toolExecutor;
     private final HttpClientFactory httpClientFactory;
+    private final DictDataMapper dictDataMapper;
+
+    /** 供应商注册表：provider 字符串 → 构建函数（捕获本 Manager 的 final 依赖字段） */
+    private final Map<String, Function<BuildCtx, ChatProvider>> registry;
+
+    /** 构建 ChatProvider 所需的统一入参（各 Provider 构造函数签名不同，从中取子集） */
+    private record BuildCtx(String baseUrl, String model, String botId, String apiKey) {}
 
     private volatile ChatProvider active;
     private final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
@@ -46,12 +69,22 @@ public class ChatProviderManager {
 
     public ChatProviderManager(ModelConfigMapper modelConfigMapper,
                                CryptoService cryptoService, ObjectMapper objectMapper,
-                               ToolExecutor toolExecutor, HttpClientFactory httpClientFactory) {
+                               ToolExecutor toolExecutor, HttpClientFactory httpClientFactory,
+                               DictDataMapper dictDataMapper) {
         this.modelConfigMapper = modelConfigMapper;
         this.cryptoService = cryptoService;
         this.objectMapper = objectMapper;
         this.toolExecutor = toolExecutor;
         this.httpClientFactory = httpClientFactory;
+        this.dictDataMapper = dictDataMapper;
+        // 构造器内初始化注册表：此时上方 final 字段均已赋值，lambda 捕获 this 运行时已完整。
+        this.registry = Map.of(
+                "coze", c -> new CozeProvider(c.baseUrl(), c.botId(), c.apiKey(), objectMapper, httpClientFactory),
+                "openai", c -> new OpenAIProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
+                // DeepSeek 为 OpenAI 兼容协议，复用 OpenAIProvider 的 SSE 解析 + 工具调用循环，仅 name 不同
+                "deepseek", c -> new DeepSeekProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
+                "ollama", c -> new OllamaProvider(c.baseUrl(), c.model(), objectMapper)
+        );
     }
 
     /** 当前生效供应商（DB is_active 为唯一真源，无生效行则报错） */
@@ -125,14 +158,34 @@ public class ChatProviderManager {
     }
 
     private ChatProvider build(String type, String baseUrl, String model, String botId, String apiKey) {
-        return switch (type) {
-            case "coze" -> new CozeProvider(baseUrl, botId, apiKey, objectMapper, httpClientFactory);
-            case "openai" -> new OpenAIProvider(baseUrl, apiKey, model, objectMapper, toolExecutor, httpClientFactory);
-            // DeepSeek 为 OpenAI 兼容协议，复用 OpenAIProvider 的 SSE 解析 + 工具调用循环，仅 name 不同
-            case "deepseek" -> new DeepSeekProvider(baseUrl, apiKey, model, objectMapper, toolExecutor, httpClientFactory);
-            case "ollama" -> new OllamaProvider(baseUrl, model, objectMapper);
-            default -> throw new IllegalStateException("未知供应商类型: " + type);
-        };
+        Function<BuildCtx, ChatProvider> factory = registry.get(type);
+        if (factory == null) {
+            throw new IllegalStateException("未知供应商类型: " + type
+                    + "（请确认已在 ChatProviderManager 注册表登记，且字典 ai_provider 数据与之对齐）");
+        }
+        return factory.apply(new BuildCtx(baseUrl, model, botId, apiKey));
+    }
+
+    /**
+     * 启动期字典对齐校验（防御性）：字典 ai_provider 声明了某供应商但注册表无实现时告警。
+     * 不阻断启动——字典表可能尚未就绪，或运营临时停用某字典项；真正约束在运行时 build()。
+     */
+    @Override
+    public void run(ApplicationArguments args) {
+        try {
+            List<DictData> declared = dictDataMapper.selectList(
+                    new LambdaQueryWrapper<DictData>()
+                            .eq(DictData::getTypeCode, "ai_provider")
+                            .eq(DictData::getStatus, "ENABLED"));
+            for (DictData d : declared) {
+                if (!registry.containsKey(d.getDictValue())) {
+                    log.warn("[AI] 字典 ai_provider 声明了供应商 '{}' 但 ChatProviderManager 未登记对应实现，"
+                            + "选择该供应商时运行时将报错", d.getDictValue());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[AI] 启动期字典对齐校验跳过（字典表可能尚未初始化）：{}", e.getMessage());
+        }
     }
 
     private enum State { CLOSED, OPEN, HALF_OPEN }

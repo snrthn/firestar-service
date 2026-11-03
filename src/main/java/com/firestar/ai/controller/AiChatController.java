@@ -5,6 +5,7 @@ import com.firestar.ai.core.ChatProviderManager;
 import com.firestar.ai.dto.AiChatRequest;
 import com.firestar.ai.config.AiProperties;
 import com.firestar.ai.service.AiChatService;
+import com.firestar.ai.service.PromptConfigService;
 import com.firestar.ai.spi.ChatChunk;
 import com.firestar.ai.spi.ChatMessage;
 import com.firestar.ai.spi.TurnRequest;
@@ -58,16 +59,19 @@ public class AiChatController {
     private final ObjectMapper objectMapper;
     private final ToolRegistry toolRegistry;
     private final AiProperties aiProperties;
+    private final PromptConfigService promptConfigService;
 
     public AiChatController(ChatProviderManager providerManager, AiChatService chatService,
                            UserMapper userMapper, ObjectMapper objectMapper,
-                           ToolRegistry toolRegistry, AiProperties aiProperties) {
+                           ToolRegistry toolRegistry, AiProperties aiProperties,
+                           PromptConfigService promptConfigService) {
         this.providerManager = providerManager;
         this.chatService = chatService;
         this.userMapper = userMapper;
         this.objectMapper = objectMapper;
         this.toolRegistry = toolRegistry;
         this.aiProperties = aiProperties;
+        this.promptConfigService = promptConfigService;
     }
 
     @RequirePerm("ai:assistant:use")
@@ -115,10 +119,15 @@ public class AiChatController {
                 chatService.setExternalSessionId(convIdBox[0], extId);
 
                 // 供应商无关的系统指令（工具调用纪律）作为首条 system 消息注入：
+                // 优先取【提示词管理】中 is_active=1 的生效方案（运行期可热切换）；
+                // 无生效方案时回退 AiProperties 默认常量（向后兼容）。
                 // OpenAI/DeepSeek/Ollama 系原样遵守；Coze 由 CozeProvider 尽力而为地前导注入。
-                // 策略在 FireStar 一侧定义一次，切供应商不掉行为。
                 List<ChatMessage> messages = new ArrayList<>();
-                messages.add(ChatMessage.of("system", aiProperties.getChatSystemInstruction()));
+                String systemInstruction = promptConfigService.getActiveContent();
+                if (systemInstruction == null) {
+                    systemInstruction = aiProperties.getChatSystemInstruction();
+                }
+                messages.add(ChatMessage.of("system", systemInstruction));
                 messages.add(ChatMessage.of("user", req.message()));
                 TurnRequest tr = new TurnRequest(extId,
                         messages,
