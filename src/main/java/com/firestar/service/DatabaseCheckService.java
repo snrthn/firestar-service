@@ -52,9 +52,10 @@ public class DatabaseCheckService {
      *            V71 新增 fin_goods，40→41（V32 三表此前漏记，已补正）；
      *            V99 新增 sys_model_config（AI 模型配置），41→42；
      *            V100 新增 ai_conversations / ai_messages / ai_tool_calls（AI 会话三表），
-     *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）。
+     *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）；
+     *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46。
      */
-    private static final int EXPECTED_TABLE_COUNT = 45;
+    private static final int EXPECTED_TABLE_COUNT = 46;
 
     /**
      * 本项目业务表前缀。
@@ -325,14 +326,19 @@ public class DatabaseCheckService {
  *    + audit_target_type 补 SHIPMENT 1 项）
  *   → dictTypeCount 33→34、dictDataCount 130→142（已用真实库对账）。
  *   此迁移刻意把期望值同步写进 readSeedData，杜绝第六次误报。
+ * V104（AI 供应商字典 ai_provider）净变化：
+ *   新增 1 个字典类型（ai_provider）+ 4 个字典项（coze/openai/deepseek/ollama，
+ *   供【模型配置】供应商下拉 / 标签颜色，替代前端硬编码）。
+ *   → dictTypeCount 34→35、dictDataCount 142→146（V105~V107 均不改字典行数）。
+ *   已同步 readSeedData 期望值（35/146），补本次首屏探针「应为 34/142 实际 35/146」误报。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 34, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 142, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 35, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", 146, errors));
         result.put("configCount", countOf(conn, "sys_config", 14, errors));
         result.put("roleCount", countOf(conn, "sys_role", 7, errors));
         result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
