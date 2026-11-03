@@ -12,8 +12,8 @@ import java.util.List;
 /**
  * AI 助手配置绑定（前缀 ai.*，见 application*.properties）。
  *
- * <p>供应商拓扑（base-url / 默认 model）在代码占位符里；密钥（bot_id / api_key）入库加密，
- * 运行期由【模型配置】页维护，不进 git、不进前端。
+ * <p>供应商拓扑（base-url / model / 凭据）全部入库加密，由【模型配置】页维护（运行期唯一真源）；
+ * 密钥（bot_id / api_key）入库即加密，不进 git、不进前端。
  * KEK 由环境变量 AI_KEK 注入：缺失或占位符未解析即启动失败（沿用 jwt.secret 的「宁可起不来也不带病上线」纪律）。</p>
  */
 @Component
@@ -34,43 +34,25 @@ public class AiProperties {
             + "3. 判断标准：用户的话里是否包含具体的单据/项目/数据指向（如要查/要做哪张单、哪个项目、哪笔数据）；没有则纯文本，有则调用对应工具。"
             + "4. 不确定用户意图时，先用纯文本追问澄清，不要直接调用工具。";
 
-    private String provider;
     private String kek;
     private String egressMode = "strict";
     private String chatSystemInstruction = DEFAULT_CHAT_SYSTEM_INSTRUCTION;
     private List<EgressRule> egressRules = new ArrayList<>();
-    private Coze coze = new Coze();
-    private Openai openai = new Openai();
-    private Ollama ollama = new Ollama();
-    private String cozePluginSecret;
 
     /**
      * 启动期配置自检（非致命）。
-     * AI 助手是可插拔模块：供应商/密钥优先级为「环境变量 → 数据库【模型配置】is_active 行」。
-     * 二者皆缺时不再抛致命异常扼杀整个应用上下文（否则 AI 未配置 = 财务系统整体起不来），
+     * AI 助手是可插拔模块：生效供应商以 DB【模型配置】is_active 行为唯一真源，密钥（KEK）来自环境变量 AI_KEK。
      * 仅以 warn 记录，AI 模块降级为不可用；待【模型配置】页配置了 is_active 行后，
      * ChatProviderManager 会从数据库动态加载并使 AI 功能自动生效。
      */
     @PostConstruct
     void validate() {
-        if (provider == null || provider.isBlank()) {
-            log.warn("[AI] ai.provider 未配置：AI 助手模块将降级为不可用。"
-                    + "可通过环境变量 AI_PROVIDER(coze|openai|deepseek|ollama) 固定供应商，"
-                    + "或在【模型配置】页设置 is_active 行后自动启用。");
-        }
+        // DB（sys_model_config.is_active=1）为当前生效供应商的唯一真源，不再依赖 env 默认供应商。
         boolean unresolved = kek != null && kek.contains("${");
         if (kek == null || kek.isBlank() || unresolved) {
-            log.warn("[AI] ai.kek 未配置：依赖密钥的 AI 加解密功能暂不可用。"
+            log.warn("[AI] ai.kek 未配置：依赖密钥的 AI 加解密功能暂不可用."
                     + "建议通过环境变量 AI_KEK 注入强随机密钥（SM4 KEK，openssl rand -base64 32）。");
         }
-    }
-
-    public String getProvider() {
-        return provider;
-    }
-
-    public void setProvider(String provider) {
-        this.provider = provider;
     }
 
     public String getKek() {
@@ -103,119 +85,6 @@ public class AiProperties {
 
     public void setEgressRules(List<EgressRule> egressRules) {
         this.egressRules = egressRules;
-    }
-
-    public Coze getCoze() {
-        return coze;
-    }
-
-    public void setCoze(Coze coze) {
-        this.coze = coze;
-    }
-
-    public Openai getOpenai() {
-        return openai;
-    }
-
-    public void setOpenai(Openai openai) {
-        this.openai = openai;
-    }
-
-    public Ollama getOllama() {
-        return ollama;
-    }
-
-    public void setOllama(Ollama ollama) {
-        this.ollama = ollama;
-    }
-
-    public String getCozePluginSecret() {
-        return cozePluginSecret;
-    }
-
-    public void setCozePluginSecret(String cozePluginSecret) {
-        this.cozePluginSecret = cozePluginSecret;
-    }
-
-    public static class Coze {
-        private String botId;
-        private String pat;
-        private String baseUrl = "https://api.coze.cn";
-
-        public String getBotId() {
-            return botId;
-        }
-
-        public void setBotId(String botId) {
-            this.botId = botId;
-        }
-
-        public String getPat() {
-            return pat;
-        }
-
-        public void setPat(String pat) {
-            this.pat = pat;
-        }
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-    }
-
-    public static class Openai {
-        private String baseUrl;
-        private String apiKey;
-        private String model = "qwen-max";
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-
-        public String getApiKey() {
-            return apiKey;
-        }
-
-        public void setApiKey(String apiKey) {
-            this.apiKey = apiKey;
-        }
-
-        public String getModel() {
-            return model;
-        }
-
-        public void setModel(String model) {
-            this.model = model;
-        }
-    }
-
-    public static class Ollama {
-        private String baseUrl = "http://localhost:11434";
-        private String model = "qwen2.5:32b";
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-
-        public String getModel() {
-            return model;
-        }
-
-        public void setModel(String model) {
-            this.model = model;
-        }
     }
 
     public static class EgressRule {

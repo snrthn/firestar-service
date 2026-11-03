@@ -1,7 +1,6 @@
 package com.firestar.ai.core;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.firestar.ai.config.AiProperties;
 import com.firestar.ai.crypto.CryptoService;
 import com.firestar.ai.entity.ModelConfig;
 import com.firestar.ai.mapper.ModelConfigMapper;
@@ -12,7 +11,6 @@ import com.firestar.ai.tool.ToolExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -22,7 +20,7 @@ import java.util.function.Consumer;
  *
  * <p>职责：
  * <ul>
- *   <li>按 DB {@code sys_model_config.is_active} 行（运行期真值）或 env 默认值，构建并缓存当前生效的 ChatProvider；</li>
+ *   <li>按 DB {@code sys_model_config.is_active} 行（运行期唯一真源）构建并缓存当前生效的 ChatProvider；</li>
  *   <li>{@link #reload()} 在【模型配置】页保存时触发，解密重建并原子替换，无需重启（运行期热切换）；</li>
  *   <li>内置熔断器：连续失败达阈值进入 OPEN，后续请求直接下发<b>降级兜底帧</b>（普通搜索 / 报错），
  *       不再打供应商；冷却期后半开探测，恢复后自动回到 CLOSED（扣子积分续费即自动恢复）。</li>
@@ -32,7 +30,6 @@ import java.util.function.Consumer;
 @Service
 public class ChatProviderManager {
 
-    private final AiProperties aiProperties;
     private final ModelConfigMapper modelConfigMapper;
     private final CryptoService cryptoService;
     private final ObjectMapper objectMapper;
@@ -47,10 +44,9 @@ public class ChatProviderManager {
     private static final int FAILURE_THRESHOLD = 5;
     private static final long COOLDOWN_MS = 10 * 60 * 1000L;
 
-    public ChatProviderManager(AiProperties aiProperties, ModelConfigMapper modelConfigMapper,
+    public ChatProviderManager(ModelConfigMapper modelConfigMapper,
                                CryptoService cryptoService, ObjectMapper objectMapper,
                                ToolExecutor toolExecutor, HttpClientFactory httpClientFactory) {
-        this.aiProperties = aiProperties;
         this.modelConfigMapper = modelConfigMapper;
         this.cryptoService = cryptoService;
         this.objectMapper = objectMapper;
@@ -58,7 +54,7 @@ public class ChatProviderManager {
         this.httpClientFactory = httpClientFactory;
     }
 
-    /** 当前生效供应商（DB is_active 优先，回退 env 默认值） */
+    /** 当前生效供应商（DB is_active 为唯一真源，无生效行则报错） */
     public ChatProvider activeProvider() {
         ChatProvider p = active;
         if (p == null) {
@@ -108,6 +104,10 @@ public class ChatProviderManager {
         }
     }
 
+    /**
+     * 构建当前生效供应商。DB（sys_model_config.is_active=1）是唯一真源，不再回退环境变量默认供应商。
+     * 无生效行时明确报错，提示用户在【模型配置】页启用/新增，避免静默拿空凭证发起必败请求。
+     */
     private ChatProvider buildActive() {
         ModelConfig cfg = modelConfigMapper.selectOne(
                 new LambdaQueryWrapper<ModelConfig>().eq(ModelConfig::getActive, 1));
@@ -115,47 +115,13 @@ public class ChatProviderManager {
             return build(cfg.getProvider(), cfg.getBaseUrl(), cfg.getModel(),
                     cryptoService.decrypt(cfg.getBotId()), cryptoService.decrypt(cfg.getApiKey()));
         }
-        // 没有 is_active=1 的生效行：区分「已禁用」与「全新部署」，避免静默回退到空凭证 env 默认
-        // （coze.pat 未配置 → 构造出 Bearer null 的坏 provider，要么秒 401、要么代理一抖就超时，体验极差）。
+        // 没有 is_active=1 的生效行：区分「已存在但被停用」与「全新库零行」，但两者都明确报错，
+        // 不再静默回退到 env 默认空凭证（coze.pat 未配置 → Bearer null → 秒 401 / 代理一抖就超时）。
         long total = modelConfigMapper.selectCount(new LambdaQueryWrapper<>());
         if (total > 0) {
-            // 库里已有配置但都没启用（用户点了「停用」）→ 明确报错，前端据此提示「请启用一个模型」，
-            // 而不是发起一场必败的网络请求把用户卡在超时 spinner 上。
             throw new IllegalStateException("当前没有启用的 AI 模型，请在【模型配置】中启用一个模型");
         }
-        // 全新部署（库里一行配置都没有）→ 回退 env 默认；但若 env 凭证也为空，给出清晰报错而非空 provider。
-        String provider = aiProperties.getProvider();
-        String baseUrl = switch (provider) {
-            case "coze" -> aiProperties.getCoze().getBaseUrl();
-            case "openai" -> aiProperties.getOpenai().getBaseUrl();
-            case "deepseek" -> aiProperties.getOpenai().getBaseUrl();
-            case "ollama" -> aiProperties.getOllama().getBaseUrl();
-            default -> null;
-        };
-        String model = switch (provider) {
-            case "coze" -> aiProperties.getCoze().getBotId();
-            case "openai" -> aiProperties.getOpenai().getModel();
-            case "deepseek" -> aiProperties.getOpenai().getModel();
-            case "ollama" -> aiProperties.getOllama().getModel();
-            default -> null;
-        };
-        String botId = switch (provider) {
-            case "coze" -> aiProperties.getCoze().getBotId();
-            default -> null;
-        };
-        String apiKey = switch (provider) {
-            case "coze" -> aiProperties.getCoze().getPat();
-            case "openai" -> aiProperties.getOpenai().getApiKey();
-            case "deepseek" -> aiProperties.getOpenai().getApiKey();
-            case "ollama" -> null;
-            default -> null;
-        };
-        if (("coze".equals(provider) || "openai".equals(provider) || "deepseek".equals(provider))
-                && (apiKey == null || apiKey.isBlank())) {
-            throw new IllegalStateException(
-                    "未启用任何模型配置，且 env 默认 " + provider + " 凭证未配置，无法连接 AI 网关；请在【模型配置】中启用一个模型");
-        }
-        return build(provider, baseUrl, model, botId, apiKey);
+        throw new IllegalStateException("尚未配置任何 AI 模型，请在【模型配置】中新增并启用一个模型后再使用 AI 助手");
     }
 
     private ChatProvider build(String type, String baseUrl, String model, String botId, String apiKey) {

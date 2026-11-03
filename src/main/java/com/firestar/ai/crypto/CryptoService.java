@@ -2,6 +2,8 @@ package com.firestar.ai.crypto;
 
 import com.firestar.ai.config.AiProperties;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -35,12 +37,21 @@ public class CryptoService {
     private static final String PROVIDER = "BC";
     private static final int IV_LEN = 12;
     private static final int TAG_BITS = 128;
-    private final byte[] key; // 派生出的稳定 16 字节 SM4 密钥
+    private static final Logger log = LoggerFactory.getLogger(CryptoService.class);
+    private final byte[] key; // 派生出的稳定 16 字节 SM4 密钥；AI_KEK 缺失时为 null（降级）
 
     public CryptoService(AiProperties aiProperties) {
         // KEK 长度不固定，派生为稳定 16 字节 SM4 密钥（SHA-256 截断），避免长度约束。
-        // KEK 由环境变量 AI_KEK 注入，缺失即启动失败（见 AiProperties.validate）。
+        // AI 加解密是可插拔模块：AI_KEK 缺失时仅 warn（与 AiProperties.validate 的降级策略一致），
+        // 不抛异常扼杀整个应用上下文；key 置 null，待真正调用 encrypt/decrypt 时再即时报错。
         String kek = aiProperties.getKek();
+        boolean unresolved = kek != null && kek.contains("${");
+        if (kek == null || kek.isBlank() || unresolved) {
+            log.warn("[AI] ai.kek 未配置：AI 字段加解密暂不可用（模型配置凭据将无法加密存储）。"
+                    + "建议通过环境变量 AI_KEK 注入强随机密钥（SM4 KEK，openssl rand -base64 32）。");
+            this.key = null;
+            return;
+        }
         try {
             byte[] h = MessageDigest.getInstance("SHA-256").digest(kek.getBytes(StandardCharsets.UTF_8));
             this.key = Arrays.copyOf(h, 16);
@@ -52,6 +63,10 @@ public class CryptoService {
     public String encrypt(String plain) {
         if (plain == null) {
             return null;
+        }
+        if (key == null) {
+            throw new IllegalStateException(
+                    "AI 字段加密不可用：AI_KEK 未配置（SM4 KEK 缺失），无法加密存储模型凭据。请注入 AI_KEK 后重试。");
         }
         try {
             byte[] iv = new byte[IV_LEN];
