@@ -1,8 +1,14 @@
 # firestar-service
 
-火星财务 —— 后端服务（`firestar-` = backend）。
+火星财务 —— 后端服务仓库（`firestar-` = backend）。
 
 与前端 [`firestar-manager`](../firestar-manager) 一一对应；前端为 Vue 3 + Vite 管理后台。
+
+> ⚠️ **命名约定（务必分清）**：本 **git 仓库**名为 `firestar-service`；仓库内部是一个
+> **Maven 多模块 reactor**，其中唯一可执行的 **应用模块**名为 `firestar-server`
+> （产物 `firestar-server-0.0.1-SNAPSHOT.jar`）。改脚本 / CI / 文档时别把两者混为一谈。
+> 这是**模块解耦（monorepo），不是微服务**：单一父工程、单一可执行 jar、同 JVM classpath 调用、
+> 共用一个库与一套 Flyway。
 
 ## 技术栈（已确定）
 
@@ -11,58 +17,92 @@
 - **Spring Boot 3.3.x** + **Java 17**（jakarta 命名空间）
 - **Flowable 7.1** —— 审批引擎
 - **MyBatis-Plus 3.5** —— ORM（Spring Boot 3 专用 starter）
-- **Spring Security 6** —— 安全框架（后续接 JWT + RBAC）
-- **Flyway 10** —— 数据库迁移
+- **Spring Security 6** —— 安全框架（JWT + RBAC 双线权限模型，已落地）
+- **Flyway 10** —— 数据库迁移（core / biz 双 location）
 - **SpringDoc 2.6** —— 接口文档（OpenAPI3）
 - **MySQL 8** / **Redis 7** —— 主库 / 缓存（技术栈共享基础设施）
 - **Hutool 5.8** —— 工具库
 
 > 参考项目 be-media-man-system 实际跑的是 Spring Boot 2.7.18；本仓库按技术栈文档升级到 3.3.x。
 
-## 工程结构（截至 2026-10-12 实际状态）
+## 工程结构（截至 2026-11-04 实际状态）
 
-> ⚠️ 历史 README 此处只画了 2 个文件（HomeController + SecurityConfig），与代码严重不符；以下为重新盘点后的真实结构。
+> ⚠️ 历史 README 此处画的是单模块 `src/main/java/com/firestar/`，与代码严重不符；
+> 2026-11-04 已完成内核/业务分离，以下为重新盘点后的真实结构。
 
 ```
-src/main/java/com/firestar/
-  FirestarApplication.java            # 主启动类
-  config/                             # 5 个配置类
-    SecurityConfig.java               # 占位安全配置（当前 permitAll 全放行，待接入 JWT+RBAC）
-    MybatisPlusConfig.java            # MyBatis-Plus 分页 / 插件
-    FlywayBeforeFlowableConfig.java   # Flyway 先于 Flowable 执行（规避启动竞态）
-    AuditMetaObjectHandler.java       # 审计字段自动填充（create/update 时间、操作人）
-    DatabaseTableHealthIndicator.java # 自定义健康指标（库表级）
-  controller/                         # 多组控制器（认证 / RBAC / 字典 / 配置 / 文件 / 通知 / 协议 / 反馈 / 帮助 / 初始化重置 / 审计 等）
-    HomeController.java               # 冒烟接口 /ping
-    DatabaseCheckController.java      # 运维自检 /system/db-check（返回库名 / 表名 / 行数）
-  service/                            # 业务 Service（当前 1 个，均为非业务运维类）
-    DatabaseCheckService.java
-  mapper/                             # 41 个 MyBatis-Plus Mapper 接口（零手写 SQL）
-  entity/                             # 44 个实体（由 DDL 脚本生成，字段与库严格对齐；含 3 个抽象基类 BaseEntity/AuditedEntity/LogicDeleteEntity）
-src/main/resources/
-  db/migration/                       # 72 个 Flyway 迁移（V1–V72，持续累积）
-    V1__baseline.sql                  # V1 基线：25 张业务表 DDL（含红线 / 金额公式注释）
-    V2__init_dict_data.sql            # 33 类字典种子数据（sys_dict_data 共 144 条字典项）
-    V3__flowable_schema.sql           # Flowable 审批引擎表
-  application.properties              # 基础（端口 2025 / 应用名 / actuator）
-  application-{dev,test,pre,prod}.properties
-src/test/java/com/firestar/          # 9 个测试类（冒烟 / 自检 / 实体映射一致性 / 安全暴露等）
-.env/example.env                     # 本地凭据模板（真实 .env/<profile>.env 不入库）
-bin/start.sh stop.sh deploy.sh       # 跨平台运维脚本（复用参考项目实现）
-docs/云效率流水线配置.yaml            # 阿里云效 Flow CI/CD（PaC）
-docs/git-workflow.md                 # 分支同步 SOP
+firestar-service/                       # git 仓库根，同时是 Maven reactor 根
+├── pom.xml                             # 父工程 firestar-parent（packaging=pom，modules 三个）
+├── firestar-core/                      # 平台内核：257 个 .java
+│   └── src/main/
+│       ├── java/com/firestar/          # 用户/角色/字典/菜单/权限/租户/AI/工作流/组织/日志/通知/认证/文件/初始化重置
+│       └── resources/db/migration/core/   # 66 个平台侧 Flyway 迁移
+├── firestar-biz/                       # 火星业务：103 个 .java
+│   └── src/main/
+│       ├── java/com/firestar/          # 项目/发货/退货/应收/发票/收款/核销/客户/物品/协议 + 业务工具
+│       └── resources/db/migration/biz/    # 43 个业务侧 Flyway 迁移（含 V200 起新增）
+├── firestar-server/                    # 应用入口：1 个 .java（FirestarApplication）
+│   ├── pom.xml                         # 聚合 core + biz，产出唯一可执行 jar
+│   └── src/
+│       ├── main/resources/             # application.properties + application-{dev,test,pre,prod}.properties
+│       └── test/java/com/firestar/     # 17 个集成测试类（@SpringBootTest，需可达 dev MySQL）
+├── bin/                                # start.sh / stop.sh / deploy.sh（跨平台运维脚本）
+├── docs/                               # 开发规范.md / 底座化指南.md / 云效率流水线配置.yaml / git-workflow.md
+├── scripts/                            # check_module_boundaries.py（CI 守边界）/ reset_flyway.sql（dev 清历史）
+└── logs/ uploads/                      # 运行期产物（不入库）
 ```
 
-## 当前进度（截至 2026-11-01）
+模块依赖方向（单向，不可倒挂）：`firestar-server → firestar-biz → firestar-core`。
+`firestar-core` **不得 import 任何只在 `firestar-biz` 定义的类**，由
+`scripts/check_module_boundaries.py` 守护（建议接进 CI 或提交前执行）。
 
-- **数据层 / 基础设施：已就绪** —— 业务表 DDL 全落地、实体 / Mapper 与库严格对齐、Flyway 迁移持续累积（截至本会话含 V98 发货承运商 + 附件迁移）、5 个配置类、自定义健康指标、DB 自检端点 + 测试类。
-- **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知（含 `notify_global_switch` 总闸 fail-close）、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及**系统初始化与重置向导**（`InitResetController` + `InitResetServiceImpl` + V36 菜单/权限种子；轻度重置清业务表 + Flowable 运行/历史 + 上传文件，完整重置走 Flyway `clean()+migrate()` 恢复出厂）。
-- **财务业务域（`fin_*`）已随多轮迭代推进**：发货流程落地「承运商 + 运单号 + 附件」三部曲（V98 迁移：新增 `logistics_carrier` 字典 + 10 条热门承运商、`fin_shipment` 加 `tracking_no`/`carrier`、文件业务类型 `shipment_dispatch`、审计目标 `SHIPMENT`；`markShipped` 改为接收 `ShipmentMarkShippedReq` 并校验运单号库内唯一 + 附件必填）；其余 fin_* 业务（应收 / 收款 / 开票 / 核销 / 退货）随接口逐步补齐。
+## 数据库迁移（Flyway）
+
+V1–V108 保留原版本号，按归属拆到两个目录，四个 profile 统一配置：
+
+```properties
+spring.flyway.locations=classpath:db/migration/core,classpath:db/migration/biz
+```
+
+- `firestar-core/src/main/resources/db/migration/core`（66 个）
+- `firestar-biz/src/main/resources/db/migration/biz`（43 个，含 V200 起新增）
+- Flyway 按版本号全局排序，与所在目录无关；新增业务迁移用 **V200+**，避免与历史版本冲突。
+- `scripts/reset_flyway.sql` 仅 dev/test 用于清 `flyway_schema_history` 重跑全量，**prod 严禁**。
+
+## 当前进度（截至 2026-11-04）
+
+- **数据层 / 基础设施：已就绪** —— 业务表 DDL 全落地、实体 / Mapper 与库严格对齐、Flyway 迁移保留 V1–V108 存量并按 core/biz 双目录拆分（业务新增从 V200 起）、自定义健康指标、DB 自检端点 + 测试类。
+- **平台 / 基础设施类业务模块已落地（生产级）**：认证（JWT + 单点登录 jti 黑名单）、RBAC（角色 / 权限 / 菜单 / 数据范围）、字典、参数设置、文件（本地 + 对象存储抽象）、通知（含 `notify_global_switch` 总闸 fail-close）、协议、反馈、帮助、SSE 实时、审计、DB 自检，以及系统初始化与重置向导。
+- **财务业务域（`fin_*`）**：发货 / 应收 / 收款 / 开票 / 核销（双台账）/ 退货全链路已落地，含 V98 发货承运商 + 附件、核销双台账不变量等。
+- **AI 助手**：供应商字典化（OpenAI 直连 / DeepSeek / 扣子）、提示词管理、L2 看板解读、草稿态工具调用、扣子插件回调（HMAC 验签 + nonce 防重放）。
 - ⚠️ **路径前缀约定**：前端经 vite proxy / 生产 nginx 以 `/api` 转发并去前缀；**后端真实路径不含 `/api`**（如 `/system/init/status`），白名单与安全配置一律按后端真实路径书写。
-- ⚠️ **安全项（2026-10-19 已收口）**：`/system/db-check` 需有效 JWT（登录即可，不再要求细粒度权限点）；
+- ⚠️ **安全项（2026-10-19 已收口）**：`/system/db-check` 需有效 JWT（登录即可）；
   `/v3/api-docs`、`/doc.html`、`/swagger-ui/**` 由 `springdoc.api-docs.enabled` 控制（默认关闭，仅 dev 打开）；
   `/actuator/health` 需认证，只保留 `/actuator/health/liveness` 匿名供部署门禁轮询。
-  JWT 密钥由环境变量 `JWT_SECRET` 注入（缺失即启动失败），详见 `application.properties` 的 JWT 段注释。
+  JWT 密钥由环境变量 `JWT_SECRET` 注入（缺失即启动失败）。
+
+## 安全契约（2026-11-04 收口）
+
+RBAC 是**双线模型**：接口放行走 `role → sys_role_permission → sys_permission`，
+前端按钮显隐走 `role → sys_role_menu → sys_menu`（必须 `menu_type=BUTTON` 且带 `perm_code`）。
+新增受控能力必须双线补齐，详见 [`docs/开发规范.md`](docs/开发规范.md) 第十一~十四节。
+
+已修复并钉成回归测试的越权 / 重放面（端点级断言，standalone MockMvc，不连库）：
+
+| 契约 | 端点 | 断言 | 测试 |
+| --- | --- | --- | --- |
+| AI 草稿越权 | `GET /ai/conversation/{convId}/latest-draft` | **404** | `firestar-core` `AiDraftEndpointSecurityTest` |
+| 应收详情越权 | `GET /receivable/{id}` | **404** | `firestar-biz` `BizSecurityBoundaryTest` |
+| 核销反核销越权 | `POST /writeoff/reverse` | **404** | `firestar-biz` `BizSecurityBoundaryTest` |
+| 插件回调无签名 | `POST /ai/coze/plugin` | **401** | `firestar-biz` `BizSecurityBoundaryTest` |
+
+配套纯逻辑单测：`CozePluginVerifierTest`（验签 / 过期 / nonce 重放，6 例）、
+`AiChatServiceTest`（草稿归属 404，3 例）、`InitStatusExposureTest`（init/status 降级，2 例）、
+`SeedIntegrityTest`（种子完整性门禁，4 例）。
+
+其余加固：写操作（反核销等）方法内二次归属过闸；只读汇总接口的权限点
+（`writeoff:*`）按设计**仅授财务 / 管理员角色**；完整重置追加当前管理员密码二次确认；
+初始化完成后 `init/status` 匿名端点只回 `initialized:true`。
 
 ## 本地运行
 
@@ -70,19 +110,29 @@ docs/git-workflow.md                 # 分支同步 SOP
 # 1. 准备本地 MySQL 库 firestar，复制凭据模板
 cp .env/example.env .env/dev.env   # 填入 DB_PASSWORD（dev 的 JWT_SECRET 有 dev 专用回退值，可不填）
 
-# 2. 启动（bin/start.sh 会自动 mvn package 并拉起，监听 2025）
+# 2. 启动（bin/start.sh 在 Windows 的 dev/test/pre 下会自动 mvn clean package 并拉起，监听 2025）
+#    构建前置：先 taskkill 释放 2025 端口占用的 jar 锁，再清根 target 遗留旧布局 jar，最后 clean package
 bash bin/start.sh 2025 /actuator/health/liveness
 
 # 健康:     curl http://localhost:2025/actuator/health/liveness   # 匿名可用（部署门禁口径）
 # 冒烟:     curl http://localhost:2025/ping
 # 运维自检: curl -H "Authorization: Bearer <token>" http://localhost:2025/system/db-check
 #           （登录即可，匿名调用返回 401）
-# 完整健康: 启动时应用已写到 logs/app.log 的 `[startup-health]` 行（bin/start.sh 就绪后会直接打印）
-#           /actuator/health 本身需认证，别再拿它做匿名探针
+# 完整健康: 启动时应用已写到 logs/app.log 的 `[startup-health]` 行
 # 接口文档: http://localhost:2025/doc.html   # 仅 dev profile 开启
 ```
 
-也可直接用 Maven：`mvn spring-boot:run`（需先 export DB_PASSWORD）。
+从源码直接跑（多模块 reactor，需指定应用模块）：
+
+```bash
+export DB_PASSWORD=...
+mvn -o -pl firestar-server -am spring-boot:run
+mvn -o compile                                   # 仅编译校验全 reactor（不连库）
+mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯逻辑/切片测试（不连库）
+```
+
+> `firestar-server` 的 `@SpringBootTest` 集成测试需**可达的 dev MySQL + `DB_PASSWORD`**，
+> 与 CI 环境一致；`firestar-core` / `firestar-biz` 的安全契约测试用 standalone MockMvc，不连库。
 
 ## 与前端对接约定
 
@@ -90,13 +140,16 @@ bash bin/start.sh 2025 /actuator/health/liveness
 | --- | --- |
 | 后端地址（dev） | `http://localhost:2025` |
 | 端口 | `2025` |
-| 应用名 | `firestar-service` |
+| git 仓库名 | `firestar-service` |
+| 应用模块 / 产物 | `firestar-server` / `firestar-server-0.0.1-SNAPSHOT.jar` |
 | 默认 profile | `dev` |
 | 接口前缀 | 暂未配置统一前缀；前端 vite proxy 以 `/api` 转发并去前缀 |
 
 ## CI / CD
 
 见 [`docs/云效率流水线配置.yaml`](docs/云效率流水线配置.yaml)：测试 + 构建 → 制品上传 → 主机部署（`/usr/local/server/java/firestar`）。
+多模块后 jar 落在 `firestar-server/target/`，构建步会先归集到 `staging/`（jar + `bin/`）再上传，
+避免上传仓库根 `target/` 导致制品缺 jar。`bin/start.sh`、`stop.sh` 的 `APP_NAME` 已同步为 `firestar-server`。
 部署目标与 be-media-man-system **同台 ECS**，机器组复用；仅部署目录与端口（2025）不同。
 
 ## 分支约定
@@ -104,10 +157,21 @@ bash bin/start.sh 2025 /actuator/health/liveness
 与参考项目一致：`develop → test →（人工确认）→ master → main → develop`。
 详见 [`docs/git-workflow.md`](docs/git-workflow.md)。
 
-## 近期变更（截至 2026-11-01，代码已落地、待 git 提交与部署重启）
+## 变更记录
 
-> 以下改动均已写入工作区源码，但尚未 commit / 未部署；上线需提交后停服重打 jar（Flyway 会自动执行 V98 迁移），并与前端改动同次生效。
+> 以下改动均已写入工作区源码，尚未 commit / 未部署；上线需提交后停服重打 jar，并与前端改动同次生效。
 
-- **V98 发货承运商 + 附件迁移**（`db/migration/V98__shipment_dispatch_carrier_and_attachment.sql`）：`logistics_carrier` 字典 + 10 条热门承运商（SF / YTO / ZTO / STO / YD / JD / EMS / BEST / DBL / JT，均 ENABLED，按热门排序）；`fin_shipment` 加 `tracking_no` / `carrier`；`sys_file_storage` 业务类型加 `shipment_dispatch`；`audit_target_type` 加 `SHIPMENT`。
-- **发货服务改造**：`Shipment.java` 加 `trackingNo` / `carrier`；`ShipmentVO` 加 `trackingNo` / `carrier` / `carrierName` / `dispatchFileIds`；新增 `ShipmentMarkShippedReq`（`trackingNo` / `carrier` / `fileIds`）；`markShipped` 签名改为接收该 req，并校验运单号非空 + 库内唯一 + 承运商须为启用态字典值 + 附件至少 1 件；落库后 `@Auditable` 写 `sys_audit_log`。⚠️ **探针常量同步**：`DatabaseCheckService.readSeedData` 的 `dictTypeCount` 33→34、`dictDataCount` 130→142（V98 新增 1 类字典 + 12 条字典项），否则 `/system/db-check` 会因条数对不上报 503。
-- **系统公告只读端点**：`ConfigController` 新增 `GET /system/config/announcement`（无 `@RequirePerm`，登录即可访问），复用 `ConfigService.getConfigValue("login_notice")` 返回公告文本；与既有 `/config/flags` 同范式。
+### 2026-11-01
+
+- **V98 发货承运商 + 附件迁移**：`logistics_carrier` 字典 + 10 条热门承运商；`fin_shipment` 加 `tracking_no` / `carrier`；文件业务类型 / 审计目标补齐。`DatabaseCheckService.readSeedData` 期望值同步（后续 V104/V107 又调整到 35 / 146）。
+- **发货服务改造**：`markShipped` 校验运单号非空 + 库内唯一 + 承运商启用态 + 附件至少 1 件，落库写审计。
+- **系统公告只读端点**：`GET /system/config/announcement`（登录即可访问）。
+
+### 2026-11-04（底座化 + 安全收口）
+
+- **内核与业务分离**：单模块拆成 `firestar-parent`（根 pom）/ `firestar-core` / `firestar-biz` / `firestar-server` 四模块；Java 与 Flyway 迁移按归属拆分，迁移保留原版本号、新增业务迁移用 V200+。编译与模块边界守护脚本均通过。
+- **工程归属纠偏**：整套多模块工程收进本 git 仓库内（此前误放在不被跟踪的 `D:\firestar-project` 容器层），文档与脚本一并归仓。
+- **启停 / CI 同步**：`bin/start.sh`、`stop.sh`、`deploy.sh` 与云效流水线改为 `firestar-server` 口径；流水线用 `staging/` 归集 jar + bin；start.sh 增加清理根 `target` 陈旧 jar 的兜底，消除 `mvn clean` 被旧实例文件锁卡死。
+- **7 项安全遗留项修复**：AI 草稿越权、应收详情越权、核销反核销缺归属校验、Coze 回调 nonce 重放、AI 路径无回归测试、完整重置无密码二次确认、`init/status` 匿名信息暴露。详见「安全契约」章节与 `docs/开发规范.md` 第十四节。
+- **回归测试补齐**：新增 4 条端点级安全契约断言（404 / 404 / 404 / 401）+ 11 个纯逻辑单测；`firestar-core` 16/16、`firestar-biz` 3/3 通过。
+- **通知类型中文名补全（V200）**：`V97` 种入 `INVOICE_PENDING_ISSUE` 模板时漏写 `template_name` 列，导致【通知记录】页「通知类型」下拉/类型列显示裸码。新增 `V200__invoice_pending_issue_template_name.sql` 幂等回填「待开票通知」，并即时同步 dev 库；同时把 db/migration 旧目录里只剩说明文件的 README 补上「迁移脚本在哪」的指路，避免拆分后找不到版本文件。该迁移不动 `sys_dict_type` / `sys_dict_data`，`DatabaseCheckService.readSeedData` 的 35 / 146 基线不变。

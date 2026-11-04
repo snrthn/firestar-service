@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$APP_HOME"
 
-APP_NAME="firestar-service"
+APP_NAME="firestar-server"
 PORT="${DEPLOY_PORT:-2025}"
 PID_FILE="$APP_HOME/logs/app.pid"
 
@@ -38,7 +38,7 @@ port_pid() {
 PIDS=()
 [ -f "$PID_FILE" ] && PIDS+=("$(cat "$PID_FILE" 2>/dev/null || true)")
 if [ "$OS" = "linux" ]; then
-  PIDS+=($(pgrep -f "firestar-service.*\.jar" 2>/dev/null || true))
+  PIDS+=($(pgrep -f "firestar-server.*\.jar" 2>/dev/null || true))
 fi
 PP="$(port_pid "$PORT")"
 [ -n "$PP" ] && PIDS+=("$PP")

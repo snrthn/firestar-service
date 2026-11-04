@@ -2,7 +2,7 @@
 #
 # firestar-service 生产部署脚本（适配云效「执行命令」步骤）
 # 部署目录约定: /usr/local/server/java/firestar
-#   云效「上传文件」保持相对结构 -> target/firestar-service-*.jar + bin/deploy.sh
+#   云效「上传文件」保持相对结构 -> target/firestar-server-*.jar + bin/deploy.sh
 # 凭据注入: DB_URL / DB_USERNAME / DB_PASSWORD 由云效 Secrets 以环境变量注入（不落盘、不写库）
 # 云效执行命令: bash /usr/local/server/java/firestar/bin/deploy.sh
 #
