@@ -66,7 +66,7 @@ public class DatabaseCheckService {
      * 改这里即可，不要再去测试文件里改数字。
      */
     public static final long EXPECTED_DICT_TYPE_COUNT = 35L;
-    public static final long EXPECTED_DICT_DATA_COUNT = 146L;
+    public static final long EXPECTED_DICT_DATA_COUNT = 148L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     public static final long EXPECTED_ROLE_COUNT = 7L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
@@ -345,6 +345,10 @@ public class DatabaseCheckService {
  *   供【模型配置】供应商下拉 / 标签颜色，替代前端硬编码）。
  *   → dictTypeCount 34→35、dictDataCount 142→146（V105~V107 均不改字典行数）。
  *   已同步 readSeedData 期望值（35/146），补本次首屏探针「应为 34/142 实际 35/146」误报。
+ * V201（补齐 audit_target_type 的 AI_PROMPT / AI_MODEL_CONFIG）净变化：
+ *   新增 2 个字典项，不新增字典类型 → dictTypeCount 保持 35、dictDataCount 146→148。
+ *   本轮同时落地 AuditDictConsistencyTest（代码注解 ↔ 字典双向差集，已接进云效门禁），
+ *   只数数量的时代结束：漏补字典会直接让 CI fail，漏改本常量会让 bin/test.sh 全量测试 fail。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。

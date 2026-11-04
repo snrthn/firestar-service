@@ -40,8 +40,13 @@ public class PermissionResolverImpl implements PermissionResolver {
         if (roleCodes == null || roleCodes.isEmpty()) {
             return List.of();
         }
-        List<Role> roles = roleMapper.selectList(
-                new LambdaQueryWrapper<Role>().in(Role::getRoleCode, roleCodes));
+        // 方案 A（2026-11-04 停用语义统一）：三层关联全部要求 status=ENABLED。
+        // 之前三处都没带 status，导致「停用角色 / 停用权限 / 停用角色-权限关联」
+        // 对接口鉴权毫无影响（字段存在、写入时校验取值，读取时被忽略）。
+        // 本类实时查库不缓存 → 停用后下个请求即生效，无需撤销 token。
+        List<Role> roles = roleMapper.selectList(new LambdaQueryWrapper<Role>()
+                .in(Role::getRoleCode, roleCodes)
+                .eq(Role::getStatus, "ENABLED"));
         List<Long> roleIds = roles.stream().map(Role::getId).toList();
         if (roleIds.isEmpty()) {
             return List.of();
@@ -52,13 +57,16 @@ public class PermissionResolverImpl implements PermissionResolver {
         // ⚠️ 由此产生的预期行为：勾了菜单按钮但没勾操作权限 → 按钮显示、点击 403。
         //    这是严格分离的代价，虎哥已知并接受（2026-10-30 拍板）。
         List<RolePermission> rps = rolePermissionMapper.selectList(
-                new LambdaQueryWrapper<RolePermission>().in(RolePermission::getRoleId, roleIds));
+                new LambdaQueryWrapper<RolePermission>()
+                        .in(RolePermission::getRoleId, roleIds)
+                        .eq(RolePermission::getStatus, "ENABLED"));
         Set<Long> permIds = rps.stream().map(RolePermission::getPermissionId).collect(Collectors.toSet());
         if (permIds.isEmpty()) {
             return List.of();
         }
-        return permissionMapper.selectList(
-                        new LambdaQueryWrapper<Permission>().in(Permission::getId, permIds))
+        return permissionMapper.selectList(new LambdaQueryWrapper<Permission>()
+                        .in(Permission::getId, permIds)
+                        .eq(Permission::getStatus, "ENABLED"))
                 .stream().map(Permission::getPermCode).collect(Collectors.toList());
     }
 }

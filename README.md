@@ -90,7 +90,7 @@ bash bin/test.sh --help                         # 帮助
 - schema + 种子由 Flyway 从空库全量重放自建（109 张表，与 dev 库一致），无需手工导 dump。
 - 3 个测试专用补偿迁移（`src/test/resources/db/migration/it/V26.1` / `V27.1` / `V74.1`）补的是历史脚本硬编码库名跳过的 DDL，只在 it 的 `spring.flyway.locations` 里加载，生产四个 profile 零影响。
 - 期望值单一来源：`DatabaseCheckService` 的表数 / 种子数常量为 public，测试直接引用；`EntityMappingConsistencyTest` 的表清单按 `BUSINESS_TABLE_PREFIXES` 从 JDBC 元数据动态取，不再维护第二份白名单。
-- 云效构建容器无 MySQL，CI 仍只跑纯单测（`SmokeTest` / `AuthControllerStreamTest`）；集成测试在带 MySQL 的本地 / CI sidecar 环境跑。
+- 云效构建容器无 MySQL，CI 仍只跑纯单测（`SmokeTest` / `AuthControllerStreamTest` / `AuditDictConsistencyTest`）；集成测试在带 MySQL 的本地 / 自建 CI 环境跑。其中 `AuditDictConsistencyTest` 静态扫描 `@Auditable` 注解 ↔ `sys_dict_data` 字典的双向差集，枚举漏补字典即 fail，不连库。
 - `scripts/reset_test_db.sql` 只 DROP/CREATE `firestar_test`，**prod 严禁**。
 
 ## 当前进度（截至 2026-11-04）
@@ -200,3 +200,9 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 - **回归测试补齐**：新增 4 条端点级安全契约断言（404 / 404 / 404 / 401）+ 11 个纯逻辑单测；`firestar-core` 16/16、`firestar-biz` 3/3 通过。
 - **方案 B：集成测试库隔离**：新建 `it` profile 与 `firestar_test` 独立库，从空库全量重放 Flyway 自建 schema + 种子；15 个 `@SpringBootTest` 统一切 `it`；`DatabaseCheckService` 期望值 public 化消除测试里的第二份硬编码；修复 8 个测试类的造数 / 权限用例缺陷（权限断言改走 MockMvc 端点级）。全量 `mvn test` **70/70 通过**，dev 库 11 张核心表行数与最大 ID 前后一致（零写入）。同时挖出并记录了 V27/V28/V75 硬编码库名导致「非 `firestar` 库名无法从空库初始化」的生产隐患。
 - **通知类型中文名补全（V200）**：`V97` 种入 `INVOICE_PENDING_ISSUE` 模板时漏写 `template_name` 列，导致【通知记录】页「通知类型」下拉/类型列显示裸码。新增 `V200__invoice_pending_issue_template_name.sql` 幂等回填「待开票通知」，并即时同步 dev 库；同时把 db/migration 旧目录里只剩说明文件的 README 补上「迁移脚本在哪」的指路，避免拆分后找不到版本文件。该迁移不动 `sys_dict_type` / `sys_dict_data`，`DatabaseCheckService.readSeedData` 的 35 / 146 基线不变。
+
+### 2026-11-05
+
+- **枚举 ↔ 字典双写契约落地门禁**：新增 `V201__audit_target_type_ai_dict.sql` 补齐 `AI_PROMPT` / `AI_MODEL_CONFIG`（`audit_target_type` 11→13 项），`EXPECTED_DICT_DATA_COUNT` 146→148；`sys_dict_type.remark` 不再手写完整枚举清单。新增 `AuditDictConsistencyTest`（core，纯静态扫描、不连库，双向差集 + 锚点断言防假绿）并接进云效 `-Dtest` 白名单 —— 以后漏补字典 CI 直接红，漏改计数常量 `bash bin/test.sh` 直接红。
+- **停用语义方案 A**：`sys_role` / `sys_permission` / `sys_role_permission` 三层查询补 `status=ENABLED`，`AuthServiceImpl` 的 `loadRoleIds` / `loadRoles` / `loadPermissions` 同步过滤（菜单 BUTTON 也补 status）。实时查库不缓存 → 停用后下个请求即生效，无需撤销 token；新增 `RbacStatusDisableTest` 6 个用例。全量 `bash bin/test.sh` **76/76 通过**，云效单测门禁 9/9 绿。
+- **前端（firestar-manager）**：AI 助手抽屉宽度 420px → 600px。

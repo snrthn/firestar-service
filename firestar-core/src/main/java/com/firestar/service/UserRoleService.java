@@ -44,7 +44,14 @@ public class UserRoleService {
         if (roleIds.isEmpty()) {
             return List.of();
         }
-        return roleMapper.selectList(new LambdaQueryWrapper<Role>().in(Role::getId, roleIds))
+        // 方案 A（2026-11-04）：停用角色 = 撤回该角色带来的全部权限，下个请求即生效。
+        // 本类在 JwtAuthenticationFilter 里每次请求实时调用、不缓存，所以过滤 status
+        // 就够了，不需要 token version / 黑名单 / 踢人。多角色取并集：停用其中一个，
+        // 其余启用角色照常生效。
+        // ⚠️ 与 sys_menu.status 对齐语义：此前只有菜单停用参与授权，角色停用形同虚设。
+        return roleMapper.selectList(new LambdaQueryWrapper<Role>()
+                        .in(Role::getId, roleIds)
+                        .eq(Role::getStatus, "ENABLED"))
                 .stream()
                 .map(Role::getRoleCode)
                 .toList();

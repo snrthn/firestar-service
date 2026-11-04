@@ -60,6 +60,9 @@ stages:
                 # 保留的测试类（纯单元测试，不需要数据库）：
                 #   - SmokeTest: 纯单元测试
                 #   - AuthControllerStreamTest: Mock 测试
+                #   - AuditDictConsistencyTest: 静态扫描 @Auditable 注解 ↔ sys_dict_data
+                #     字典的双向差集（枚举漏补字典就 fail），不连库、不需要 MySQL。
+                #     见 firestar-core/src/test/java/com/firestar/seed/
                 # ⚠️ 多模块 reactor（core / biz / server）：-Dtest 会作用到每个模块，
                 #    SmokeTest / AuthControllerStreamTest 只在 firestar-server，
                 #    core / biz 零匹配会被 surefire 3.2.5 直接判失败，必须带
@@ -67,7 +70,7 @@ stages:
                 # =====================================================================
                 echo "[info] Running unit tests only (excluding integration tests that require MySQL)..."
                 mvn -B test \
-                  -Dtest='SmokeTest,AuthControllerStreamTest' \
+                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest' \
                   -Dsurefire.failIfNoSpecifiedTests=false \
                   -Dmaven.test.failure.ignore=false
       build_job:

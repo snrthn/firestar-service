@@ -59,6 +59,12 @@ import java.util.stream.Collectors;
 /**
  * 认证服务实现。
  * 角色 / 权限 / 菜单均通过 RBAC 关联表实时查询，不缓存（保证权限变更即时生效）。
+ *
+ * <p>停用语义（方案 A，2026-11-04 统一）：sys_user.status / sys_role.status /
+ * sys_permission.status / sys_role_permission.status / sys_menu.status 全部参与授权计算。
+ * 因鉴权每次请求实时查库，任一状态改为 DISABLED 后【下个请求】即生效，
+ * 不需要 token 撤销、黑名单或强制踢人。语义：停用角色＝撤回该角色全部权限
+ * （多角色取并集），停用权限＝全局撤回该权限点（影响所有引用它的角色）。
  */
 @Service
 @Slf4j
@@ -408,18 +414,35 @@ public class AuthServiceImpl implements AuthService {
         return user;
     }
 
+    /**
+     * 用户当前【启用中】的角色 ID 集合。
+     *
+     * <p>方案 A（2026-11-04 停用语义统一）：停用角色 = 撤回该角色带来的全部菜单 /
+     * 按钮 / 数据范围。menus() 与 loadPermissions() 都走这里，一处过滤全线生效。
+     * 此前只查 sys_user_role、不看 sys_role.status，导致停用角色后侧栏和按钮照旧。
+     * 与 sys_menu.status 参与授权保持一致（同一系统内 status 语义不再割裂）。
+     */
     private List<Long> loadRoleIds(Long userId) {
         List<UserRole> userRoles = userRoleMapper.selectList(
                 new LambdaQueryWrapper<UserRole>().eq(UserRole::getUserId, userId));
-        return userRoles.stream().map(UserRole::getRoleId).collect(Collectors.toList());
-    }
-
-    private List<RoleVO> loadRoles(Long userId) {
-        List<Long> roleIds = loadRoleIds(userId);
+        List<Long> roleIds = userRoles.stream().map(UserRole::getRoleId).toList();
         if (roleIds.isEmpty()) {
             return List.of();
         }
-        List<Role> roles = roleMapper.selectList(new LambdaQueryWrapper<Role>().in(Role::getId, roleIds));
+        return roleMapper.selectList(new LambdaQueryWrapper<Role>()
+                        .in(Role::getId, roleIds)
+                        .eq(Role::getStatus, "ENABLED"))
+                .stream().map(Role::getId).toList();
+    }
+
+    private List<RoleVO> loadRoles(Long userId) {
+        List<Long> roleIds = loadRoleIds(userId); // 已过滤停用角色
+        if (roleIds.isEmpty()) {
+            return List.of();
+        }
+        List<Role> roles = roleMapper.selectList(new LambdaQueryWrapper<Role>()
+                .in(Role::getId, roleIds)
+                .eq(Role::getStatus, "ENABLED"));
         return roles.stream().map(r -> {
             RoleVO vo = new RoleVO();
             vo.setRoleCode(r.getRoleCode());
@@ -431,6 +454,7 @@ public class AuthServiceImpl implements AuthService {
     /**
      * 是否超级管理员：与 PermissionInterceptor 判定信号一致，role_code='ROLE_ADMIN' 即超级管理员。
      * 复用 loadRoles 拿 roleCode，不再额外查库。
+     * ⚠️ 方案 A 后的预期行为：若把 ROLE_ADMIN 角色停用，超管捷径同步失效（停用即降权）。
      */
     private boolean isRoleAdmin(Long userId) {
         return loadRoles(userId).stream()
@@ -453,7 +477,10 @@ public class AuthServiceImpl implements AuthService {
         if (roleCodes.isEmpty()) {
             return List.of();
         }
-        List<Role> roles = roleMapper.selectList(new LambdaQueryWrapper<Role>().in(Role::getRoleCode, roleCodes));
+        // 方案 A：停用角色不再贡献按钮权限；停用菜单（BUTTON 节点）也不再展示按钮。
+        List<Role> roles = roleMapper.selectList(new LambdaQueryWrapper<Role>()
+                .in(Role::getRoleCode, roleCodes)
+                .eq(Role::getStatus, "ENABLED"));
         List<Long> roleIds = roles.stream().map(Role::getId).toList();
         if (roleIds.isEmpty()) {
             return List.of();
@@ -468,6 +495,7 @@ public class AuthServiceImpl implements AuthService {
         Set<String> codes = new LinkedHashSet<>();
         menuMapper.selectList(new LambdaQueryWrapper<Menu>()
                         .in(Menu::getId, menuIds)
+                        .eq(Menu::getStatus, "ENABLED")
                         .eq(Menu::getMenuType, "BUTTON")
                         .isNotNull(Menu::getPermCode)
                         .ne(Menu::getPermCode, ""))
