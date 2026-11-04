@@ -7,16 +7,17 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <!-- 技术栈文档指定 Spring Boot 3.3.x；Java 17（jakarta 命名空间，与参考项目 2.7.18 不同） -->
+        <!-- 技术栈文档指定 Spring Boot 3.3.x；Java 17（jakarta 命名空间） -->
         <version>3.3.4</version>
         <relativePath/>
     </parent>
 
     <groupId>com.firestar</groupId>
-    <artifactId>firestar-service</artifactId>
+    <artifactId>firestar-parent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>firestar-service</name>
-    <description>火星财务 - 后端服务 (Spring Boot 3 + Flowable + MyBatis-Plus)</description>
+    <packaging>pom</packaging>
+    <name>firestar-parent</name>
+    <description>火星财务 - 多模块父工程（core 平台内核 / biz 火星业务 / server 应用入口）</description>
 
     <properties>
         <java.version>17</java.version>
@@ -27,224 +28,14 @@
         <hutool.version>5.8.32</hutool.version>
         <springdoc.version>2.6.0</springdoc.version>
         <aliyun.oss.version>3.18.5</aliyun.oss.version>
+        <maven-compiler-plugin.version>3.10.1</maven-compiler-plugin.version>
+        <maven-jar-plugin.version>3.3.0</maven-jar-plugin.version>
+        <jacoco.version>0.8.11</jacoco.version>
     </properties>
 
-    <dependencies>
-        <!-- Web / Tomcat -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <!-- JDBC 连接池（HikariCP，MyBatis-Plus 不直接带数据源） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-jdbc</artifactId>
-        </dependency>
-
-        <!-- ORM：MyBatis-Plus（Spring Boot 3 专用 starter） -->
-        <dependency>
-            <groupId>com.baomidou</groupId>
-            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
-            <version>${mybatis-plus.version}</version>
-        </dependency>
-
-        <!-- 审批引擎：Flowable 7（支持 Spring Boot 3） -->
-        <dependency>
-            <groupId>org.flowable</groupId>
-            <artifactId>flowable-spring-boot-starter</artifactId>
-            <version>${flowable.version}</version>
-        </dependency>
-
-        <!-- 安全框架：Spring Security 6（已接入 JWT + RBAC） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-security</artifactId>
-        </dependency>
-
-        <!-- AOP：审计切面（@Auditable 自动落库 sys_audit_log）。Spring Boot 自动启用 @Aspect 代理 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
-        </dependency>
-
-        <!-- JWT：jjwt 0.12.x（Spring Boot 3 / Java 17 兼容） -->
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-            <version>0.12.6</version>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <version>0.12.6</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <version>0.12.6</version>
-            <scope>runtime</scope>
-        </dependency>
-
-        <!-- 数据库迁移：Flyway 10 -->
-        <!-- 注意：Spring Boot 3.x 已不再发布 spring-boot-starter-flyway（镜像中仅 4.0.0+ 才有），
-             改用 flyway-core + flyway-mysql；版本由 spring-boot-dependencies BOM 管理（10.10.0），无需显式写。 -->
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-mysql</artifactId>
-        </dependency>
-
-        <!-- 接口文档：SpringDoc (OpenAPI3) -->
-        <dependency>
-            <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>${springdoc.version}</version>
-        </dependency>
-
-        <!-- 健康检查 / 监控 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-
-        <!-- 工具库 -->
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-
-        <!-- 国密 SM4（AI 模型配置密钥加密，enc:v1: 前缀，满足密评/等保三级） -->
-        <!-- 本地 .m2 已缓存 1.79，离线可编译；BC Provider 在 CryptoService 静态注册 -->
-        <dependency>
-            <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.79</version>
-        </dependency>
-
-        <!-- Excel 导出（任务2：业务数据页导出 xlsx，Apache POI 5.2.5 兼容 Java 17） -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-ooxml</artifactId>
-            <version>5.2.5</version>
-        </dependency>
-
-        <!-- 阿里云 OSS 对象存储（文件管理模块）
-             3.18.5 为 2026-01 发布的最新稳定版，兼容 Java 17 / Spring Boot 3。
-             ⚠️ 部署前提：Bucket 在北京、ECS 在张家口 → 跨地域，内网 Endpoint 不可用
-                （阿里云规则：跨地域访问需走公网或 CEN）。因此
-                  上传：服务端中转（上传流量一律免费，增量成本 0）
-                  下载：后端签发时效签名 URL，浏览器直连 OSS
-                        —— 中转下载会重复计流出费（OSS 外网流出 + ECS 出方向）
-             ⚠️ 若运行时报 javax.xml.bind 相关 NoClassDefFoundError，补 jaxb-api /
-                jaxb-runtime 依赖（Java 9+ 移除了 JAXB，官方 SDK 文档有此提示）。 -->
-        <dependency>
-            <groupId>com.aliyun.oss</groupId>
-            <artifactId>aliyun-sdk-oss</artifactId>
-            <version>${aliyun.oss.version}</version>
-        </dependency>
-
-        <!-- MySQL 驱动 -->
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <!-- Lombok -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- 测试 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.security</groupId>
-            <artifactId>spring-security-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-            <!-- 显式声明 Lombok 注解处理器路径：保证 mvn compile 时 @Getter/@Setter/@Slf4j 等
-                 注解处理器一定生效（部分 maven-compiler-plugin 版本在 Lombok 为 optional 依赖时，
-                 不会自动把其纳入注解处理路径，导致全项目 lombok 生成方法缺失而编译失败）。 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <!-- 锁 3.10.1：不锁时本地仓库元数据解析到 3.13.0，其要求 Maven 3.6.3+，
-                     而开发机 Maven 3.5.4 直接报 PluginIncompatibleException（2026-10-25 实锤）。
-                     3.10.1 在 Maven 3.5.4 / 3.6.3+（CI）均可用，向后向前兼容。
-                     lombok 必须显式版本：annotationProcessorPath 是 plugin 依赖，
-                     不继承项目 dependencyManagement 的版本，缺版本报 lombok:null:jar。 -->
-                <version>3.10.1</version>
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                            <version>1.18.34</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
-            <!-- 锁 maven-jar-plugin：3.4.x 要求 Maven 3.6.3+，开发机 Maven 3.5.4 直接
-                 PluginIncompatibleException（2026-10-25 package 阶段实锤，与 compiler-plugin
-                 3.13.0 同坑）。3.3.0 在 Maven 3.5.4 / 3.6.3+（CI）均可用，向后向前兼容。 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
-            </plugin>
-            <!-- JaCoCo 覆盖率（2026-10-27）：此前无任何覆盖率工具，核心业务覆盖度无法度量。
-                 显式锁 0.8.11（与 compiler/jar 同策略）：该版对 Maven 要求宽松，
-                 在开发机 Maven 3.5.4 与 CI 3.6.3+ 均可用。
-                 ⚠️ 本地 m2 首次无此插件，需联网解析 —— 不要用 mvn -o 跑 test，
-                    否则报 plugin resolution failure。
-                 报告产物：target/site/jacoco/index.html（mvn test 后生成）。 -->
-            <plugin>
-                <groupId>org.jacoco</groupId>
-                <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.11</version>
-                <executions>
-                    <execution>
-                        <id>prepare-agent</id>
-                        <goals>
-                            <goal>prepare-agent</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>report</id>
-                        <phase>test</phase>
-                        <goals>
-                            <goal>report</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
+    <modules>
+        <module>firestar-core</module>
+        <module>firestar-biz</module>
+        <module>firestar-server</module>
+    </modules>
 </project>

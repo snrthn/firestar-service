@@ -88,8 +88,9 @@ stages:
             with:
               run: |
                 mvn -B clean package -DskipTests
-                cp -r bin target/bin
-                rm -rf target/classes target/generated-sources target/maven-archiver target/maven-status target/test-classes
+                rm -rf staging && mkdir -p staging
+                cp firestar-server/target/firestar-server-*.jar staging/
+                cp -r bin staging/bin
           upload_step:
             step: ArtifactUpload
             name: 构建物上传
@@ -99,7 +100,7 @@ stages:
               repo: flow_generic_repo
               artifact: default
               filePath:
-                - target/
+                - staging/
               version: "${BUILD_NUMBER}"
 
   deploy_stage:

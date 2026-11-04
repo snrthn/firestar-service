@@ -29,7 +29,7 @@ case "$OS_RAW" in
 esac
 [ "$OS" = "windows" ] && export MSYS_NO_PATHCONV=1
 
-APP_NAME="firestar-service"
+APP_NAME="firestar-server"
 # ---- Java 运行时定位（本地多 JDK 择优 + 交互选择）----
 # 制品按 Java 17 编译（class file version 61），必须用 Java 17 运行，否则 UnsupportedClassVersionError。
 # 解析优先级：
@@ -155,6 +155,15 @@ if [ "$OS" = "windows" ] && [ "${SPRING_PROFILE:-dev}" != "production" ]; then
           sleep 1
         fi
       fi
+      # 兜底：清掉根 target 中残留的旧布局 jar（firestar-service-*.jar）。
+      # 旧单模块布局把应用 jar 打在仓库根 target/，重排后应用 jar 改产到 firestar-server/target/，
+      # 这份旧名 jar 纯属遗留；若被尚未退出的旧实例锁住，会让 mvn clean 删不掉而失败。直接删之。
+      for _stale in "$APP_HOME"/target/firestar-service-*.jar; do
+        if [ -f "$_stale" ]; then
+          echo "[start] 删除根 target 中遗留的旧布局 jar: $_stale"
+          rm -f "$_stale" || true
+        fi
+      done
       echo "[start] 本地开发模式：mvn clean package 重建产物（跳过测试）..."
       if mvn -q clean package -Dmaven.test.skip=true >> "$BUILD_LOG" 2>&1; then
       echo "[start] 构建完成 -> $BUILD_LOG"
@@ -168,13 +177,14 @@ if [ "$OS" = "windows" ] && [ "${SPRING_PROFILE:-dev}" != "production" ]; then
     echo "[start] 未找到 mvn 命令，跳过自动构建，使用已有 jar" >&2
   fi
 fi
-# ---- 定位 jar：优先生产部署产物($APP_HOME 根目录)，回退本地 mvn 构建产物(target/) ----
+# ---- 定位 jar：优先生产部署产物($APP_HOME 根目录)，回退本地 mvn 构建产物(target/ 或模块 target/) ----
+# 多模块后应用 jar 由 firestar-server 模块产出，位于 firestar-server/target/
 JAR=""
-for cand in "$APP_HOME"/${APP_NAME}-*.jar "$APP_HOME"/target/${APP_NAME}-*.jar; do
+for cand in "$APP_HOME"/${APP_NAME}-*.jar "$APP_HOME"/target/${APP_NAME}-*.jar "$APP_HOME"/firestar-server/target/${APP_NAME}-*.jar; do
   if [ -f "$cand" ]; then JAR="$cand"; break; fi
 done
 if [ -z "$JAR" ]; then
-  echo "[start] 未找到 jar 包（已查 $APP_HOME/*.jar 与 $APP_HOME/target/*.jar）" >&2
+  echo "[start] 未找到 jar 包（已查 $APP_HOME/${APP_NAME}-*.jar、$APP_HOME/target/${APP_NAME}-*.jar、$APP_HOME/firestar-server/target/${APP_NAME}-*.jar）" >&2
   echo "[start] 请先部署产物，或本地用 'mvn package' 构建" >&2
   exit 1
 fi
