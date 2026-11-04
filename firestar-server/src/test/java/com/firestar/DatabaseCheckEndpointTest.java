@@ -56,7 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 @WithMockUser(username = "admin", authorities = "ROLE_ADMIN")
 class DatabaseCheckEndpointTest {
 
@@ -90,7 +90,10 @@ class DatabaseCheckEndpointTest {
         assertEquals(0, tables.path("otherTableCount").asInt(),
                 "库里有基线之外的表：" + tables.path("otherTables"));
         assertTrue(body.path("errors").isEmpty(), "自检报告有错误项");
-        assertEquals("firestar", body.path("connection").path("catalog").asText());
+        // 方案 B 核心不变量：集成测试绝不能连回 dev 库 firestar
+        String catalog = body.path("connection").path("catalog").asText();
+        assertTrue(!catalog.isBlank() && !"firestar".equals(catalog),
+                "集成测试必须连独立测试库，绝不能连回 dev 库 firestar，实际=" + catalog);
         assertTrue(body.path("flyway").path("appliedCount").asInt() >= 3, "Flyway 迁移一个都没应用");
     }
 

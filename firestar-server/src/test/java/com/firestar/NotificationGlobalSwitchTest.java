@@ -5,12 +5,13 @@ import com.firestar.entity.Config;
 import com.firestar.mapper.ConfigMapper;
 import com.firestar.mapper.NotificationMapper;
 import com.firestar.service.NotificationService;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -21,8 +22,15 @@ import static org.junit.jupiter.api.Assertions.*;
  * P0：通知全局总闸 notify_global_switch 的 fail-close 语义。
  * 核心不变量：开关【缺失 / 不可解析 / false】时 notify 必须安静跳过（不落库），
  * 配置故障场景下「不发」优于「乱发」。
+ *
+ * 【2026-11-04 方案 B 改造】V25 种子本来就插了 notify_global_switch
+ * （uk_tenant_config_key 唯一），原 setUp 再 insert 一行必然 DuplicateKey。
+ * 现改为复用种子行 + 类级 @Transactional 自动回滚：既不撞唯一键，
+ * 每个用例的开关改值 / 删行也都不会污染测试库。
  */
 @SpringBootTest
+@ActiveProfiles("it")
+@Transactional
 class NotificationGlobalSwitchTest {
 
     @Autowired
@@ -45,20 +53,12 @@ class NotificationGlobalSwitchTest {
 
     @BeforeEach
     void setUp() {
-        // 确保存在一条可控的开关配置（字段按 Config 实体内省假设：configKey/configValue/id）
-        Config c = new Config();
-        c.setConfigKey(KEY);
-        c.setConfigValue("false");
-        configMapper.insert(c);
-        managedConfigId = c.getId();
-    }
-
-    @AfterEach
-    void tearDown() {
-        if (managedConfigId != null) {
-            configMapper.deleteById(managedConfigId);
-            managedConfigId = null;
-        }
+        // 复用 V25 种子行，不要 insert —— 同名 config_key 有唯一键约束
+        List<Config> rows = configMapper.selectByMap(Map.of("config_key", KEY));
+        assertFalse(rows.isEmpty(), "V25 种子应含 notify_global_switch（Flyway 全量重放）");
+        managedConfigId = rows.get(0).getId();
+        configMapper.updateById(withValue("false"));
+        // 无需 tearDown：@Transactional 在用例结束后回滚所有改值与删行
     }
 
     private long countAll() {
@@ -77,7 +77,7 @@ class NotificationGlobalSwitchTest {
     @Test
     @DisplayName("P0-总闸缺失：视为关闭，notify 不落库（fail-close 之「配置缺失=关」）")
     void switchMissing_failClose_noPersist() {
-        // 临时删掉开关行，模拟「配置缺失」
+        // 临时删掉开关行，模拟「配置缺失」；事务回滚会在用例结束后恢复种子行
         configMapper.deleteById(managedConfigId);
         managedConfigId = null;
         long before = countAll();

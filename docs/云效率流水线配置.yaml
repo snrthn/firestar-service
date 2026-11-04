@@ -44,9 +44,12 @@ stages:
               run: |
                 set -e
                 # =====================================================================
-                # 方案 D：跳过需要数据库的集成测试，只运行纯单元测试
+                # CI 门禁：云效 alinux3 构建容器无 MySQL 实例，这里只跑纯单测
                 # =====================================================================
-                # 排除的测试类（需要 MySQL 数据库）：
+                # 集成测试已迁到 it profile + firestar_test 独立库（不碰 dev 库，
+                # schema 由 Flyway 从空库全量重放自建），在带 MySQL 的本地或
+                # 自建 CI 环境执行：bash scripts/run-integration-tests.sh
+                # 下列集成测试类仍需 MySQL，故不在本 job 运行：
                 #   - ApiDocsClosedTest: 需要 Spring 上下文 + 数据库
                 #   - DatabaseCheckEndpointTest: 需要数据库
                 #   - DatabaseCheckServiceTest: 需要数据库
@@ -57,15 +60,16 @@ stages:
                 # 保留的测试类（纯单元测试，不需要数据库）：
                 #   - SmokeTest: 纯单元测试
                 #   - AuthControllerStreamTest: Mock 测试
+                # ⚠️ 多模块 reactor（core / biz / server）：-Dtest 会作用到每个模块，
+                #    SmokeTest / AuthControllerStreamTest 只在 firestar-server，
+                #    core / biz 零匹配会被 surefire 3.2.5 直接判失败，必须带
+                #    -Dsurefire.failIfNoSpecifiedTests=false（bin/test.sh 里同款兜底）。
                 # =====================================================================
                 echo "[info] Running unit tests only (excluding integration tests that require MySQL)..."
-                
                 mvn -B test \
                   -Dtest='SmokeTest,AuthControllerStreamTest' \
+                  -Dsurefire.failIfNoSpecifiedTests=false \
                   -Dmaven.test.failure.ignore=false
-                
-                mvn surefire-report:report-only
-                mvn site -DgenerateReports=false
       build_job:
         name: Java 构建
         runsOn:

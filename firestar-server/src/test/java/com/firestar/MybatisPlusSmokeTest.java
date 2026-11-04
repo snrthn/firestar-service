@@ -16,7 +16,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 阶段 6 冒烟测试：验证 MyBatis-Plus 四个拦截器在真实 dev 库上行为正确。
+ * 阶段 6 冒烟测试：验证 MyBatis-Plus 四个拦截器在真实 firestar_test 集成测试库上行为正确。
  *
  * 【测什么】不是"能不能跑起来"，而是四个拦截器各自的语义：
  *   1. 基础 CRUD + BigDecimal 精度
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 不依赖执行顺序，重复跑幂等。
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class MybatisPlusSmokeTest {
 
     /**
