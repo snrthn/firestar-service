@@ -55,7 +55,21 @@ public class DatabaseCheckService {
      *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）；
      *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46。
      */
-    private static final int EXPECTED_TABLE_COUNT = 46;
+    public static final int EXPECTED_TABLE_COUNT = 46;
+
+    /**
+     * 种子数据条数基线（与 readSeedData 一一对应）。
+     *
+     * 【为什么 public】这些值曾经在 server 集成测试里被复制成第二份硬编码，
+     * 迁移一推进，测试就冻结在旧版本上误报（2026-11-04 一次暴露 3 个 Failure）。
+     * 现在测试直接引用本类常量，生产与测试只维护一份。新增改动种子行数的迁移时，
+     * 改这里即可，不要再去测试文件里改数字。
+     */
+    public static final long EXPECTED_DICT_TYPE_COUNT = 35L;
+    public static final long EXPECTED_DICT_DATA_COUNT = 146L;
+    public static final long EXPECTED_CONFIG_COUNT = 14L;
+    public static final long EXPECTED_ROLE_COUNT = 7L;
+    public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
 
     /**
      * 本项目业务表前缀。
@@ -63,8 +77,8 @@ public class DatabaseCheckService {
      * 否则这三张表会落入 otherTables 被误报「存在非业务、非引擎的表 / 手工建表」
      * （实测 2026-11-02 触发 /system/db-check 返回 503）。
      */
-    private static final List<String> BUSINESS_TABLE_PREFIXES =
-            Arrays.asList("fin_", "sys_", "ai_");
+    public static final List<String> BUSINESS_TABLE_PREFIXES =
+            Collections.unmodifiableList(Arrays.asList("fin_", "sys_", "ai_"));
 
     /**
      * 流程引擎表前缀（Flowable），不计入业务表统计。
@@ -337,11 +351,11 @@ public class DatabaseCheckService {
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dictTypeCount", countOf(conn, "sys_dict_type", 35, errors));
-        result.put("dictDataCount", countOf(conn, "sys_dict_data", 146, errors));
-        result.put("configCount", countOf(conn, "sys_config", 14, errors));
-        result.put("roleCount", countOf(conn, "sys_role", 7, errors));
-        result.put("roleConflictCount", countOf(conn, "sys_role_conflict", 4, errors));
+        result.put("dictTypeCount", countOf(conn, "sys_dict_type", EXPECTED_DICT_TYPE_COUNT, errors));
+        result.put("dictDataCount", countOf(conn, "sys_dict_data", EXPECTED_DICT_DATA_COUNT, errors));
+        result.put("configCount", countOf(conn, "sys_config", EXPECTED_CONFIG_COUNT, errors));
+        result.put("roleCount", countOf(conn, "sys_role", EXPECTED_ROLE_COUNT, errors));
+        result.put("roleConflictCount", countOf(conn, "sys_role_conflict", EXPECTED_ROLE_CONFLICT_COUNT, errors));
         return result;
     }
 

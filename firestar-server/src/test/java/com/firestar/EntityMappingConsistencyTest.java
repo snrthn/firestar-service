@@ -1,28 +1,31 @@
 package com.firestar;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfo;
 import com.baomidou.mybatisplus.core.metadata.TableFieldInfo;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
-import com.firestar.config.MybatisPlusConfig;
 import com.firestar.dto.NodeCfg;
 import com.firestar.entity.BaseEntity;
 import com.firestar.entity.LogicDeleteEntity;
 import com.firestar.entity.ProcessDef;
 import com.firestar.mapper.ProcessDefMapper;
+import com.firestar.service.DatabaseCheckService;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.sql.DataSource;
-import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 阶段 6 全表映射完整性测试。
  *
  * 【为什么必须自动化】
- * 25 张表 ~200 字段，是脚本批量生成的。生成脚本改了、或有人手工加了字段，
+ * 全量业务表的字段是脚本批量生成的。生成脚本改了、或有人手工加了字段，
  * 都可能出现「DDL 有、实体没有」或「实体有、DDL 没有」的不对齐。
  * 这类不一致**编译期不报错**，只会在某个业务查询时才炸出
  * "Unknown column" 或 "ResultSet 少了字段"，排查成本极高。
@@ -39,9 +42,16 @@ import static org.junit.jupiter.api.Assertions.*;
  *   DDL → 实体：每个非基类字段都能在实体里找到同名属性
  *   实体 → DDL：每个实体属性都能在表里找到同名列
  * 任何一侧对不上立即失败，并打印差异明细。
+ *
+ * 【2026-11-04 方案 B 改造】消掉「表名清单 / 表数量 / 逻辑删除名单」的第二份硬编码：
+ *   - 表清单按 DatabaseCheckService.BUSINESS_TABLE_PREFIXES 从 JDBC 元数据动态取；
+ *   - 数量断言引用 DatabaseCheckService.EXPECTED_TABLE_COUNT；
+ *   - 逻辑删除 / BaseEntity 检查改为按 DDL 实际列判定，不再冻一份名单。
+ *   保留 TABLE_TO_ENTITY 显式映射（这是「新增表必须登记实体」的可审计守卫，不是期望值拷贝）。
+ *   测试库为 firestar_test（it profile），由 Flyway 从空库全量重放自建。
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class EntityMappingConsistencyTest {
 
     /**
@@ -53,54 +63,50 @@ class EntityMappingConsistencyTest {
             "id", "tenant_id", "created_by", "created_at", "updated_by", "updated_at",
             "version", "ext", "is_deleted", "deleted_at", "deleted_by"));
 
-    /** 逻辑删除表白名单，必须与 V1 基线一致 */
-    private static final Set<String> LOGIC_DELETE_TABLES = new HashSet<>(Arrays.asList(
-            "fin_project", "fin_item", "fin_shipment", "fin_shipment_line",
-            "fin_return_order", "fin_receivable", "fin_receipt",
-            "fin_write_off", "fin_invoice"));
-
     @Autowired
     private DataSource dataSource;
 
     @Autowired
     private MybatisPlusInterceptor interceptor;
 
-    /** 读取 INFORMATION_SCHEMA 中 firestar 库的全部业务表列 */
+    /**
+     * 读取当前库全部业务表及其列。按生产侧同一份前缀常量圈定，
+     * 避免测试又维护一份表名白名单（历史上那份冻在 V39，缺了 9 张表）。
+     */
     private Map<String, Set<String>> readSchemaColumns() throws Exception {
         Map<String, Set<String>> result = new LinkedHashMap<>();
         try (Connection conn = dataSource.getConnection()) {
             DatabaseMetaData meta = conn.getMetaData();
-            ResultSet tables = meta.getTables(conn.getCatalog(), null, "fin\\_%", new String[]{"TABLE"});
-            collect(meta, tables, result);
-            tables = meta.getTables(conn.getCatalog(), null, "sys\\_%", new String[]{"TABLE"});
-            collect(meta, tables, result);
+            try (ResultSet tables = meta.getTables(conn.getCatalog(), null, "%", new String[]{"TABLE"})) {
+                while (tables.next()) {
+                    String table = tables.getString("TABLE_NAME");
+                    String lower = table.toLowerCase();
+                    if (lower.startsWith("flyway")) continue;
+                    if (DatabaseCheckService.BUSINESS_TABLE_PREFIXES.stream()
+                            .noneMatch(lower::startsWith)) continue;
+                    Set<String> cols = new TreeSet<>();
+                    try (ResultSet c = meta.getColumns(conn.getCatalog(), null, table, null)) {
+                        while (c.next()) cols.add(c.getString("COLUMN_NAME").toLowerCase());
+                    }
+                    result.put(table, cols);
+                }
+            }
         }
         return result;
     }
 
-    private void collect(DatabaseMetaData meta, ResultSet tables, Map<String, Set<String>> out) throws Exception {
-        while (tables.next()) {
-            String table = tables.getString("TABLE_NAME");
-            if (table.startsWith("flyway")) continue;
-            Set<String> cols = new TreeSet<>();
-            ResultSet c = meta.getColumns(meta.getConnection().getCatalog(), null, table, null);
-            while (c.next()) cols.add(c.getString("COLUMN_NAME").toLowerCase());
-            out.put(table, cols);
-        }
-    }
-
     @Test
-    @DisplayName("1. 37 张表全部有对应实体，且每个 DDL 列都能在实体中找到")
+    @DisplayName("1. 全部业务表都有对应实体，且每个 DDL 列都能在实体中找到")
     void everyColumnHasEntityProperty() throws Exception {
         Map<String, Set<String>> schema = readSchemaColumns();
 
-        assertEquals(37, schema.size(),
-                "业务表数量应为 37（V39 加 sys_level），实际 " + schema.size() + " -> " + schema.keySet());
+        assertEquals(DatabaseCheckService.EXPECTED_TABLE_COUNT, schema.size(),
+                "业务表数量应与生产自检基线一致，实际 " + schema.size() + " -> " + schema.keySet());
 
         List<String> problems = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
             String table = e.getKey();
-            TableInfo info = TableInfoHelper.getTableInfo(classFor(table));
+            TableInfo info = tableInfoFor(classFor(table));
             if (info == null) {
                 problems.add(table + ": 找不到实体的 TableInfo（@TableName 是否正确）");
                 continue;
@@ -121,38 +127,40 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
-    @DisplayName("2. 逻辑删除表集合与基线一致（37 张表中 9 张，多一张少一张都不行）")
-    void logicDeleteTableSetMatchesBaseline() {
-        List<String> withLogicDelete = new ArrayList<>();
-        List<String> without = new ArrayList<>();
-        for (String table : ALL_TABLES) {
-            Class<?> cls;
-            try {
-                cls = classFor(table);
-            } catch (ClassNotFoundException e) {
-                continue;
+    @DisplayName("2. 逻辑删除表集合：实体继承关系与 DDL 的 is_deleted 列必须一致")
+    void logicDeleteTableSetMatchesBaseline() throws Exception {
+        Map<String, Set<String>> schema = readSchemaColumns();
+        Set<String> ddlLogicDelete = schema.entrySet().stream()
+                .filter(e -> e.getValue().contains("is_deleted"))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toCollection(TreeSet::new));
+
+        Set<String> entityLogicDelete = new TreeSet<>();
+        for (String table : schema.keySet()) {
+            if (LogicDeleteEntity.class.isAssignableFrom(classFor(table))) {
+                entityLogicDelete.add(table);
             }
-            if (LogicDeleteEntity.class.isAssignableFrom(cls)) withLogicDelete.add(table);
-            else without.add(table);
         }
-        assertEquals(9, withLogicDelete.size(),
-                "应有 9 张逻辑删除表，实际 " + withLogicDelete.size() + " -> " + withLogicDelete);
-        assertEquals(new TreeSet<>(LOGIC_DELETE_TABLES), new TreeSet<>(withLogicDelete),
-                "逻辑删除表名单与 V1 基线不一致");
-        assertEquals(28, without.size(), "应有 28 张非逻辑删除表（36→37 后 27→28）");
+        assertEquals(ddlLogicDelete, entityLogicDelete,
+                "DDL 有 is_deleted 列的表，其实体应继承 LogicDeleteEntity；反之不应继承");
     }
 
     @Test
-    @DisplayName("3. 除有意豁免的运维表外，所有实体都继承 BaseEntity（保证 L1 预留字段齐全）")
+    @DisplayName("3. 含 L1 预留字段的表，其实体必须继承 BaseEntity")
     void allEntitiesExtendBaseEntity() throws Exception {
-        // sys_token_blacklist 是唯一的有意例外：纯运维记录，DDL 本身就没有
-        // tenant_id / version / ext 列（实体与表自洽），理由见 TokenBlacklist 类注释。
-        Set<String> excluded = Set.of("sys_token_blacklist");
+        Map<String, Set<String>> schema = readSchemaColumns();
+        // sys_ai_prompt 是唯一「DDL 有 tenant_id 但实体不继承 BaseEntity」的有意例外：
+        // V105 建表时为了索引 idx_ai_prompt_active(is_active, tenant_id) 带了 tenant_id 列，
+        // 但 AiPromptConfig 是轻量配置 POJO（implements Serializable），实体不映射该列，
+        // 查询按全局生效行（is_active=1）走，不做租户隔离。见 V105 / AiPromptConfig 注释。
+        Set<String> excluded = Set.of("sys_ai_prompt");
         List<String> bad = new ArrayList<>();
-        for (String table : ALL_TABLES) {
-            if (excluded.contains(table)) continue;
-            Class<?> cls = classFor(table);
-            if (!BaseEntity.class.isAssignableFrom(cls)) bad.add(table);
+        for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
+            if (excluded.contains(e.getKey())) continue;
+            // 表本身就没有 L1 字段的（纯运维表 / AI 会话表）不要求继承，动态豁免
+            if (!e.getValue().contains("tenant_id")) continue;
+            Class<?> cls = classFor(e.getKey());
+            if (!BaseEntity.class.isAssignableFrom(cls)) bad.add(e.getKey());
         }
         assertTrue(bad.isEmpty(), "未继承 BaseEntity：\n" + String.join("\n", bad));
     }
@@ -175,7 +183,7 @@ class EntityMappingConsistencyTest {
         List<String> bad = new ArrayList<>();
         Map<String, Set<String>> schema = readSchemaColumns();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
-            TableInfo info = TableInfoHelper.getTableInfo(classFor(e.getKey()));
+            TableInfo info = tableInfoFor(classFor(e.getKey()));
             if (info == null) continue;
             for (TableFieldInfo fi : info.getFieldList()) {
                 String col = fi.getColumn().toLowerCase();
@@ -191,11 +199,12 @@ class EntityMappingConsistencyTest {
     }
 
     @Test
+    @Transactional
     @DisplayName("6. 真实读库验证 JSON 列真的被反序列化成 List<NodeCfg>（autoResultMap 生效的硬证据）")
     void jsonColumnReallyDeserializesToList() throws Exception {
         ProcessDefMapper mapper = ctxBean(ProcessDefMapper.class);
 
-        // 造一条带 nodeList 的流程定义
+        // 造一条带 nodeList 的流程定义（事务结束自动回滚，不留脏数据）
         ProcessDef def = new ProcessDef();
         def.setProcessCode("MP_TEST_PROC_" + System.nanoTime());
         def.setProcessName("阶段6 JSON 验证");
@@ -218,8 +227,6 @@ class EntityMappingConsistencyTest {
         assertEquals("node_1", first.getNodeId(), "nodeId 应原样读回");
         assertEquals("USER", first.getType(), "type 应原样读回");
         assertEquals(Boolean.TRUE, first.getRejectable(), "rejectable 应原样读回");
-
-        mapper.deleteById(def.getId());
     }
 
     @Autowired
@@ -236,24 +243,29 @@ class EntityMappingConsistencyTest {
         }
     }
 
-    /** 业务表清单（与当前 schema 一致：fin 9 张 + sys 28 张 = 37 张，sys_level 为 V39 新增） */
-    private static final List<String> ALL_TABLES = Arrays.asList(
-            "fin_project", "fin_item", "fin_shipment", "fin_shipment_line",
-            "fin_return_order", "fin_receivable", "fin_receipt", "fin_write_off", "fin_invoice",
-            "sys_process_def", "sys_org", "sys_user", "sys_audit_log", "sys_file_storage",
-            "sys_file_download_log", "sys_dict_type", "sys_dict_data", "sys_config",
-            "sys_role", "sys_permission", "sys_menu", "sys_user_role",
-            "sys_role_permission", "sys_role_menu", "sys_role_conflict",
-            "sys_agreement", "sys_agreement_consent", "sys_agreement_version",
-            "sys_feedback", "sys_feedback_message", "sys_help_article",
-            "sys_login_log", "sys_notification", "sys_notification_template",
-            "sys_post", "sys_token_blacklist", "sys_level");
+    /** TableInfo 缓存兜底：部分实体的 Mapper 在启动期未被访问，需按需初始化 */
+    private static TableInfo tableInfoFor(Class<?> cls) {
+        TableInfo info = TableInfoHelper.getTableInfo(cls);
+        if (info == null) {
+            info = TableInfoHelper.initTableInfo(
+                    new MapperBuilderAssistant(new MybatisConfiguration(), ""), cls);
+        }
+        return info;
+    }
 
+    /**
+     * 表名 → 实体类名。显式映射而非拼字符串：可读、可审计，新增业务表时必须在此登记，
+     * 否则 everyColumnHasEntityProperty 会明确报「未登记的表」。
+     * 值可以是简单类名（com.firestar.entity 包）或全限定名（如 AI 模块）。
+     */
     private static final String[] TABLE_TO_ENTITY = {
             "fin_project=Project", "fin_item=Item", "fin_shipment=Shipment",
             "fin_shipment_line=ShipmentLine", "fin_return_order=ReturnOrder",
             "fin_receivable=Receivable", "fin_receipt=Receipt",
             "fin_write_off=WriteOff", "fin_invoice=Invoice",
+            // V65 / V67 / V68 / V71 新增的四张业务主数据/明细表
+            "fin_invoice_allocation=InvoiceAllocation", "fin_return_line=ReturnLine",
+            "fin_customer=Customer", "fin_goods=Goods",
             "sys_process_def=ProcessDef", "sys_org=Org", "sys_user=User",
             "sys_audit_log=AuditLog", "sys_file_storage=FileStorage",
             "sys_file_download_log=FileDownloadLog", "sys_dict_type=DictType",
@@ -266,16 +278,24 @@ class EntityMappingConsistencyTest {
             "sys_feedback_message=FeedbackMessage", "sys_help_article=HelpArticle",
             "sys_login_log=LoginLog", "sys_notification=Notification",
             "sys_notification_template=NotificationTemplate", "sys_post=Post",
-            "sys_token_blacklist=TokenBlacklist", "sys_level=Level"};
+            "sys_token_blacklist=TokenBlacklist", "sys_level=Level",
+            // V99 / V100 / V105 新增的 AI 模块表：实体在 com.firestar.ai.entity，不继承 BaseEntity
+            "sys_model_config=com.firestar.ai.entity.ModelConfig",
+            "sys_ai_prompt=com.firestar.ai.entity.AiPromptConfig",
+            "ai_conversations=com.firestar.ai.entity.AiConversation",
+            "ai_messages=com.firestar.ai.entity.AiMessage",
+            "ai_tool_calls=com.firestar.ai.entity.AiToolCall"};
 
-    /** 表名 → 实体类名。显式映射而非拼字符串：可读、可审计，类名改了这里立刻报错 */
+    /** 表名 → 实体类。支持简单类名与全限定名两种写法 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {
         for (String pair : TABLE_TO_ENTITY) {
-            String[] kv = pair.split("=");
+            String[] kv = pair.split("=", 2);
             if (kv[0].equals(table)) {
-                return Class.forName("com.firestar.entity." + kv[1]);
+                String name = kv[1];
+                return Class.forName(name.contains(".") ? name : "com.firestar.entity." + name);
             }
         }
-        throw new ClassNotFoundException("未登记的表：" + table);
+        throw new ClassNotFoundException("未登记的表：" + table
+                + "（新增业务表请同步 EntityMappingConsistencyTest.TABLE_TO_ENTITY 映射）");
     }
 }

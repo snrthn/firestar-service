@@ -41,11 +41,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>构造：应收单 1000，已回款 100、已开票 0 → ceiling = 100；未开票余额 1000 充足
  * （保证先过"未开票余额"闸，不会被前面的校验提前拦下，从而精确命中票款勾稽这一段）。</p>
  *
- * <p>基座沿用 BusinessInvariantAndConcurrencyTest：@SpringBootTest + dev 库 + 随机前缀，
+ * <p>基座沿用 BusinessInvariantAndConcurrencyTest：@SpringBootTest + firestar_test 集成测试库 + 随机前缀，
  * 需要可达的 dev MySQL；本类不自行起服务。</p>
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class InvoiceReceiptGateTest {
 
     private static final String PREFIX = "TRG_" + UUID.randomUUID().toString().substring(0, 8) + "_";

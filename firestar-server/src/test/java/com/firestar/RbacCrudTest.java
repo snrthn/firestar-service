@@ -5,25 +5,32 @@ import com.firestar.service.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * P1：RBAC 全套「正向成功路径」冒烟 + 权限防护。
- * 用 @Transactional 让测试在事务内运行、结束自动回滚，不污染 dev 库。
+ * 用 @Transactional 让测试在事务内运行、结束自动回滚，不污染 firestar_test 集成测试库。
  * 每个模块验证：create 成功返回 id / 树形列表可读 / 无 @RequirePerm 权限时被 AOP 拒绝。
  * 注：DTO 字段名以实际定义为基准，若本地编译报字段不存在，按实体提示微调 setter 即可。
  */
 @SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("it")
 @Transactional
 class RbacCrudTest {
+
+    @Autowired private MockMvc mockMvc;
 
     @Autowired private RoleService roleService;
     @Autowired private PermissionService permissionService;
@@ -98,13 +105,17 @@ class RbacCrudTest {
         assertNotNull(orgService.listTree());
     }
 
-    @Test @DisplayName("P1-RBAC：无 system:role:create 权限调用 createRole 被拒绝（AccessDenied）")
-    void createRole_withoutPermission_rejected() {
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken("guest", null, List.of()));
-        RoleRequest r = new RoleRequest();
-        r.setRoleName(uq());
-        r.setRoleCode(uq());
-        assertThrows(AccessDeniedException.class, () -> roleService.createRole(r));
+    @Test
+    @WithMockUser(username = "guest")
+    @DisplayName("P1-RBAC：无 role:create 权限 POST /system/role 被权限拦截器拒绝（code=403）")
+    void createRole_withoutPermission_rejected() throws Exception {
+        // 权限闸在 Controller/MVC 层（@RequirePerm + PermissionInterceptor），Service 直调没有
+        // AOP 校验。所以这里必须走 HTTP 端点才测得到真实拦截；拦截器按项目约定返回
+        // HTTP 200 + Result{code=403}，并不抛 AccessDeniedException。
+        mockMvc.perform(post("/system/role")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleName\":\"" + uq() + "\",\"roleCode\":\"" + uq() + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(403));
     }
 }

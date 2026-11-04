@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "springdoc.swagger-ui.enabled=false"
 })
 @AutoConfigureMockMvc
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class ApiDocsClosedTest {
 
     @Autowired

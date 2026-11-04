@@ -15,14 +15,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import static org.junit.jupiter.api.Assertions.*;
+import org.springframework.test.context.ActiveProfiles;
 
 /**
  * P0：登录业务流（JWT 签发 / 单点登录 jti 轮换 / 登出拉黑）。
- * 集成测试，连 dev 库。@BeforeEach 插入专属测试用户，@AfterEach 清理，互不污染。
+ * 集成测试，连 firestar_test 集成测试库。@BeforeEach 插入专属测试用户，@AfterEach 清理，互不污染。
  * 注意：测试用户字段按 User 实体内省假设（username/password/status/delFlag），
  * 若本地表结构有额外必填，按报错在 setUp 补字段即可。
  */
 @SpringBootTest
+@ActiveProfiles("it")
 class AuthServiceFlowTest {
 
     @Autowired

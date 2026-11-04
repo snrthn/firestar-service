@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 不依赖业务表、不写业务代码，纯 Flowable 引擎论证。
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class PocRejectSkipTest {
 
     @Autowired ProcessEngine engine;

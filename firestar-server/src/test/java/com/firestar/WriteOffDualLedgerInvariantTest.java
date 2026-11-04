@@ -35,14 +35,14 @@ import static org.junit.jupiter.api.Assertions.*;
  * 若二者互相扣减，则「款已收讫但票未开完」这类真实业务状态无法表达。</p>
  *
  * <p>⚠️ 覆盖层级说明：本类为<b>数据层不变量</b>回归（与既有 receivableAmountInvariantHolds 同范式）。
- * 服务级（走审批通过生效核销）验证当前受阻于 dev 库 {@code sys_process_def} 为空——
+ * 服务级（走审批通过生效核销）验证当前受阻于 firestar_test 集成测试库 {@code sys_process_def} 为空——
  * 退货/开票等审批流程未配置，服务内会先抛「流程未配置」而到不了核销逻辑。
  * 待流程配置就绪后可升级为服务级用例。</p>
  *
- * <p>基座：@SpringBootTest + dev 库 + 随机前缀，需要可达的 dev MySQL；本类不自行起服务。</p>
+ * <p>基座：@SpringBootTest + firestar_test 集成测试库 + 随机前缀，需要可达的 dev MySQL；本类不自行起服务。</p>
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class WriteOffDualLedgerInvariantTest {
 
     private static final String PREFIX = "DLG_" + UUID.randomUUID().toString().substring(0, 8) + "_";
@@ -108,6 +108,8 @@ class WriteOffDualLedgerInvariantTest {
             wo.setReceivableId(r.getId());
             wo.setAmount(new BigDecimal("1000.00"));
             wo.setWriteOffDate(LocalDate.now());
+            // fin_write_off.receipt_id 是 NOT NULL 且无外键；双台账不变量不读该列，填占位即可
+            wo.setReceiptId(0L);
             wo.setWriteOffMethod("AUTO");
             wo.setStatus("APPROVED");
             writeOffMapper.insert(wo);
@@ -128,6 +130,8 @@ class WriteOffDualLedgerInvariantTest {
             ia.setAllocationNo(PREFIX + "IA");
             ia.setReceivableId(r.getId());
             ia.setAmount(new BigDecimal("1000.00"));
+            // fin_invoice_allocation.invoice_id 同上
+            ia.setInvoiceId(0L);
             ia.setStatus("APPROVED");
             invoiceAllocationMapper.insert(ia);
 

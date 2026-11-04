@@ -68,6 +68,30 @@ spring.flyway.locations=classpath:db/migration/core,classpath:db/migration/biz
 - `firestar-biz/src/main/resources/db/migration/biz`（43 个，含 V200 起新增）
 - Flyway 按版本号全局排序，与所在目录无关；新增业务迁移用 **V200+**，避免与历史版本冲突。
 - `scripts/reset_flyway.sql` 仅 dev/test 用于清 `flyway_schema_history` 重跑全量，**prod 严禁**。
+- ⚠️ **迁移脚本禁止硬编码库名**：`information_schema` 探测一律用 `DATABASE()`。历史 `V27` / `V28` / `V75` 写死了 `table_schema = 'firestar'`，导致任何库名不叫 `firestar` 的新环境从空库初始化必然挂在 V75。已应用迁移不可改（checksum 铁律），**新迁移一律用 `DATABASE()`**。
+
+## 集成测试（it profile）
+
+集成测试**只连 `firestar_test`，绝不写 dev 库 `firestar`**：
+
+```bash
+bash bin/test.sh                                # 日常一键：重建空库 → Flyway 重放 → 全量 mvn test
+bash bin/test.sh -Dtest=SmokeTest               # 只跑指定测试类（透传 Maven 参数）
+bash bin/test.sh --no-reset -Dtest=RbacCrudTest # 沿用现有库，快速重跑
+bash bin/test.sh --help                         # 帮助
+```
+
+入口 `bin/test.sh` 是薄门面，实现在 `scripts/run-integration-tests.sh`。
+
+⚠️ **不要裸敲 `mvn test`**：干净 shell 缺 `DB_PASSWORD`（真实凭据只允许来自 `.env/dev.env`，不进版本库，空密码连库会 `Access denied`）；且裸跑不会重建库，上轮残留数据可能让用例撞唯一键或种子计数漂移。脚本会自动注入凭据、重建空库、清理 `SPRING_PROFILES_ACTIVE`。
+`SPRING_PROFILES_ACTIVE` / JWT / AI_KEK / Coze 密钥 / OSS 凭据**均已无需手动注入**（15 个 `@SpringBootTest` 统一 `@ActiveProfiles("it")`，测试专用回退值都在 `application-it.properties`）。
+
+- 配置：`firestar-server/src/test/resources/application-it.properties`，只在 test classpath、不进生产 jar；15 个 `@SpringBootTest` 统一 `@ActiveProfiles("it")`。
+- schema + 种子由 Flyway 从空库全量重放自建（109 张表，与 dev 库一致），无需手工导 dump。
+- 3 个测试专用补偿迁移（`src/test/resources/db/migration/it/V26.1` / `V27.1` / `V74.1`）补的是历史脚本硬编码库名跳过的 DDL，只在 it 的 `spring.flyway.locations` 里加载，生产四个 profile 零影响。
+- 期望值单一来源：`DatabaseCheckService` 的表数 / 种子数常量为 public，测试直接引用；`EntityMappingConsistencyTest` 的表清单按 `BUSINESS_TABLE_PREFIXES` 从 JDBC 元数据动态取，不再维护第二份白名单。
+- 云效构建容器无 MySQL，CI 仍只跑纯单测（`SmokeTest` / `AuthControllerStreamTest`）；集成测试在带 MySQL 的本地 / CI sidecar 环境跑。
+- `scripts/reset_test_db.sql` 只 DROP/CREATE `firestar_test`，**prod 严禁**。
 
 ## 当前进度（截至 2026-11-04）
 
@@ -174,4 +198,5 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 - **启停 / CI 同步**：`bin/start.sh`、`stop.sh`、`deploy.sh` 与云效流水线改为 `firestar-server` 口径；流水线用 `staging/` 归集 jar + bin；start.sh 增加清理根 `target` 陈旧 jar 的兜底，消除 `mvn clean` 被旧实例文件锁卡死。
 - **7 项安全遗留项修复**：AI 草稿越权、应收详情越权、核销反核销缺归属校验、Coze 回调 nonce 重放、AI 路径无回归测试、完整重置无密码二次确认、`init/status` 匿名信息暴露。详见「安全契约」章节与 `docs/开发规范.md` 第十四节。
 - **回归测试补齐**：新增 4 条端点级安全契约断言（404 / 404 / 404 / 401）+ 11 个纯逻辑单测；`firestar-core` 16/16、`firestar-biz` 3/3 通过。
+- **方案 B：集成测试库隔离**：新建 `it` profile 与 `firestar_test` 独立库，从空库全量重放 Flyway 自建 schema + 种子；15 个 `@SpringBootTest` 统一切 `it`；`DatabaseCheckService` 期望值 public 化消除测试里的第二份硬编码；修复 8 个测试类的造数 / 权限用例缺陷（权限断言改走 MockMvc 端点级）。全量 `mvn test` **70/70 通过**，dev 库 11 张核心表行数与最大 ID 前后一致（零写入）。同时挖出并记录了 V27/V28/V75 硬编码库名导致「非 `firestar` 库名无法从空库初始化」的生产隐患。
 - **通知类型中文名补全（V200）**：`V97` 种入 `INVOICE_PENDING_ISSUE` 模板时漏写 `template_name` 列，导致【通知记录】页「通知类型」下拉/类型列显示裸码。新增 `V200__invoice_pending_issue_template_name.sql` 幂等回填「待开票通知」，并即时同步 dev 库；同时把 db/migration 旧目录里只剩说明文件的 README 补上「迁移脚本在哪」的指路，避免拆分后找不到版本文件。该迁移不动 `sys_dict_type` / `sys_dict_data`，`DatabaseCheckService.readSeedData` 的 35 / 146 基线不变。

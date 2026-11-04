@@ -28,6 +28,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -46,11 +47,11 @@ import static org.junit.jupiter.api.Assertions.*;
  *   2) <b>应收单金额不变量</b> received + unreceived == receivable_amount（及 writtenOff + unwrittenOff 同式），
  *      这是「账务正确性」的数学契约，后续任何收/核/开票链路测试都应复用此断言。</p>
  *
- * <p>基座沿用 MybatisPlusSmokeTest：@SpringBootTest + dev 库，随机前缀保证幂等、可重复跑。
+ * <p>基座沿用 MybatisPlusSmokeTest：@SpringBootTest + firestar_test 集成测试库，随机前缀保证幂等、可重复跑。
  * 需要可达的 dev MySQL（与现有测试同环境）；本类不自行起服务。</p>
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("it")
 class BusinessInvariantAndConcurrencyTest {
 
     private static final String PREFIX = "BIZ_TEST_"
@@ -233,6 +234,8 @@ class BusinessInvariantAndConcurrencyTest {
         over.setProjectId(p.getId());
         over.setReceiptAmount(new BigDecimal("6350.00"));
         over.setReceiptType("NORMAL");
+        over.setReceiptDate(LocalDate.now());
+        over.setAttachmentFileIds(List.of(999999L));
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> receiptService.create(over),
                 "超收收款必须被后端关口拒绝");
@@ -244,6 +247,8 @@ class BusinessInvariantAndConcurrencyTest {
         ok.setProjectId(p.getId());
         ok.setReceiptAmount(new BigDecimal("100.00"));
         ok.setReceiptType("NORMAL");
+        ok.setReceiptDate(LocalDate.now());
+        ok.setAttachmentFileIds(List.of(999999L));
         assertDoesNotThrow(() -> receiptService.create(ok), "未超收的收款应被放行");
 
         } finally {
