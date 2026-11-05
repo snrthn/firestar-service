@@ -45,7 +45,7 @@ firestar-service/                       # git 仓库根，同时是 Maven reacto
 │   ├── pom.xml                         # 聚合 core + biz，产出唯一可执行 jar
 │   └── src/
 │       ├── main/resources/             # application.properties + application-{dev,test,pre,prod}.properties
-│       └── test/java/com/firestar/     # 17 个集成测试类（@SpringBootTest，需可达 dev MySQL）
+│       └── test/java/com/firestar/     # 18 个测试类（17 个 @SpringBootTest 集成测试 + 1 个独立 MockMvc 切片测试 AuthControllerStreamTest；前者需可达 dev MySQL）
 ├── bin/                                # start.sh / stop.sh / deploy.sh（跨平台运维脚本）
 ├── docs/                               # 开发规范.md / 底座化指南.md / 云效率流水线配置.yaml / git-workflow.md
 ├── scripts/                            # check_module_boundaries.py（CI 守边界）/ reset_flyway.sql（dev 清历史）

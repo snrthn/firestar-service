@@ -5,7 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -96,6 +98,39 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleNotFound(Exception e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(Result.error(404, "接口不存在"));
+    }
+
+    /**
+     * ⚠️ 405 必须显式处理，否则会被兜底 Exception handler 收走 →
+     * HTTP 200 + {"code":500} 壳。Spring 默认会把 MethodNotAllowed 转 405，
+     * 但本类的 @ExceptionHandler(Exception.class) 优先级更高，会先截走。
+     * 例：「只接受 POST 的端点发了 GET」会被吞成 200+500，前端按 body.code 弹
+     * 「服务器内部错误」，排查时误以为后端崩了，实为请求方法不对。
+     * 用 ResponseEntity 才能把 405 状态码带回响应（与 404 / ResponseStatusException 同路）。
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Result<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        String method = e.getMethod() != null ? e.getMethod() : "未知";
+        String[] supported = e.getSupportedMethods();
+        String supportedMsg = supported != null && supported.length > 0
+                ? "（支持：" + String.join("、", supported) + "）"
+                : "";
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(Result.error(405, "不支持的请求方法：" + method + supportedMsg));
+    }
+
+    /**
+     * ⚠️ 400 请求体解析失败必须显式处理：JSON 格式错误、字段类型不匹配、
+     * 必填项缺失导致 Jackson 反序列化失败都会抛 HttpMessageNotReadableException。
+     * 它会被兜底 Exception handler 收走 → HTTP 200 + {"code":500} 壳，
+     * 真实原因（请求体无法读取）被吞，用户只见"服务器内部错误"（2026-11-05 实锤）。
+     * 用 ResponseEntity 才能把 400 状态码带回响应（与 404 同路）。
+     * 异常 message 含 Jackson 内部细节，不原样外抛，统一给可读提示。
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Result<Void>> handleMsgNotReadable(HttpMessageNotReadableException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Result.error(400, "请求体格式错误或无法解析，请检查 JSON 结构与字段类型"));
     }
 
     @ExceptionHandler(Exception.class)

@@ -70,7 +70,7 @@ stages:
                 # =====================================================================
                 echo "[info] Running unit tests only (excluding integration tests that require MySQL)..."
                 mvn -B test \
-                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest' \
+                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,GlobalExceptionHandlerTest' \
                   -Dsurefire.failIfNoSpecifiedTests=false \
                   -Dmaven.test.failure.ignore=false
       build_job:
