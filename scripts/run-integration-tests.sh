@@ -26,6 +26,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# ---- 输出落盘：每次运行覆盖式记录全部输出（含中途轻量异常），便于事后排查 ----
+# 用 tee 但不带 -a => 目标文件在启动时即被截断，重跑即覆盖上一次，不累加写入。
+mkdir -p logs
+IT_LOG="logs/it.log"
+exec > >(tee "$IT_LOG") 2>&1
+echo "[it] 完整输出已记录到 ${IT_LOG}（每次运行覆盖，不累加）"
+
 RESET=1
 MVN_ARGS=()
 for arg in "$@"; do

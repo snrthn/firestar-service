@@ -20,6 +20,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!-- Jackson JSR-310（java.time 序列化）：供 JacksonTypeHandler 注入使用，版本由 spring-boot-dependencies 管理 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
         <!-- JDBC 连接池（HikariCP，MyBatis-Plus 不直接带数据源） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
