@@ -84,6 +84,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtProperties jwtProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final LogService logService;
+    private final LoginProtectService loginProtectService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
@@ -93,6 +94,7 @@ public class AuthServiceImpl implements AuthService {
                            TokenBlacklistService blacklistService,
                            JwtUtil jwtUtil, JwtProperties jwtProperties,
                            LogService logService,
+                           LoginProtectService loginProtectService,
                            ApplicationEventPublisher eventPublisher) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
@@ -108,6 +110,7 @@ public class AuthServiceImpl implements AuthService {
         this.jwtProperties = jwtProperties;
         this.eventPublisher = eventPublisher;
         this.logService = logService;
+        this.loginProtectService = loginProtectService;
     }
 
     @Override
@@ -118,7 +121,16 @@ public class AuthServiceImpl implements AuthService {
             recordLogin(null, username, "FAIL", clientIp, userAgent, "用户名或密码错误");
             throw new BizException("用户名或密码错误");
         }
+        // 爆破防护 L1：锁定期间直接拒绝（统一错误文案，不泄露锁定细节）
+        if (loginProtectService.isLocked(username)) {
+            long secs = loginProtectService.getRemainingLockSeconds(username);
+            long mins = secs / 60 + (secs % 60 > 0 ? 1 : 0);
+            recordLogin(user.getId(), username, "FAIL", clientIp, userAgent, "账号已被临时锁定");
+            throw new BizException("账号已被临时锁定，请" + mins + "分钟后再试");
+        }
         if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+            // 爆破防护 L1：失败计数 +1，达阈值则锁定并写 LOCKED 审计
+            loginProtectService.onLoginFail(user.getId(), username, clientIp, userAgent);
             recordLogin(user.getId(), username, "FAIL", clientIp, userAgent, "用户名或密码错误");
             throw new BizException("用户名或密码错误");
         }
@@ -157,6 +169,8 @@ public class AuthServiceImpl implements AuthService {
         if (kicked) {
             recordLogin(user.getId(), username, "KICKED_OUT", clientIp, userAgent, "账号在其他设备登录，原会话已失效");
         }
+        // 爆破防护 L1：登录成功清零失败计数（解锁被错误锁定的账号）
+        loginProtectService.onLoginSuccess(username);
         recordLogin(user.getId(), username, "SUCCESS", clientIp, userAgent, null);
 
         LoginResponse resp = new LoginResponse();

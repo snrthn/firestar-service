@@ -153,7 +153,10 @@ class EntityMappingConsistencyTest {
         // V105 建表时为了索引 idx_ai_prompt_active(is_active, tenant_id) 带了 tenant_id 列，
         // 但 AiPromptConfig 是轻量配置 POJO（implements Serializable），实体不映射该列，
         // 查询按全局生效行（is_active=1）走，不做租户隔离。见 V105 / AiPromptConfig 注释。
-        Set<String> excluded = Set.of("sys_ai_prompt");
+        // sys_ai_prompt：见上方注释（DDL 带 tenant_id 但实体为轻量配置 POJO，有意不继承 BaseEntity）。
+        // sys_login_fail / sys_login_ip_limit：爆破防护内部状态/计数表，非领域实体，
+        // 用唯一索引 + 原子自增维护，实体为简单 POJO，有意不继承 BaseEntity（与 AI 会话表同类）。
+        Set<String> excluded = Set.of("sys_ai_prompt", "sys_login_fail", "sys_login_ip_limit");
         List<String> bad = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
             if (excluded.contains(e.getKey())) continue;
@@ -276,7 +279,8 @@ class EntityMappingConsistencyTest {
             "sys_agreement=Agreement", "sys_agreement_consent=AgreementConsent",
             "sys_agreement_version=AgreementVersion", "sys_feedback=Feedback",
             "sys_feedback_message=FeedbackMessage", "sys_help_article=HelpArticle",
-            "sys_login_log=LoginLog", "sys_notification=Notification",
+            "sys_login_log=LoginLog", "sys_login_fail=LoginFail", "sys_login_ip_limit=LoginIpLimit",
+            "sys_notification=Notification",
             "sys_notification_template=NotificationTemplate", "sys_post=Post",
             "sys_token_blacklist=TokenBlacklist", "sys_level=Level",
             // V99 / V100 / V105 新增的 AI 模块表：实体在 com.firestar.ai.entity，不继承 BaseEntity

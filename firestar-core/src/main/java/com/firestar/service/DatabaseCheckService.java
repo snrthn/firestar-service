@@ -55,7 +55,7 @@ public class DatabaseCheckService {
      *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）；
      *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46。
      */
-    public static final int EXPECTED_TABLE_COUNT = 46;
+    public static final int EXPECTED_TABLE_COUNT = 48;
 
     /**
      * 种子数据条数基线（与 readSeedData 一一对应）。
@@ -66,7 +66,7 @@ public class DatabaseCheckService {
      * 改这里即可，不要再去测试文件里改数字。
      */
     public static final long EXPECTED_DICT_TYPE_COUNT = 35L;
-    public static final long EXPECTED_DICT_DATA_COUNT = 148L;
+    public static final long EXPECTED_DICT_DATA_COUNT = 150L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     public static final long EXPECTED_ROLE_COUNT = 7L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
