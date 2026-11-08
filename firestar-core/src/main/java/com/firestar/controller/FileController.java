@@ -41,15 +41,22 @@ public class FileController {
         this.fileService = fileService;
     }
 
-    /** 上传文件（multipart/form-data）。服务端中转，见 FileServiceImpl 注释。 */
+    /**
+     * 上传文件（multipart/form-data）。服务端中转，见 FileServiceImpl 注释。
+     *
+     * <p><b>V206 classify 契约</b>：仅文件管理页上传弹窗固定附 {@code classify=true}
+     * （可手选文件类型，不选由服务端按扩展名推导）；其他业务场景不传该参数 →
+     * 一律 {@code ATTACHMENT}。默认 false，避免历史调用方被意外分类。
+     */
     @PostMapping("/upload")
     @RequirePerm("file:upload")
     public Result<FileVO> upload(@RequestParam("file") MultipartFile file,
                                  @RequestParam(required = false) String bizType,
                                  @RequestParam(required = false) Long bizId,
                                  @RequestParam(required = false) String fileType,
-                                 @RequestParam(required = false) String alias) {
-        return Result.success(fileService.upload(file, bizType, bizId, fileType, alias));
+                                 @RequestParam(required = false) String alias,
+                                 @RequestParam(required = false, defaultValue = "false") boolean classify) {
+        return Result.success(fileService.upload(file, bizType, bizId, fileType, alias, classify));
     }
 
     /** 文件分页列表（默认每页 10 条，与前端 el-pagination 默认规格一致）。 */

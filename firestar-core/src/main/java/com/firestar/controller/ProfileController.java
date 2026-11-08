@@ -66,8 +66,10 @@ public class ProfileController {
             throw new BizException("请选择头像文件");
         }
         Long userId = currentUserId();
-        // bizType=avatar 便于文件管理处归类；fileType=IMAGE 走图片类型字典
-        FileVO f = fileService.upload(file, "avatar", userId, "IMAGE", null);
+        // bizType=avatar 便于文件管理处归类；fileType=IMAGE 是后端确知的分类（V206 前
+        // file_type 字典压根没有 IMAGE 这个值，收窄后才补上）。这是内部显式分类、不是用户
+        // 手选，故传 classify=true 保留既有行为；其它业务场景一律 ATTACHMENT。
+        FileVO f = fileService.upload(file, "avatar", userId, "IMAGE", null, true);
         userService.updateAvatar(userId, String.valueOf(f.getId()));
         ProfileMeVO vo = new ProfileMeVO();
         vo.setAvatarUrl(String.valueOf(f.getId()));

@@ -65,8 +65,10 @@ public class DatabaseCheckService {
      * 现在测试直接引用本类常量，生产与测试只维护一份。新增改动种子行数的迁移时，
      * 改这里即可，不要再去测试文件里改数字。
      */
-    public static final long EXPECTED_DICT_TYPE_COUNT = 35L;
-    public static final long EXPECTED_DICT_DATA_COUNT = 150L;
+    // V206：新增字典类型 kb_attachment_role，35→36；本迁移不建表，EXPECTED_TABLE_COUNT 仍为 48。
+    public static final long EXPECTED_DICT_TYPE_COUNT = 36L;
+    // V206：file_type 删 3 加 2、file_biz_type 加 kb_doc、kb_attachment_role 加 4 项 → 150→154。
+    public static final long EXPECTED_DICT_DATA_COUNT = 154L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     public static final long EXPECTED_ROLE_COUNT = 7L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
@@ -349,6 +351,12 @@ public class DatabaseCheckService {
  *   新增 2 个字典项，不新增字典类型 → dictTypeCount 保持 35、dictDataCount 146→148。
  *   本轮同时落地 AuditDictConsistencyTest（代码注解 ↔ 字典双向差集，已接进云效门禁），
  *   只数数量的时代结束：漏补字典会直接让 CI fail，漏改本常量会让 bin/test.sh 全量测试 fail。
+ * V206（file_type 值域收窄 + 知识库字典预备）净变化：
+ *   删 file_type 旧 3 项（BANK_RECEIPT/INVOICE/TEMP）、新增 IMAGE/PDF 2 项、
+ *   file_biz_type 加 kb_doc 1 项、新增字典类型 kb_attachment_role 及其 4 项
+ *   → dictTypeCount 35→36、dictDataCount 150→154。
+ *   ⚠️ V206 不建表：sys_kb_* 三表 / 菜单 9503 / ai:kb:* 权限点留到 V207，
+ *      届时 tableCount 才 48→51，别提前把 48 改掉（改早了 health 直接 DOWN）。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。

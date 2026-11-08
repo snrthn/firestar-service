@@ -37,6 +37,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -65,6 +66,25 @@ public class FileServiceImpl implements FileService {
             "pdf", "jpg", "jpeg", "png", "gif", "webp", "bmp",
             "doc", "docx", "xls", "xlsx", "txt", "csv", "zip", "ofd",
             "mp3", "mp4");
+
+    /**
+     * V206：file_type 值域（纯媒体格式）。服务端白名单，绝不把前端自由字符串直接落库。
+     * 业务凭证语义归 file_biz_type，本集合不再收 BANK_RECEIPT / INVOICE / TEMP。
+     */
+    private static final Set<String> FILE_TYPES =
+            Set.of("IMAGE", "PDF", "AUDIO", "VIDEO", "ATTACHMENT");
+
+    /** V206：扩展名 → 媒体类型。只在 classify=true 且用户未手选时走；未命中一律 ATTACHMENT。 */
+    private static final Map<String, String> EXT_FILE_TYPE = Map.ofEntries(
+            Map.entry("pdf", "PDF"),
+            Map.entry("jpg", "IMAGE"),
+            Map.entry("jpeg", "IMAGE"),
+            Map.entry("png", "IMAGE"),
+            Map.entry("gif", "IMAGE"),
+            Map.entry("webp", "IMAGE"),
+            Map.entry("bmp", "IMAGE"),
+            Map.entry("mp3", "AUDIO"),
+            Map.entry("mp4", "VIDEO"));
 
     /** 与 application.properties 的 spring.servlet.multipart.max-file-size 保持一致，此处为二次兜底 */
     private static final long MAX_SIZE = 20L * 1024 * 1024;
@@ -125,7 +145,8 @@ public class FileServiceImpl implements FileService {
 
     @Override
     @Auditable(operationType = "UPLOAD", targetType = "FILE", targetIdSpEl = "#result.id", entityClass = FileStorage.class, fields = {"originalName", "alias", "fileType", "bizType", "fileSize", "storageType", "status"})
-    public FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType, String alias) {
+    public FileVO upload(MultipartFile file, String bizType, Long bizId, String fileType, String alias,
+                         boolean classify) {
         if (file == null || file.isEmpty()) {
             throw new BizException("请选择要上传的文件");
         }
@@ -162,7 +183,7 @@ public class FileServiceImpl implements FileService {
             entity.setStoragePath(objectKey);
             entity.setStorageType(storage.type());
             entity.setBucketName(bucket);
-            entity.setFileType(StringUtils.hasText(fileType) ? fileType : "ATTACHMENT");
+            entity.setFileType(resolveFileType(fileType, ext, classify));
             entity.setBizType(StringUtils.hasText(bizType) ? bizType : null);
             entity.setBizId(bizId);
             entity.setUploaderId(currentUserId());
@@ -185,6 +206,41 @@ public class FileServiceImpl implements FileService {
         } finally {
             deleteQuietly(temp);
         }
+    }
+
+    /**
+     * V206 媒体类型解析（classify 契约，见 FileService#upload）。
+     *
+     * <p>【为什么 classify 必须显式】上传接口只有一个 /files/upload，服务端无法从请求本身
+     * 判断调用方是「文件管理页」还是「某张单据的附件上传」。若靠"是否传了 fileType"
+     * 来猜，就会退回隐式契约：业务组件哪天顺手带一个类型，分类口径立刻漂掉。
+     * 现在前端只能声明"要不要分类"，分类结果由服务端定，前端绕不过去。
+     *
+     * <p>包级可见 + static：便于 FileTypeResolveTest 纯逻辑验证，不需要 Spring 上下文、
+     * 不需要 Mock FileStorageMapper / OSS，也不碰数据库。
+     */
+    static String resolveFileType(String fileType, String ext, boolean classify) {
+        if (!classify) {
+            // 其他所有业务场景：一律兜底，连伪造的 fileType 也忽略
+            return "ATTACHMENT";
+        }
+        if (StringUtils.hasText(fileType)) {
+            String v = fileType.trim().toUpperCase(Locale.ROOT);
+            if (!FILE_TYPES.contains(v)) {
+                throw new BizException("文件类型不合法：" + fileType
+                        + "（仅允许 IMAGE/PDF/AUDIO/VIDEO/ATTACHMENT）");
+            }
+            return v;
+        }
+        return inferByExt(ext);
+    }
+
+    /** 按扩展名推导媒体类型；未命中（office/zip/ofd/txt/csv 等）归 ATTACHMENT。 */
+    static String inferByExt(String ext) {
+        if (!StringUtils.hasText(ext)) {
+            return "ATTACHMENT";
+        }
+        return EXT_FILE_TYPE.getOrDefault(ext.toLowerCase(Locale.ROOT), "ATTACHMENT");
     }
 
     @Override
