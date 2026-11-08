@@ -53,9 +53,10 @@ public class DatabaseCheckService {
      *            V99 新增 sys_model_config（AI 模型配置），41→42；
      *            V100 新增 ai_conversations / ai_messages / ai_tool_calls（AI 会话三表），
      *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）；
-     *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46。
+     *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46；
+     *            V207 新增 sys_kb_doc / sys_kb_chunk / sys_kb_attachment（知识库三表），48→51。
      */
-    public static final int EXPECTED_TABLE_COUNT = 48;
+    public static final int EXPECTED_TABLE_COUNT = 51;
 
     /**
      * 种子数据条数基线（与 readSeedData 一一对应）。
@@ -357,6 +358,10 @@ public class DatabaseCheckService {
  *   → dictTypeCount 35→36、dictDataCount 150→154。
  *   ⚠️ V206 不建表：sys_kb_* 三表 / 菜单 9503 / ai:kb:* 权限点留到 V207，
  *      届时 tableCount 才 48→51，别提前把 48 改掉（改早了 health 直接 DOWN）。
+ * V207（知识库三表 + 菜单 9503 / BUTTON 子节点 + ai:kb:* 权限点）净变化：
+ *   仅新增 3 张 sys_ 表（doc / chunk / attachment），不动任何字典行
+ *   → dictTypeCount 保持 36、dictDataCount 保持 154，tableCount 48→51。
+ *   菜单与权限点不在本类计数口径内，其它常量无需改动。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
