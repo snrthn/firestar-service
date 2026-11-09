@@ -80,7 +80,7 @@ public class KeywordRerankRetriever implements KbRetriever {
             mdHits.add(new KbChunkHit(
                     c.getDocId(), c.getVersion(), "MD", doc.getTitle(),
                     c.getHeadingPath(), c.getAnchor(), c.getContent(),
-                    c.getSourceRef(), 0.0));
+                    c.getSourceRef(), 0.0, KbChunkHit.parseFileId(c.getSourceRef())));
         }
 
         // 3) 帮助中心文章：即时切片（对全员可见，无 ACL）
@@ -93,7 +93,7 @@ public class KeywordRerankRetriever implements KbRetriever {
         scored = scored.stream()
                 .map(h -> new KbChunkHit(h.docId(), h.version(), h.sourceType(), h.title(),
                         h.headingPath(), h.anchor(), h.content(), h.sourceRef(),
-                        score(h, terms)))
+                        score(h, terms), h.fileId()))
                 .filter(h -> h.score() > 0)
                 .sorted(Comparator.comparingDouble(KbChunkHit::score).reversed())
                 .collect(Collectors.toList());

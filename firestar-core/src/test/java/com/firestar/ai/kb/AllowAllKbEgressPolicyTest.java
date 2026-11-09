@@ -11,7 +11,7 @@ class AllowAllKbEgressPolicyTest {
     @Test
     void allowAlwaysTrue() {
         AllowAllKbEgressPolicy policy = new AllowAllKbEgressPolicy();
-        KbChunkHit hit = new KbChunkHit(1L, 1, "MD", "标题", "根", "sec", "内容", "kb:doc/1/v1/sec", 1.0);
+        KbChunkHit hit = new KbChunkHit(1L, 1, "MD", "标题", "根", "sec", "内容", "kb:doc/1/v1/sec", 1.0, 0L);
         assertTrue(policy.allow(hit, new KbSearchContext(false, java.util.Set.of(), 0L)));
     }
 }

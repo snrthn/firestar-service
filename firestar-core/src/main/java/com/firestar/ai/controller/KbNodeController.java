@@ -6,12 +6,14 @@ import com.firestar.ai.vo.KbDocUpdateReq;
 import com.firestar.ai.vo.KbNodeCreateReq;
 import com.firestar.ai.vo.KbNodeMoveReq;
 import com.firestar.ai.vo.KbNodePageVO;
+import com.firestar.ai.vo.KbAttachmentInfo;
 import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.common.SecurityContextUtils;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -107,6 +109,35 @@ public class KbNodeController {
         return Result.success();
     }
 
+    /** 文档的 REFERENCE 附件列表（补充材料卡片用） */
+    @GetMapping("/docs/{id}/attachments")
+    public Result<List<KbAttachmentInfo>> attachments(@PathVariable Long id) {
+        return Result.success(service.listReferenceAttachments(id));
+    }
+
+    /** 新增 REFERENCE 附件（默认纳入检索，下次发布生效） */
+    @PostMapping("/docs/{id}/attachments")
+    @RequirePerm("ai:kb:edit")
+    public Result<Long> addAttachment(@PathVariable Long id, @RequestBody FileIdRequest req) {
+        return Result.success(service.addReferenceAttachment(id, req.getFileId(), operator()));
+    }
+
+    /** 删除 REFERENCE 附件关系 */
+    @DeleteMapping("/attachments/{attId}")
+    @RequirePerm("ai:kb:edit")
+    public Result<Void> removeAttachment(@PathVariable Long attId) {
+        service.removeAttachment(attId, operator());
+        return Result.success();
+    }
+
+    /** 切换 REFERENCE 附件是否纳入检索 */
+    @PutMapping("/attachments/{attId}/indexable")
+    @RequirePerm("ai:kb:edit")
+    public Result<Void> setAttachmentIndexable(@PathVariable Long attId, @RequestBody IndexableRequest req) {
+        service.setAttachmentIndexable(attId, req.getIndexable() == null ? 0 : req.getIndexable(), operator());
+        return Result.success();
+    }
+
     private String operator() {
         return SecurityContextUtils.currentUsername();
     }
@@ -115,5 +146,17 @@ public class KbNodeController {
     @Setter
     public static class TitleRequest {
         private String title;
+    }
+
+    @Getter
+    @Setter
+    public static class FileIdRequest {
+        private Long fileId;
+    }
+
+    @Getter
+    @Setter
+    public static class IndexableRequest {
+        private Integer indexable;
     }
 }

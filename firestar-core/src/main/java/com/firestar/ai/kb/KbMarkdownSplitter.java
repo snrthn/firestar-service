@@ -38,7 +38,7 @@ public final class KbMarkdownSplitter {
     }
 
     /**
-     * 把一篇 MD 文档切成 chunk 实体。
+     * 把一篇 MD 文档切成 chunk 实体（sourceRef 前缀为 {@code kb:doc/<docId>/v<version>}）。
      *
      * @param docId   文档 id（HelpArticle 用负 id 虚拟）
      * @param version 文档版本（HelpArticle 固定 1）
@@ -46,6 +46,28 @@ public final class KbMarkdownSplitter {
      * @return 有序 chunk 列表，seq 从 0 起；空正文返回空列表
      */
     public static List<KbChunk> splitToChunks(long docId, int version, String md) {
+        return splitToChunks(docId, version, md, "kb:doc/" + docId + "/v" + version);
+    }
+
+    /**
+     * 切片（带自定义 sourceRef 前缀，供 REFERENCE 附件复用）。
+     *
+     * <p>与 {@link #splitToChunks(long, int, String)} 唯一区别：每个 chunk 的
+     * {@code sourceRef} 用 {@code sourceRefBase + "/" + anchor} 拼，而不是固定的
+     * {@code kb:doc/<docId>/v<version>}。附件索引时传 {@code kb:att/<fileId>}，
+     * 让检索命中能反解出 {@code fileId}（见 {@link KbChunkHit#parseFileId}）。</p>
+     *
+     * <p>注意：切片实体仍归属 {@code docId}/{@code version}（与文档同版本、同 status=1），
+     * 因此被 {@code KbChunkMapper.fulltextSearch} 的主链路天然召回，无需改 SQL；
+     * 只在 {@code sourceRef} 里埋 fileId 供出域/引用使用。</p>
+     *
+     * @param docId        归属文档 id（与 MD 文档一致，保证同版本召回）
+     * @param version      文档版本
+     * @param md           待切片 Markdown（附件场景为「# 文件名\n\n」+ 解析文本）
+     * @param sourceRefBase 出处前缀，不含结尾 {@code /}
+     * @return 有序 chunk 列表，seq 从 0 起
+     */
+    public static List<KbChunk> splitToChunks(long docId, int version, String md, String sourceRefBase) {
         List<Block> blocks = parseBlocks(md);
         List<KbChunk> chunks = new ArrayList<>();
         int seq = 0;
@@ -59,7 +81,7 @@ public final class KbMarkdownSplitter {
                 c.setAnchor(b.anchor);
                 c.setContent(ct.content);
                 c.setTokenCnt(ct.tokens);
-                c.setSourceRef("kb:doc/" + docId + "/v" + version + "/" + b.anchor);
+                c.setSourceRef(sourceRefBase + "/" + b.anchor);
                 c.setEmbeddingRef(null);
                 c.setVectorStatus("NONE");
                 c.setStatus(1);

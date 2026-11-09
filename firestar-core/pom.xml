@@ -120,6 +120,13 @@
             <version>5.2.5</version>
         </dependency>
 
+        <!-- PDF 文本抽取（REFERENCE 附件解析，步骤 5 扩展）：PDFBox 3.0.3 兼容 Java 17 -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
+        </dependency>
+
         <!-- 阿里云 OSS 对象存储 -->
         <dependency>
             <groupId>com.aliyun.oss</groupId>

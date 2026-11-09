@@ -15,11 +15,16 @@ import com.firestar.ai.vo.KbNodeCreateReq;
 import com.firestar.ai.vo.KbNodeMoveReq;
 import com.firestar.ai.vo.KbNodePageVO;
 import com.firestar.ai.vo.KbNodeVO;
+import com.firestar.ai.vo.KbAttachmentInfo;
+import com.firestar.ai.kb.KbFileTextExtractor;
 import com.firestar.annotation.Auditable;
 import com.firestar.common.SecurityContextUtils;
 import com.firestar.entity.FileStorage;
 import com.firestar.exception.BizException;
 import com.firestar.mapper.FileStorageMapper;
+import com.firestar.service.FileStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -31,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -48,26 +54,34 @@ import java.util.stream.Collectors;
 @Service
 public class KbDocService {
 
+    private static final Logger log = LoggerFactory.getLogger(KbDocService.class);
+
     private static final String ROLE_INLINE = "INLINE";
+    private static final String ROLE_REFERENCE = "REFERENCE";
     private static final String ROLE_ORIGINAL = "ORIGINAL";
     private static final String ROLE_EXPIRED = "EXPIRED";
     private static final String STATUS_PUBLISHED = "PUBLISHED";
     private static final String TYPE_FOLDER = "FOLDER";
     private static final String TYPE_DOC = "DOC";
+    private static final String FILE_NORMAL = "NORMAL";
+    private static final String STORAGE_LOCAL = "LOCAL";
 
     private final KbDocMapper docMapper;
     private final KbAttachmentMapper attachmentMapper;
     private final KbChunkMapper chunkMapper;
     private final FileStorageMapper fileMapper;
+    private final FileStorageService fileStorageService;
 
     public KbDocService(KbDocMapper docMapper,
                         KbAttachmentMapper attachmentMapper,
                         KbChunkMapper chunkMapper,
-                        FileStorageMapper fileMapper) {
+                        FileStorageMapper fileMapper,
+                        FileStorageService fileStorageService) {
         this.docMapper = docMapper;
         this.attachmentMapper = attachmentMapper;
         this.chunkMapper = chunkMapper;
         this.fileMapper = fileMapper;
+        this.fileStorageService = fileStorageService;
     }
 
     // ==================== 查询 ====================
@@ -395,7 +409,20 @@ public class KbDocService {
                 .set(KbChunk::getStatus, 0));
         // 步骤 5：按新版本重新切片并落库（splitToChunks 已置 status=1 / vectorStatus=NONE /
         // createdAt / tenantId=0，此处直接 insert；version 与文档新版本对齐，保证检索只命中最新版）
-        for (KbChunk c : KbMarkdownSplitter.splitToChunks(id, newVersion, d.getContentMd())) {
+        List<KbChunk> chunks = new ArrayList<>(
+                KbMarkdownSplitter.splitToChunks(id, newVersion, d.getContentMd()));
+        // REFERENCE 附件：解析文本 → 切片 → 同 docId/version 落库，被主检索链路天然召回
+        for (KbAttachment att : attachmentMapper.selectList(
+                new LambdaQueryWrapper<KbAttachment>()
+                        .eq(KbAttachment::getDocId, id)
+                        .eq(KbAttachment::getRole, ROLE_REFERENCE)
+                        .eq(KbAttachment::getIndexable, 1))) {
+            indexReferenceAttachment(id, newVersion, att, chunks);
+        }
+        // 统一顺序编号后落库（避免 MD 切片与附件切片 seq 重叠，虽无唯一约束但保持可读）
+        int seq = 0;
+        for (KbChunk c : chunks) {
+            c.setSeq(seq++);
             chunkMapper.insert(c);
         }
         attachmentMapper.update(null, new LambdaUpdateWrapper<KbAttachment>()
@@ -403,6 +430,165 @@ public class KbDocService {
                 .eq(KbAttachment::getRole, ROLE_ORIGINAL)
                 .set(KbAttachment::getRole, ROLE_EXPIRED)
                 .set(KbAttachment::getExpiredAt, now));
+    }
+
+    // ==================== 附件（REFERENCE）管理 ====================
+
+    /** 列出文档的 REFERENCE 附件（补充材料，前端附件卡片用，带回原文件名） */
+    public List<KbAttachmentInfo> listReferenceAttachments(Long docId) {
+        KbDoc d = require(docId);
+        assertVisible(d);
+        List<KbAttachment> list = attachmentMapper.selectList(new LambdaQueryWrapper<KbAttachment>()
+                .eq(KbAttachment::getDocId, docId)
+                .eq(KbAttachment::getRole, ROLE_REFERENCE)
+                .orderByAsc(KbAttachment::getSortNo, KbAttachment::getId));
+        if (list.isEmpty()) {
+            return List.of();
+        }
+        List<Long> fileIds = list.stream().map(KbAttachment::getFileId).distinct().toList();
+        Map<Long, FileStorage> fileMap = fileMapper.selectBatchIds(fileIds).stream()
+                .collect(java.util.stream.Collectors.toMap(FileStorage::getId, f -> f, (a, b) -> a));
+        List<KbAttachmentInfo> out = new ArrayList<>();
+        for (KbAttachment a : list) {
+            KbAttachmentInfo info = new KbAttachmentInfo();
+            info.setId(a.getId());
+            info.setDocId(a.getDocId());
+            info.setFileId(a.getFileId());
+            FileStorage fs = fileMap.get(a.getFileId());
+            info.setOriginalName(fs == null ? null : fs.getOriginalName());
+            info.setIndexable(a.getIndexable());
+            info.setEgressAllowed(a.getEgressAllowed());
+            info.setSortNo(a.getSortNo());
+            info.setCreatedAt(a.getCreatedAt());
+            out.add(info);
+        }
+        return out;
+    }
+
+    /**
+     * 新增 REFERENCE 附件并默认纳入检索（indexable=1）。
+     *
+     * <p>先校验文件真实存在且状态 NORMAL（防伪造 fileId）；同一 fileId 已挂过 REFERENCE 则幂等返回旧记录。
+     * 仅登记关系，<b>不立即切片</b>——切片在下次 {@link #publish} 时与正文一并重新生成，
+     * 与「发布才生效」的语义一致（草稿态改附件不影响线上检索）。</p>
+     */
+    @Transactional
+    @Auditable(operationType = "CREATE", targetType = "KB_ATTACHMENT",
+            targetIdSpEl = "#result", fields = {"docId", "fileId"})
+    public Long addReferenceAttachment(Long docId, Long fileId, String operator) {
+        KbDoc d = require(docId);
+        assertVisible(d);
+        if (isFolder(d)) {
+            throw new BizException("文件夹不能挂附件");
+        }
+        if (fileId == null || fileId == 0L) {
+            throw new BizException("缺少文件 id");
+        }
+        FileStorage fs = fileMapper.selectById(fileId);
+        if (fs == null || !FILE_NORMAL.equals(fs.getStatus())) {
+            throw new BizException("文件不存在或已删除，请重新上传");
+        }
+        KbAttachment existing = attachmentMapper.selectOne(new LambdaQueryWrapper<KbAttachment>()
+                .eq(KbAttachment::getDocId, docId)
+                .eq(KbAttachment::getFileId, fileId)
+                .eq(KbAttachment::getRole, ROLE_REFERENCE));
+        if (existing != null) {
+            return existing.getId();
+        }
+        LocalDateTime now = LocalDateTime.now();
+        KbAttachment a = new KbAttachment();
+        a.setDocId(docId);
+        a.setFileId(fileId);
+        a.setRole(ROLE_REFERENCE);
+        a.setIndexable(1);
+        a.setEgressAllowed(1);
+        a.setSortNo(0);
+        a.setCreatedBy(operator);
+        a.setCreatedAt(now);
+        a.setTenantId(0L);
+        attachmentMapper.insert(a);
+        return a.getId();
+    }
+
+    /** 删除 REFERENCE 附件关系（仅登记层，不删 sys_file_storage 原文件） */
+    @Transactional
+    @Auditable(operationType = "DELETE", targetType = "KB_ATTACHMENT",
+            targetIdSpEl = "#attId", fields = {"docId"})
+    public void removeAttachment(Long attId, String operator) {
+        KbAttachment a = attachmentMapper.selectById(attId);
+        if (a == null) {
+            throw new BizException("附件关系不存在");
+        }
+        require(a.getDocId());
+        attachmentMapper.deleteById(attId);
+    }
+
+    /** 切换 REFERENCE 附件是否纳入检索；改的是登记层的 indexable，下次发布生效 */
+    @Transactional
+    @Auditable(operationType = "UPDATE", targetType = "KB_ATTACHMENT",
+            targetIdSpEl = "#attId", fields = {"indexable"})
+    public void setAttachmentIndexable(Long attId, int indexable, String operator) {
+        KbAttachment a = attachmentMapper.selectById(attId);
+        if (a == null) {
+            throw new BizException("附件关系不存在");
+        }
+        require(a.getDocId());
+        attachmentMapper.update(null, new LambdaUpdateWrapper<KbAttachment>()
+                .eq(KbAttachment::getId, attId)
+                .set(KbAttachment::getIndexable, indexable == 1 ? 1 : 0));
+    }
+
+    /**
+     * 把单条 REFERENCE 附件解析为文本并切片，追加到待落库 chunks。
+     *
+     * <p>边界处理（任意失败都不阻断发布，只记日志跳过）：
+     * <ul>
+     *   <li>文件不存在 / 已删除 → 跳过；</li>
+     *   <li><b>OSS 存储</b>：v1 服务端无读流能力（{@code FileStorageService.read} 仅 LOCAL 支持），
+     *       跳过并提示需切本地存储或后续接 OSS 服务端下载；</li>
+     *   <li>解析失败 / 不支持的类型 / 抽取为空 → 跳过。</li>
+     * </ul>
+     * 切片 sourceRef 前缀为 {@code kb:att/<fileId>}，供检索反解 fileId。</p>
+     */
+    private void indexReferenceAttachment(Long docId, int version, KbAttachment att, List<KbChunk> out) {
+        Long fileId = att.getFileId();
+        FileStorage fs = fileMapper.selectById(fileId);
+        if (fs == null || !FILE_NORMAL.equals(fs.getStatus())) {
+            log.warn("REFERENCE 附件文件不存在或已删除，跳过索引：docId={}, fileId={}", docId, fileId);
+            return;
+        }
+        if (!STORAGE_LOCAL.equals(fileStorageService.type())) {
+            log.warn("非本地存储（{}）暂不支持服务端解析，跳过附件索引：docId={}, fileId={}，"
+                    + "可改用本地存储或后续接入 OSS 服务端下载", fileStorageService.type(), docId, fileId);
+            return;
+        }
+        byte[] data;
+        try (java.io.InputStream in = fileStorageService.read(fs.getStoragePath())) {
+            data = in.readAllBytes();
+        } catch (Exception e) {
+            log.warn("读取 REFERENCE 附件字节失败，跳过索引：docId={}, fileId={}, err={}",
+                    docId, fileId, e.getMessage());
+            return;
+        }
+        String text;
+        try {
+            text = KbFileTextExtractor.extract(fs.getOriginalName(), data);
+        } catch (KbFileTextExtractor.UnsupportedFileTypeException e) {
+            log.warn("REFERENCE 附件类型不支持，跳过索引：docId={}, fileId={}, name={}",
+                    docId, fileId, fs.getOriginalName());
+            return;
+        } catch (Exception e) {
+            log.warn("解析 REFERENCE 附件失败，跳过索引：docId={}, fileId={}, name={}, err={}",
+                    docId, fileId, fs.getOriginalName(), e.getMessage());
+            return;
+        }
+        if (text == null || text.isBlank()) {
+            log.warn("REFERENCE 附件抽取文本为空，跳过索引：docId={}, fileId={}, name={}",
+                    docId, fileId, fs.getOriginalName());
+            return;
+        }
+        String md = "# " + (fs.getOriginalName() == null ? "附件" : fs.getOriginalName()) + "\n\n" + text;
+        out.addAll(KbMarkdownSplitter.splitToChunks(docId, version, md, "kb:att/" + fileId));
     }
 
     // ==================== 私有 ====================

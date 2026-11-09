@@ -234,7 +234,7 @@ public class ToolExecutor {
         return s == null ? "" : s.replace("\"", "'").replace("\n", " ").replace("\r", " ");
     }
 
-    /** 把知识检索命中拼成结构化 JSON 数组（供模型引用，含出处 sourceRef） */
+    /** 把知识检索命中拼成结构化 JSON 数组（供模型引用，含出处 sourceRef / fileId） */
     private String toKnowledgeResult(List<KbChunkHit> hits) throws Exception {
         ArrayNode arr = objectMapper.createArrayNode();
         for (KbChunkHit h : hits) {
@@ -246,6 +246,10 @@ public class ToolExecutor {
             o.put("content", h.content());
             o.put("sourceRef", h.sourceRef());
             o.put("score", h.score());
+            // fileId>0 表示命中来自 REFERENCE 附件，模型可据此引用附件原文
+            if (h.fileId() != null && h.fileId() > 0) {
+                o.put("fileId", h.fileId());
+            }
             arr.add(o);
         }
         return objectMapper.writeValueAsString(arr);

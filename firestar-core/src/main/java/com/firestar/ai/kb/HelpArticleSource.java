@@ -108,7 +108,7 @@ public final class HelpArticleSource {
                         -a.getId(), 1, "HELP_ARTICLE", title,
                         c.getHeadingPath(), c.getAnchor(), c.getContent(),
                         "kb:help/" + a.getId() + "/v1/" + c.getAnchor(),
-                        0.0));
+                        0.0, 0L));
             }
         }
         return hits;
