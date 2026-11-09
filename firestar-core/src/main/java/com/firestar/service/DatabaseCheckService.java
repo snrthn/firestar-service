@@ -72,7 +72,8 @@ public class DatabaseCheckService {
     public static final long EXPECTED_DICT_TYPE_COUNT = 36L;
     // V206：file_type 删 3 加 2、file_biz_type 加 kb_doc、kb_attachment_role 加 4 项 → 150→154。
     // V209：@Auditable(targetType="KB_DOC") 补 audit_target_type 字典 1 项 → 154→155。
-    public static final long EXPECTED_DICT_DATA_COUNT = 155L;
+    // V210：@Auditable(targetType="KB_ATTACHMENT") 补 audit_target_type 字典 1 项 → 155→156。
+    public static final long EXPECTED_DICT_DATA_COUNT = 156L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     public static final long EXPECTED_ROLE_COUNT = 7L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
