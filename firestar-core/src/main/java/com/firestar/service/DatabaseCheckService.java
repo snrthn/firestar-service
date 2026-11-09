@@ -71,7 +71,8 @@ public class DatabaseCheckService {
     // V206：新增字典类型 kb_attachment_role，35→36；本迁移不建表，EXPECTED_TABLE_COUNT 仍为 48。
     public static final long EXPECTED_DICT_TYPE_COUNT = 36L;
     // V206：file_type 删 3 加 2、file_biz_type 加 kb_doc、kb_attachment_role 加 4 项 → 150→154。
-    public static final long EXPECTED_DICT_DATA_COUNT = 154L;
+    // V209：@Auditable(targetType="KB_DOC") 补 audit_target_type 字典 1 项 → 154→155。
+    public static final long EXPECTED_DICT_DATA_COUNT = 155L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     public static final long EXPECTED_ROLE_COUNT = 7L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
@@ -369,6 +370,11 @@ public class DatabaseCheckService {
  *   node_type 是 Java enum 硬编码、不占字典行；树形操作复用 ai:kb:edit，不加菜单权限
  *   → tableCount 仍 51、dictTypeCount 仍 36、dictDataCount 仍 154，**三个常量全不用改**。
  *   ⚠️ 别因为「迁移改了表」就习惯性给 tableCount +1：加列不是加表。
+ * V209（步骤 4.5 补 audit_target_type 的 KB_DOC）净变化：
+ *   KbDocService 六个写方法标了 @Auditable(targetType="KB_DOC")，
+ *   AuditDictConsistencyTest 双向差集要求在字典里真实存在，故新增 1 条 sys_dict_data，
+ *   不新增字典类型、不建表 → tableCount 仍 51、dictTypeCount 仍 36、dictDataCount 154→155。
+ *   ⚠️ 这是「枚举与字典双写」的第 5 轮补漏，已有 CI 门禁兜底，别绕过测试直接改注解值。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
