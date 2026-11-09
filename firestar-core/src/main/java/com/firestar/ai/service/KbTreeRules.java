@@ -6,11 +6,13 @@ import com.firestar.exception.BizException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -60,6 +62,78 @@ public final class KbTreeRules {
             }
         }
         return max + 10;
+    }
+
+    /** 移动位置：成为 target 的兄弟并排在它之前（Confluence before） */
+    public static final String POS_BEFORE = "BEFORE";
+    /** 移动位置：成为 target 的兄弟并排在它之后（Confluence after） */
+    public static final String POS_AFTER = "AFTER";
+    /** 移动位置：成为 target 的子节点并追加末尾（Confluence append） */
+    public static final String POS_APPEND = "APPEND";
+
+    /** 位置归一：null / 空 → APPEND，统一大写（前端误传小写也容错） */
+    public static String normalizePosition(String raw) {
+        return raw == null || raw.isBlank() ? POS_APPEND : raw.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * 解析相对位置，产出「插入后」同一父级下的完整 id 顺序（含被移动节点）。
+     * Service 据 (index+1)*10 整组重排 sort_no，前端不再参与任何排序号计算。
+     *
+     * <p>口径与 {@code KbDocService.nodes()}、前端 {@code kbTree.ts bySort} 完全一致：
+     * 同级先 sortNo 再 id 升序；目录(FOLDER)与文档(DOC)<b>混排</b>、不按类型分组，
+     * 因此混排拖拽也能得到确定顺序 —— 这是 §21 修复的核心。</p>
+     *
+     * @param targetId BEFORE / AFTER 时的锚点兄弟 id；APPEND 时忽略
+     * @throws BizException 锚点缺失 / 不是同父兄弟 / position 非法
+     */
+    public static List<Long> resolveSiblingOrder(List<KbDoc> all, long id, long newParentId,
+                                                 String position, Long targetId) {
+        List<KbDoc> siblings = new ArrayList<>();
+        for (KbDoc d : all) {
+            if (d.getId() == null || d.getId() == id) {
+                continue;
+            }
+            Long pid = d.getParentId();
+            long p = pid == null ? 0L : pid;
+            if (p == newParentId) {
+                siblings.add(d);
+            }
+        }
+        // 与 nodes() 的 Comparator 逐项对齐：sortNo(null=0) → id(null=0)
+        siblings.sort(Comparator
+                .comparingInt((KbDoc d) -> d.getSortNo() == null ? 0 : d.getSortNo())
+                .thenComparingLong(d -> d.getId() == null ? 0L : d.getId()));
+
+        String pos = normalizePosition(position);
+        int index = siblings.size();
+        if (POS_BEFORE.equals(pos) || POS_AFTER.equals(pos)) {
+            if (targetId == null) {
+                throw new BizException("相对位置缺少目标兄弟节点");
+            }
+            int anchor = -1;
+            for (int i = 0; i < siblings.size(); i++) {
+                Long sid = siblings.get(i).getId();
+                // Long 必须用 longValue 比较，不能用 ==（引用比较会踩缓存区间陷阱）
+                if (sid != null && sid.longValue() == targetId.longValue()) {
+                    anchor = i;
+                    break;
+                }
+            }
+            if (anchor < 0) {
+                throw new BizException("目标节点不是同一父级下的兄弟: " + targetId);
+            }
+            index = POS_BEFORE.equals(pos) ? anchor : anchor + 1;
+        } else if (!POS_APPEND.equals(pos)) {
+            throw new BizException("不支持的移动位置: " + position);
+        }
+
+        List<Long> order = new ArrayList<>(siblings.size() + 1);
+        for (KbDoc d : siblings) {
+            order.add(d.getId());
+        }
+        order.add(index, id);
+        return order;
     }
 
     /**

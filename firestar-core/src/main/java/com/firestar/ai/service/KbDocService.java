@@ -255,7 +255,18 @@ public class KbDocService {
                 .set(KbDoc::getUpdatedAt, LocalDateTime.now()));
     }
 
-    /** 移动：防环 + 重算自身 path + 批量重算整棵子树 path（物化路径必须跟着改） */
+    /**
+     * 移动：防环 + 重算自身与整棵子树 path + <b>整组重排同级 sort_no</b>。
+     *
+     * <p>契约（§21，对齐飞书「前端不碰排序号」+ Confluence 相对位置）：前端只发
+     * {@code position + targetId}，不传排序号。BEFORE/AFTER 以目标兄弟的父为新父，
+     * APPEND 以 targetId 为新父（0 = 根）；服务端据
+     * {@link KbTreeRules#resolveSiblingOrder} 得到插入后的完整顺序，在同一事务里把
+     * 同父兄弟的 sort_no 统一改成 10/20/30…，避免前端算号导致的「拖到 A 前面却跑到
+     * 末尾」「目录文件混排顺序漂移」。目录与文档同级混排，不按 node_type 分组。</p>
+     *
+     * <p>position 为空时回落到旧的 parentId + sortNo 通道，兼容存量客户端，不产生破坏。</p>
+     */
     @Transactional
     @Auditable(operationType = "UPDATE", targetType = "KB_DOC",
             targetIdSpEl = "#id", entityClass = KbDoc.class,
@@ -263,8 +274,29 @@ public class KbDocService {
     public void move(Long id, KbNodeMoveReq req, String operator) {
         KbDoc d = require(id);
         assertVisible(d);
-        long newParentId = req.getParentId() == null ? 0L : req.getParentId();
         List<KbDoc> all = docMapper.selectList(null);
+
+        boolean relative = req.getPosition() != null && !req.getPosition().isBlank();
+        String position = KbTreeRules.normalizePosition(req.getPosition());
+        long newParentId;
+        Long anchorId = null;
+        if (KbTreeRules.POS_BEFORE.equals(position) || KbTreeRules.POS_AFTER.equals(position)) {
+            if (req.getTargetId() == null || req.getTargetId() == 0L) {
+                throw new BizException("相对位置必须指定目标兄弟节点");
+            }
+            KbDoc anchor = require(req.getTargetId());
+            assertVisible(anchor);
+            newParentId = anchor.getParentId() == null ? 0L : anchor.getParentId();
+            anchorId = anchor.getId();
+        } else if (relative) {
+            if (req.getTargetId() == null) {
+                throw new BizException("APPEND 必须指定目标父节点（0 = 根目录）");
+            }
+            newParentId = req.getTargetId();
+        } else {
+            newParentId = req.getParentId() == null ? 0L : req.getParentId();
+        }
+
         KbTreeRules.assertNoCycle(all, id, newParentId);
 
         KbDoc parent = newParentId == 0 ? null : require(newParentId);
@@ -276,9 +308,31 @@ public class KbDocService {
         }
         String newBase = KbTreeRules.computePath(parent == null ? null : pathOf(parent), id);
         String oldBase = pathOf(d);
-        int sortNo = req.getSortNo() != null
-                ? req.getSortNo() : KbTreeRules.nextSortNo(all, newParentId);
         LocalDateTime now = LocalDateTime.now();
+
+        int sortNo;
+        if (relative) {
+            List<Long> order = KbTreeRules.resolveSiblingOrder(all, id, newParentId, position, anchorId);
+            sortNo = 0;
+            for (int i = 0; i < order.size(); i++) {
+                long sid = order.get(i);
+                int no = (i + 1) * 10;
+                if (sid == id) {
+                    sortNo = no;
+                } else {
+                    // 只带非空字段的 patch：updateById 不会误改 title / content_md / path
+                    KbDoc patch = new KbDoc();
+                    patch.setId(sid);
+                    patch.setSortNo(no);
+                    patch.setUpdatedBy(operator);
+                    patch.setUpdatedAt(now);
+                    docMapper.updateById(patch);
+                }
+            }
+        } else {
+            sortNo = req.getSortNo() != null
+                    ? req.getSortNo() : KbTreeRules.nextSortNo(all, newParentId);
+        }
 
         docMapper.update(null, new LambdaUpdateWrapper<KbDoc>()
                 .eq(KbDoc::getId, id)
