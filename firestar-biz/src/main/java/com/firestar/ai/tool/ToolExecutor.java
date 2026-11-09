@@ -12,15 +12,19 @@ import com.firestar.ai.kb.KbRetriever;
 import com.firestar.ai.kb.KbSearchContext;
 import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
+import com.firestar.config.JwtAuthenticationFilter;
 import com.firestar.dto.StatsQuery;
+import com.firestar.service.InvoiceService;
 import com.firestar.service.ProjectService;
 import com.firestar.service.ReceivableService;
 import com.firestar.service.ReturnService;
 import com.firestar.service.ShipmentService;
+import com.firestar.service.WriteOffService;
 import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentDraftPreview;
 import com.firestar.dto.ShipmentLineCreateReq;
 import com.firestar.service.StatsService;
+import com.firestar.service.CustomerService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -53,6 +57,9 @@ public class ToolExecutor {
     private final ShipmentService shipmentService;
     private final ReturnService returnService;
     private final ReceivableService receivableService;
+    private final CustomerService customerService;
+    private final WriteOffService writeOffService;
+    private final InvoiceService invoiceService;
     private final StatsService statsService;
     private final ToolRegistry registry;
     private final EgressMasker egressMasker;
@@ -62,13 +69,17 @@ public class ToolExecutor {
 
     public ToolExecutor(ProjectService projectService, ShipmentService shipmentService,
                         ReturnService returnService, ReceivableService receivableService,
-                        StatsService statsService, ToolRegistry registry,
+                        CustomerService customerService, WriteOffService writeOffService,
+                        InvoiceService invoiceService, StatsService statsService, ToolRegistry registry,
                         EgressMasker egressMasker, ObjectMapper objectMapper,
                         KbRetriever kbRetriever, KbEgressPolicy kbEgressPolicy) {
         this.projectService = projectService;
         this.shipmentService = shipmentService;
         this.returnService = returnService;
         this.receivableService = receivableService;
+        this.customerService = customerService;
+        this.writeOffService = writeOffService;
+        this.invoiceService = invoiceService;
         this.statsService = statsService;
         this.registry = registry;
         this.egressMasker = egressMasker;
@@ -80,6 +91,18 @@ public class ToolExecutor {
     public ToolResult execute(ToolCall call, String username, boolean isAdmin) {
         if (!registry.isRegistered(call.name())) {
             return new ToolResult(call.id(), call.name(), "{\"error\":\"未知工具，已拒绝执行\"}", true);
+        }
+        // 财务台账权限闸（与 Web @RequirePerm 同口径）：核销/发票仅对应财务权限可查，杜绝经 AI 越权爬数。
+        // 必须放在 switch 之前做早返回——switch 表达式内不允许 return。
+        if (!financePermAllowed(call.name(), isAdmin)) {
+            String deny = switch (call.name()) {
+                case "search_writeoffs" ->
+                        "{\"error\":\"无权限：核销台账仅财务权限（writeoff:manage）可查\"}";
+                case "search_invoices" ->
+                        "{\"error\":\"无权限：发票查询仅财务权限（invoice:manage）可查\"}";
+                default -> "{\"error\":\"无权限\"}";
+            };
+            return new ToolResult(call.id(), call.name(), deny, true);
         }
         try {
             JsonNode args = (call.argumentsJson() == null || call.argumentsJson().isBlank())
@@ -108,6 +131,59 @@ public class ToolExecutor {
                 case "search_shipments" -> {
                     IPage<?> p = shipmentService.page(username, isAdmin, 1, 20,
                             strArg(args, "keyword"), null, null, null, null, null, null);
+                    yield json(p.getRecords());
+                }
+                // ===== 对称检索入口补齐（2026-11-09）：客户 / 应收 / 退货 =====
+                case "search_customers" -> {
+                    int lim = Math.min(intArg(args, "limit", 20), 100);
+                    yield json(customerService.search(strArg(args, "keyword"), lim));
+                }
+                case "search_receivables" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    Long pid = longArg(args, "projectId");
+                    IPage<?> p = receivableService.page(pn, ps,
+                            pid == 0L ? null : pid,
+                            strArg(args, "status"), strArg(args, "receivableNo"),
+                            strArg(args, "projectName"), strArg(args, "sourceType"),
+                            parseDate(strArg(args, "dateFrom")), parseDate(strArg(args, "dateTo")));
+                    yield json(p.getRecords());
+                }
+                case "search_returns" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    IPage<?> p = returnService.page(username, isAdmin, pn, ps,
+                            strArg(args, "projectNo"), strArg(args, "projectName"),
+                            strArg(args, "returnNo"), strArg(args, "status"),
+                            strArg(args, "executeStatus"),
+                            parseDate(strArg(args, "dateFrom")), parseDate(strArg(args, "dateTo")));
+                    yield json(p.getRecords());
+                }
+                // ===== 财务台账检索补齐（2026-11-10）：核销 / 发票，已在 switch 前做权限闸，这里只查数据 =====
+                // 核销台账是全局财务视图（Web @RequirePerm("writeoff:manage")，pageLedger 无用户隔离），
+                // 故仅持 writeoff:manage 或管理员可见（闸在 switch 前），看到全局台账（与 Web 一致）。
+                case "search_writeoffs" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    IPage<?> p = writeOffService.pageLedger(pn, ps,
+                            longArg(args, "projectId") == 0L ? null : longArg(args, "projectId"),
+                            strArg(args, "ledgerType"), strArg(args, "status"),
+                            strArg(args, "keyword"),
+                            parseDate(strArg(args, "dateFrom")), parseDate(strArg(args, "dateTo")));
+                    yield json(p.getRecords());
+                }
+                // 发票列表 Web @RequirePerm("invoice:manage")；page() 内部按 SecurityContext 当前用户
+                // 做行级隔离（非 admin/开票员 只看 applicantId=自己），与 Web 行为一致。
+                case "search_invoices" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    IPage<?> p = invoiceService.page(username, isAdmin, pn, ps,
+                            longArg(args, "projectId") == 0L ? null : longArg(args, "projectId"),
+                            longArg(args, "receivableId") == 0L ? null : longArg(args, "receivableId"),
+                            strArg(args, "status"), strArg(args, "invoiceNo"),
+                            strArg(args, "projectName"), strArg(args, "invoiceType"),
+                            strArg(args, "docDirection"),
+                            parseDate(strArg(args, "dateFrom")), parseDate(strArg(args, "dateTo")));
                     yield json(p.getRecords());
                 }
                 case "my_pending_tasks" ->
@@ -230,6 +306,18 @@ public class ToolExecutor {
         return a.has(k) ? a.get(k).asText() : null;
     }
 
+    /** 解析 yyyy-MM-dd，空或格式错误返回 null（供 search_receivables / search_returns 的日期区间入参） */
+    private LocalDate parseDate(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(s);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private String sanitize(String s) {
         return s == null ? "" : s.replace("\"", "'").replace("\n", " ").replace("\r", " ");
     }
@@ -268,5 +356,29 @@ public class ToolExecutor {
             }
         }
         return out;
+    }
+
+    /**
+     * 权限闸：与 Web {@code @RequirePerm} 同口径——ROLE_ADMIN 放行，否则需持 PERM:&lt;code&gt;。
+     * 用于 search_writeoffs / search_invoices 等敏感财务台账，杜绝经 AI 越权爬数。
+     */
+    private boolean hasPerm(String permCode, boolean isAdmin) {
+        if (isAdmin) {
+            return true;
+        }
+        String need = JwtAuthenticationFilter.PERM_AUTHORITY_PREFIX + permCode;
+        return currentAuthorities().contains(need);
+    }
+
+    /**
+     * 财务台账工具是否放行：仅 search_writeoffs / search_invoices 需要财务权限，
+     * 其余工具不受此闸限制。配合 execute 内 switch 前的早返回使用（switch 表达式内不允许 return）。
+     */
+    private boolean financePermAllowed(String toolName, boolean isAdmin) {
+        return switch (toolName) {
+            case "search_writeoffs" -> hasPerm("writeoff:manage", isAdmin);
+            case "search_invoices" -> hasPerm("invoice:manage", isAdmin);
+            default -> true;
+        };
     }
 }

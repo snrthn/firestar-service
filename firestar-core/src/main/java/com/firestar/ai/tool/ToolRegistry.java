@@ -48,6 +48,78 @@ public class ToolRegistry {
                 "按发货批次号关键词搜索当前用户有权看到的发货单",
                 """
                 {"type":"object","properties":{"keyword":{"type":"string","description":"发货批次号关键词"}}}""");
+        // ===== 对称检索入口补齐（2026-11-09）：客户是业务核心往来单位，此前 AI 工具层零入口；
+        // 应收/退货的 Service.page 已存在却未注册，与 search_projects/search_shipments 不对称 =====
+        register("search_customers",
+                "按客户名称模糊搜索客户主数据（返回 id/编号/名称/联系电话）。客户是业务核心往来单位，" +
+                "是 stats_* 看板 customerId 过滤的前置依赖——先搜到客户 ID，才能拉「某客户的经营看板」。",
+                """
+                {"type":"object","properties":{
+                  "keyword":{"type":"string","description":"客户名称关键词，如「华为」「中石化」"},
+                  "limit":{"type":"integer","description":"返回条数上限，默认 20，最多 100"}
+                }}""");
+        register("search_receivables",
+                "搜索应收单列表（按项目/状态/单号/项目名/来源类型/日期区间筛选），返回应收单摘要。" +
+                "需先经 search_projects 或 search_customers 取得 projectId 关联。",
+                """
+                {"type":"object","properties":{
+                  "projectId":{"type":"integer","description":"按立项单 ID 过滤(可选)"},
+                  "status":{"type":"string","description":"状态过滤(可选，如 UNWRITTEN/WRITTEN)"},
+                  "receivableNo":{"type":"string","description":"应收单号模糊(可选)"},
+                  "projectName":{"type":"string","description":"立项单名称模糊(可选)"},
+                  "sourceType":{"type":"string","description":"来源类型(可选)"},
+                  "dateFrom":{"type":"string","description":"应收日期起 yyyy-MM-dd(可选)"},
+                  "dateTo":{"type":"string","description":"应收日期止 yyyy-MM-dd(可选)"},
+                  "pageNum":{"type":"integer","description":"页码，默认 1"},
+                  "pageSize":{"type":"integer","description":"每页条数，默认 20，最多 50"}
+                }}""");
+        register("search_returns",
+                "搜索退货单列表（按项目编号/项目名/退货单号/审批状态/执行状态/申请日期区间筛选），返回退货单摘要。" +
+                "需先经 search_projects 取得 projectId 关联。",
+                """
+                {"type":"object","properties":{
+                  "projectNo":{"type":"string","description":"立项单编号模糊(可选)"},
+                  "projectName":{"type":"string","description":"立项单名称模糊(可选)"},
+                  "returnNo":{"type":"string","description":"退货单号模糊(可选)"},
+                  "status":{"type":"string","description":"审批状态(可选，如 PENDING/APPROVED/REJECTED)"},
+                  "executeStatus":{"type":"string","description":"执行状态(可选)"},
+                  "dateFrom":{"type":"string","description":"申请日期起 yyyy-MM-dd(可选)"},
+                  "dateTo":{"type":"string","description":"申请日期止 yyyy-MM-dd(可选)"},
+                  "pageNum":{"type":"integer","description":"页码，默认 1"},
+                  "pageSize":{"type":"integer","description":"每页条数，默认 20，最多 50"}
+                }}""");
+        register("search_writeoffs",
+                "搜索核销台账（回款核销/开票核销合并视图，按立项单/台账类型/状态/核销单号/日期区间筛选），" +
+                "返回核销记录摘要。仅财务权限（writeoff:manage）可用，与 Web 核销台账同口径——" +
+                "无权限用户经 AI 同样查不到，杜绝越权。",
+                """
+                {"type":"object","properties":{
+                  "projectId":{"type":"integer","description":"按立项单 ID 过滤(可选)"},
+                  "ledgerType":{"type":"string","description":"台账类型：RECEIPT=回款核销 / INVOICE=开票核销(可选，不传=全部)"},
+                  "status":{"type":"string","description":"状态：NORMAL / REVERSED(可选，不传=全部)"},
+                  "keyword":{"type":"string","description":"核销单号模糊(可选，如 WO-/IA-)"},
+                  "dateFrom":{"type":"string","description":"核销日期起 yyyy-MM-dd(可选)"},
+                  "dateTo":{"type":"string","description":"核销日期止 yyyy-MM-dd(可选)"},
+                  "pageNum":{"type":"integer","description":"页码，默认 1"},
+                  "pageSize":{"type":"integer","description":"每页条数，默认 20，最多 50"}
+                }}""");
+        register("search_invoices",
+                "搜索发票列表（按立项单/应收单/状态/发票号/项目名/发票类型/票据方向/日期区间筛选），" +
+                "返回发票摘要。仅财务权限（invoice:manage）可用；行级隔离：非管理员/非开票员只看本人申请的发票，与 Web 一致。",
+                """
+                {"type":"object","properties":{
+                  "projectId":{"type":"integer","description":"按立项单 ID 过滤(可选)"},
+                  "receivableId":{"type":"integer","description":"按应收单 ID 过滤(可选)"},
+                  "status":{"type":"string","description":"审批状态(可选，如 PENDING/APPROVING/ISSUED/REJECTED)"},
+                  "invoiceNo":{"type":"string","description":"发票号模糊(可选)"},
+                  "projectName":{"type":"string","description":"立项单名称模糊(可选)"},
+                  "invoiceType":{"type":"string","description":"发票类型(可选)"},
+                  "docDirection":{"type":"string","description":"票据方向(可选)"},
+                  "dateFrom":{"type":"string","description":"开票日期起 yyyy-MM-dd(可选)"},
+                  "dateTo":{"type":"string","description":"开票日期止 yyyy-MM-dd(可选)"},
+                  "pageNum":{"type":"integer","description":"页码，默认 1"},
+                  "pageSize":{"type":"integer","description":"每页条数，默认 20，最多 50"}
+                }}""");
         register("my_pending_tasks",
                 "查询当前登录用户的审批待办（需要处理的工作流任务）",
                 """
