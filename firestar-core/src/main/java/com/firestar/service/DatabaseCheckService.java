@@ -54,7 +54,9 @@ public class DatabaseCheckService {
      *            V100 新增 ai_conversations / ai_messages / ai_tool_calls（AI 会话三表），
      *            纳入业务前缀后 42→45（本次漏调曾触发 db-check 503「手工建表」误报）；
      *            V105 新增 sys_ai_prompt（AI 提示词管理），45→46；
-     *            V207 新增 sys_kb_doc / sys_kb_chunk / sys_kb_attachment（知识库三表），48→51。
+     *            V207 新增 sys_kb_doc / sys_kb_chunk / sys_kb_attachment（知识库三表），48→51；
+     *            V208 只给 sys_kb_doc 加 parent_id/node_type/sort_no/path 四列（树形结构，
+     *            方案 A 节点同构），**不新增表**，tableCount 仍为 51，别误 +1。
      */
     public static final int EXPECTED_TABLE_COUNT = 51;
 
@@ -362,6 +364,11 @@ public class DatabaseCheckService {
  *   仅新增 3 张 sys_ 表（doc / chunk / attachment），不动任何字典行
  *   → dictTypeCount 保持 36、dictDataCount 保持 154，tableCount 48→51。
  *   菜单与权限点不在本类计数口径内，其它常量无需改动。
+ * V208（知识库文档树形结构，方案 A）净变化：
+ *   仅 ALTER sys_kb_doc 加 4 列（parent_id / node_type / sort_no / path）+ 2 个索引，
+ *   node_type 是 Java enum 硬编码、不占字典行；树形操作复用 ai:kb:edit，不加菜单权限
+ *   → tableCount 仍 51、dictTypeCount 仍 36、dictDataCount 仍 154，**三个常量全不用改**。
+ *   ⚠️ 别因为「迁移改了表」就习惯性给 tableCount +1：加列不是加表。
         * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
         *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
         *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
