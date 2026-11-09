@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.ai.entity.KbAttachment;
 import com.firestar.ai.entity.KbChunk;
 import com.firestar.ai.entity.KbDoc;
+import com.firestar.ai.kb.KbMarkdownSplitter;
 import com.firestar.ai.mapper.KbAttachmentMapper;
 import com.firestar.ai.mapper.KbChunkMapper;
 import com.firestar.ai.mapper.KbDocMapper;
@@ -220,10 +221,6 @@ public class KbDocService {
         if (contentMd == null || contentMd.isBlank()) {
             throw new BizException("正文不能为空");
         }
-        List<String> issues = KbTreeRules.validateMarkdown(contentMd);
-        if (!issues.isEmpty()) {
-            throw new BizException("MD 规范未通过：" + issues.get(0));
-        }
         String summary = req.getSummary();
         if (summary != null && summary.length() > 512) {
             throw new BizException("摘要不能超过 512 字符");
@@ -383,10 +380,6 @@ public class KbDocService {
         if (isFolder(d)) {
             throw new BizException("文件夹不能发布");
         }
-        List<String> issues = KbTreeRules.validateMarkdown(d.getContentMd());
-        if (!issues.isEmpty()) {
-            throw new BizException("MD 规范未通过，不能发布：" + issues.get(0));
-        }
         int newVersion = (d.getVersion() == null ? 1 : d.getVersion()) + 1;
         LocalDateTime now = LocalDateTime.now();
         docMapper.update(null, new LambdaUpdateWrapper<KbDoc>()
@@ -400,6 +393,11 @@ public class KbDocService {
         chunkMapper.update(null, new LambdaUpdateWrapper<KbChunk>()
                 .eq(KbChunk::getDocId, id)
                 .set(KbChunk::getStatus, 0));
+        // 步骤 5：按新版本重新切片并落库（splitToChunks 已置 status=1 / vectorStatus=NONE /
+        // createdAt / tenantId=0，此处直接 insert；version 与文档新版本对齐，保证检索只命中最新版）
+        for (KbChunk c : KbMarkdownSplitter.splitToChunks(id, newVersion, d.getContentMd())) {
+            chunkMapper.insert(c);
+        }
         attachmentMapper.update(null, new LambdaUpdateWrapper<KbAttachment>()
                 .eq(KbAttachment::getDocId, id)
                 .eq(KbAttachment::getRole, ROLE_ORIGINAL)

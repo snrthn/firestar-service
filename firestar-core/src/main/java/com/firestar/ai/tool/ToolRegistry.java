@@ -90,6 +90,19 @@ public class ToolRegistry {
         register("stats_fulfillment", "履约与风控看板（非 Flowable 指标）", statsSchema);
         register("stats_ageing", "账龄与周转看板（FIFO 账龄五段/DSO/年化周转率/平均逾期天数）", statsSchema);
         register("stats_platform", "工作台平台指标（活跃用户总数+今日登录次数）", statsSchema);
+
+        // ===== 知识库检索（步骤 5，设计 §7）：面向 AI 的企业知识问答入口 =====
+        // 检索范围 = 已发布 MD 文档切片 + 帮助中心文章（全员可见）。返回带出处的片段，
+        // 供模型引用；ACL 行级权限在 Retriever 内按当前用户身份过滤，越权文档不出域。
+        register("search_knowledge",
+                "在企业知识库中检索与用户问题相关的知识片段。知识库包含：① 已发布的 Markdown 制度/操作文档；" +
+                "② 帮助中心常见问题。当用户询问系统功能、操作指引、制度规范、如何办理某事、忘记密码/权限等" +
+                "自助类问题时使用。返回每条片段的标题、所属章节、正文与出处引用（sourceRef）。",
+                """
+                {"type":"object","properties":{
+                  "query":{"type":"string","description":"检索问题或关键词，如「如何报销」「忘记密码怎么办」「侧边栏菜单看不到」"},
+                  "topK":{"type":"integer","description":"返回片段数，默认 4，最多 8"}
+                },"required":["query"]}""");
     }
 
     private void register(String name, String desc, String schema) {

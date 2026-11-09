@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.firestar.ai.egress.EgressMasker;
+import com.firestar.ai.kb.KbChunkHit;
+import com.firestar.ai.kb.KbEgressPolicy;
+import com.firestar.ai.kb.KbRetriever;
+import com.firestar.ai.kb.KbSearchContext;
 import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
 import com.firestar.dto.StatsQuery;
@@ -17,6 +21,9 @@ import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentDraftPreview;
 import com.firestar.dto.ShipmentLineCreateReq;
 import com.firestar.service.StatsService;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -50,11 +57,14 @@ public class ToolExecutor {
     private final ToolRegistry registry;
     private final EgressMasker egressMasker;
     private final ObjectMapper objectMapper;
+    private final KbRetriever kbRetriever;
+    private final KbEgressPolicy kbEgressPolicy;
 
     public ToolExecutor(ProjectService projectService, ShipmentService shipmentService,
                         ReturnService returnService, ReceivableService receivableService,
                         StatsService statsService, ToolRegistry registry,
-                        EgressMasker egressMasker, ObjectMapper objectMapper) {
+                        EgressMasker egressMasker, ObjectMapper objectMapper,
+                        KbRetriever kbRetriever, KbEgressPolicy kbEgressPolicy) {
         this.projectService = projectService;
         this.shipmentService = shipmentService;
         this.returnService = returnService;
@@ -63,6 +73,8 @@ public class ToolExecutor {
         this.registry = registry;
         this.egressMasker = egressMasker;
         this.objectMapper = objectMapper;
+        this.kbRetriever = kbRetriever;
+        this.kbEgressPolicy = kbEgressPolicy;
     }
 
     public ToolResult execute(ToolCall call, String username, boolean isAdmin) {
@@ -137,6 +149,17 @@ public class ToolExecutor {
                         default -> "{\"error\":\"未实现的工具\"}";
                     };
                 }
+                // ===== 知识库检索（步骤 5）：以当前登录用户身份检索，ACL 在 Retriever 内过滤 =====
+                case "search_knowledge" -> {
+                    String q = strArg(args, "query");
+                    int k = Math.min(intArg(args, "topK", 4), 8);
+                    KbSearchContext ctx = new KbSearchContext(isAdmin, currentAuthorities(), 0L);
+                    List<KbChunkHit> hits = kbRetriever.retrieve(q, ctx, k);
+                    List<KbChunkHit> allowed = hits.stream()
+                            .filter(h -> kbEgressPolicy.allow(h, ctx))
+                            .collect(java.util.stream.Collectors.toList());
+                    yield json(toKnowledgeResult(allowed));
+                }
                 default -> "{\"error\":\"未实现的工具\"}";
             };
 
@@ -209,5 +232,37 @@ public class ToolExecutor {
 
     private String sanitize(String s) {
         return s == null ? "" : s.replace("\"", "'").replace("\n", " ").replace("\r", " ");
+    }
+
+    /** 把知识检索命中拼成结构化 JSON 数组（供模型引用，含出处 sourceRef） */
+    private String toKnowledgeResult(List<KbChunkHit> hits) throws Exception {
+        ArrayNode arr = objectMapper.createArrayNode();
+        for (KbChunkHit h : hits) {
+            ObjectNode o = objectMapper.createObjectNode();
+            o.put("sourceType", h.sourceType());
+            o.put("title", h.title());
+            o.put("headingPath", h.headingPath());
+            o.put("anchor", h.anchor());
+            o.put("content", h.content());
+            o.put("sourceRef", h.sourceRef());
+            o.put("score", h.score());
+            arr.add(o);
+        }
+        return objectMapper.writeValueAsString(arr);
+    }
+
+    /** 当前登录用户的权限集合（role_code 直灌 / PERM:xxx），与 KbDocService 计算口径一致 */
+    private Set<String> currentAuthorities() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getAuthorities() == null) {
+            return Set.of();
+        }
+        Set<String> out = new HashSet<>();
+        for (GrantedAuthority a : auth.getAuthorities()) {
+            if (a != null && a.getAuthority() != null) {
+                out.add(a.getAuthority());
+            }
+        }
+        return out;
     }
 }
