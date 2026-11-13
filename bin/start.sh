@@ -222,7 +222,16 @@ load_env() {
     case "$line" in *=*) ;; *) continue ;; esac
     key="${line%%=*}"; val="${line#*=}"
     [ -z "$key" ] && continue
-    export "$key=$val"
+    # 仅接受合法 shell 标识符（^[A-Za-z_][A-Za-z0-9_]*）。
+    # 云效/CI agent 可能向环境注入名字非法的脏变量（如 }=}），若不过滤会被原样写回
+    # env 文件、再被本函数 export 时触发 `not a valid identifier` 致启动崩溃
+    # （部署 run#128 失败根因：start.sh:225）。此处跳过非法行而非崩溃。
+    case "$key" in
+      *[!A-Za-z0-9_]*) echo "[start] 跳过非法 key（非合法标识符，疑似 CI/agent 脏变量）: $key" >&2; continue ;;
+      [0-9]*)          echo "[start] 跳过非法 key（数字开头）: $key" >&2; continue ;;
+      "") continue ;;
+      *) export "$key=$val" ;;
+    esac
   done < "$f"
 }
 

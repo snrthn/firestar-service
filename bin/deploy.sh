@@ -65,7 +65,15 @@ TMP_ENV="$(mktemp)"
       ''|\#*) printf '%s\n' "$line" ;;                      # 空行/注释原样透传
       *)
         k="${line%%=*}"; v="${line#*=}"
-        printf '%s=%s\n' "$k" "$v"                          # 值不加引号，保持与 .env 一致
+        # 仅镜像合法标识符 key；云效/CI agent 可能注入名字非法的脏变量（如 }=}），
+        # 若写进 prod.env 会被 start.sh 的 load_env 以非法标识符 export 而崩溃
+        # （部署 run#128 失败根因）。此处从源头过滤，避免脏数据持久化。
+        case "$k" in
+          *[!A-Za-z0-9_]*) printf '[deploy] 跳过非法 key: %s\n' "$k" >&2; continue ;;
+          [0-9]*)          printf '[deploy] 跳过数字开头 key: %s\n' "$k" >&2; continue ;;
+          "") continue ;;
+          *) printf '%s=%s\n' "$k" "$v" ;;                   # 值不加引号，保持与 .env 一致
+        esac
         ;;
     esac
   done
