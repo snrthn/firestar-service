@@ -207,13 +207,29 @@ LOG_FILE="$LOGS_DIR/app.log"
 unset SERVER__PORT SERVER__HOST 2>/dev/null || true
 
 # ---- 凭据来源：与 deploy.sh 一致，优先使用当前 shell 已注入的环境变量 ----
+# 安全加载 .env：逐行读取并 export，避免 bash source 把值里的 &（如 DB_URL 的 JDBC 参数）
+# 当成后台分隔符导致变量变空。因此 .env 文件可保持纯文本无引号，与云效 Secrets 写法完全一致，
+# 无需任何转义。load_env 内部以变量承载值，export 时 & 不会被二次解析为元字符。
+load_env() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"   # 去左侧缩进空白
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac       # 跳过整行注释
+    line="${line%%[[:space:]]#*}"               # 剥离行内注释（值内不含 #）
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    [ -z "$key" ] && continue
+    export "$key=$val"
+  done < "$f"
+}
+
 SPRING_PROFILE="${SPRING_PROFILE:-dev}"
 ENV_FILE="$APP_HOME/.env/${SPRING_PROFILE}.env"
 if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  load_env "$ENV_FILE"
   echo "[start] 已从 $ENV_FILE 载入凭据（可选兜底）"
 else
   echo "[start] 未发现 $ENV_FILE，将使用当前环境已注入的变量（云效私密变量 / 手动 export）"
