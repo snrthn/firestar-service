@@ -12,6 +12,19 @@ sources:
       type: serviceConnection
       serviceConnection: bii4ow7cqitmb438
 
+# ========== 门禁契约（2026-11-14）==========
+# 目标：test / build / deploy 任一环失败，流程立即中断，绝不「跳过继续往后跑」。
+# 依据：云效 jobs 文档（help.aliyun.com/zh/yunxiao/user-guide/pipelined-task-jobs，
+#       2026-10-24 更新）：
+#   - condition 非必填，默认值是「前序依赖任务全部成功后才执行本任务」；
+#     一旦显式写 condition，该默认值即被覆盖。只写 "${ACTION}" == "deploy"
+#     等于把默认门禁关掉 → 测试/构建失败时部署仍会被调度。
+#     故部署链每个下游 job 都显式补 "&& succeed()"（无入参 = 前序所有任务）。
+#   - continueOnFail 默认 false（任务失败后不执行后续任务），这里显式写出便于审计。
+#   - Command / VMDeploy 的 run 是多行 shell，必须自带 set -e，否则非最后一条
+#     命令失败会被后续命令的成功退出码掩盖（step 假绿）。
+# ops_stage 是 ACTION!=deploy 的独立分支，刻意不加 succeed()：那条路径下
+# test/build/deploy 全部 SKIP，加 succeed() 会把运维启停一并卡死。
 stages:
   build_stage:
     name: 测试与构建
@@ -21,6 +34,8 @@ stages:
         runsOn:
           group: public/cn-beijing
           container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        # 部署链首环，无前序依赖；失败即中断后续所有任务
+        continueOnFail: false
         condition: |
           "${ACTION}" == "deploy"
         steps:
@@ -80,8 +95,11 @@ stages:
           container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
         needs:
           - test_job
+        # 显式补 succeed()：condition 一旦显式声明，平台默认的「前序全成功」不再生效，
+        # 不补就变成「test_job 失败也照跑构建」。
+        continueOnFail: false
         condition: |
-          "${ACTION}" == "deploy"
+          "${ACTION}" == "deploy" && succeed()
         steps:
           setup_java_step:
             step: SetupJava
@@ -94,6 +112,7 @@ stages:
             name: Java 构建并打包
             with:
               run: |
+                set -e
                 mvn -B clean package -DskipTests
                 rm -rf staging && mkdir -p staging
                 cp firestar-server/target/firestar-server-*.jar staging/
@@ -116,18 +135,24 @@ stages:
       deploy_job:
         name: 主机组部署
         component: VMDeploy
+        # 部署链最后一环：test/build 任一 FAIL/CANCEL → succeed()=false → 本 job 不调度。
+        # 「构建失败→无制品→部署报制品信息无效」退化为兜底，不再是唯一防线。
+        continueOnFail: false
         condition: |
-          "${ACTION}" == "deploy"
+          "${ACTION}" == "deploy" && succeed()
         with:
           artifact: $[stages.build_stage.build_job.upload_step.artifacts.default]
           machineGroup: "qTjw4VWk6jWcfPpO"
           artifactDownloadPath: /home/admin/be-firestar/package.tgz
           executeUser: root
           run: |
+            set -e
             mkdir -p /usr/local/server/java/firestar
             tar zxvf /home/admin/be-firestar/package.tgz -C /usr/local/server/java/firestar --strip-components=1
             bash /usr/local/server/java/firestar/bin/deploy.sh
 
+  # ACTION!=deploy 的独立分支：此路径下 test/build/deploy 全 SKIP，
+  # 故 ops_job 刻意不写 succeed()，否则运维启停会被「前序未成功」卡死。
   ops_stage:
     name: 运维
     jobs:
