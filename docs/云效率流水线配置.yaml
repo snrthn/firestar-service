@@ -145,6 +145,9 @@ stages:
             ACTION="${ACTION:-restart}"
             PORT="${DEPLOY_PORT:-2025}"
             HEALTH_PATH="${HEALTH_PATH:-/actuator/health/liveness}"
+            # 与 deploy.sh:19 的默认值保持一致：ops_stage 直调 start.sh 时也走 prod，
+            # 避免 start.sh:238 的 :-dev 回落让生产实例跑成 dev（本地存储 / Swagger / debug 日志）。
+            export SPRING_PROFILE="${SPRING_PROFILE:-prod}"
             cd /usr/local/server/java/firestar
             case "$ACTION" in
               stop)    bash bin/stop.sh ;;
