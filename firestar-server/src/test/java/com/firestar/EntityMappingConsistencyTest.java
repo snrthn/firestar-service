@@ -149,14 +149,22 @@ class EntityMappingConsistencyTest {
     @DisplayName("3. 含 L1 预留字段的表，其实体必须继承 BaseEntity")
     void allEntitiesExtendBaseEntity() throws Exception {
         Map<String, Set<String>> schema = readSchemaColumns();
-        // sys_ai_prompt 是唯一「DDL 有 tenant_id 但实体不继承 BaseEntity」的有意例外：
-        // V105 建表时为了索引 idx_ai_prompt_active(is_active, tenant_id) 带了 tenant_id 列，
-        // 但 AiPromptConfig 是轻量配置 POJO（implements Serializable），实体不映射该列，
-        // 查询按全局生效行（is_active=1）走，不做租户隔离。见 V105 / AiPromptConfig 注释。
+        // 以下为「DDL 有 tenant_id 但实体不继承 BaseEntity」的有意例外，完整名单见下方 Set.of：
+        // sys_ai_prompt：V105 建表时为了索引 idx_ai_prompt_active(is_active, tenant_id) 带了
+        //   tenant_id 列，但 AiPromptConfig 是轻量配置 POJO（implements Serializable），
+        //   实体不映射该列，查询按全局生效行（is_active=1）走，不做租户隔离。
+        //   见 V105 / AiPromptConfig 注释。
         // sys_ai_prompt：见上方注释（DDL 带 tenant_id 但实体为轻量配置 POJO，有意不继承 BaseEntity）。
         // sys_login_fail / sys_login_ip_limit：爆破防护内部状态/计数表，非领域实体，
         // 用唯一索引 + 原子自增维护，实体为简单 POJO，有意不继承 BaseEntity（与 AI 会话表同类）。
-        Set<String> excluded = Set.of("sys_ai_prompt", "sys_login_fail", "sys_login_ip_limit");
+        // sys_kb_doc / sys_kb_chunk / sys_kb_attachment（V207 知识库三表，V208 给 doc 加树形四列）：
+        //   DDL 同样带 tenant_id，但实体与 AiPromptConfig 同款独立 implements Serializable，
+        //   刻意不继承 BaseEntity —— sys_kb_doc 的 version 是「文档业务版本」（发布 v+1 用，
+        //   非乐观锁）、没有 ext 列、created_by/updated_by 是 VARCHAR(64) 而非 Long；
+        //   chunk / attachment 无 ext / version，created_by 同为 VARCHAR(64)。
+        //   详见 KbDoc.java:16-25 与 V207 / V208。
+        Set<String> excluded = Set.of("sys_ai_prompt", "sys_login_fail", "sys_login_ip_limit",
+                "sys_kb_doc", "sys_kb_chunk", "sys_kb_attachment");
         List<String> bad = new ArrayList<>();
         for (Map.Entry<String, Set<String>> e : schema.entrySet()) {
             if (excluded.contains(e.getKey())) continue;
@@ -288,7 +296,12 @@ class EntityMappingConsistencyTest {
             "sys_ai_prompt=com.firestar.ai.entity.AiPromptConfig",
             "ai_conversations=com.firestar.ai.entity.AiConversation",
             "ai_messages=com.firestar.ai.entity.AiMessage",
-            "ai_tool_calls=com.firestar.ai.entity.AiToolCall"};
+            "ai_tool_calls=com.firestar.ai.entity.AiToolCall",
+            // V207 知识库三表（V208 又给 sys_kb_doc 加了 parent_id / node_type / sort_no / path）
+            // 实体同在 com.firestar.ai.entity，与 AiPromptConfig 一样刻意不继承 BaseEntity
+            "sys_kb_doc=com.firestar.ai.entity.KbDoc",
+            "sys_kb_chunk=com.firestar.ai.entity.KbChunk",
+            "sys_kb_attachment=com.firestar.ai.entity.KbAttachment"};
 
     /** 表名 → 实体类。支持简单类名与全限定名两种写法 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {
