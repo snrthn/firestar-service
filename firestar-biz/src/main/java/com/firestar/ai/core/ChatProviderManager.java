@@ -57,7 +57,7 @@ public class ChatProviderManager implements ApplicationRunner {
     private final Map<String, Function<BuildCtx, ChatProvider>> registry;
 
     /** 构建 ChatProvider 所需的统一入参（各 Provider 构造函数签名不同，从中取子集） */
-    private record BuildCtx(String baseUrl, String model, String botId, String apiKey) {}
+    private record BuildCtx(String baseUrl, String model, String botId, String apiKey, String extraJson) {}
 
     private volatile ChatProvider active;
     private final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
@@ -83,7 +83,9 @@ public class ChatProviderManager implements ApplicationRunner {
                 "openai", c -> new OpenAIProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
                 // DeepSeek 为 OpenAI 兼容协议，复用 OpenAIProvider 的 SSE 解析 + 工具调用循环，仅 name 不同
                 "deepseek", c -> new DeepSeekProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
-                "ollama", c -> new OllamaProvider(c.baseUrl(), c.model(), objectMapper)
+                "ollama", c -> new OllamaProvider(c.baseUrl(), c.model(), objectMapper),
+                // Anthropic 原生 Messages API（/v1/messages），extraJson 传 maxTokens / anthropicVersion
+                "anthropic", c -> new AnthropicProvider(c.baseUrl(), c.apiKey(), c.model(), c.extraJson(), objectMapper, toolExecutor, httpClientFactory)
         );
     }
 
@@ -146,7 +148,8 @@ public class ChatProviderManager implements ApplicationRunner {
                 new LambdaQueryWrapper<ModelConfig>().eq(ModelConfig::getActive, 1));
         if (cfg != null) {
             return build(cfg.getProvider(), cfg.getBaseUrl(), cfg.getModel(),
-                    cryptoService.decrypt(cfg.getBotId()), cryptoService.decrypt(cfg.getApiKey()));
+                    cryptoService.decrypt(cfg.getBotId()), cryptoService.decrypt(cfg.getApiKey()),
+                    cryptoService.decrypt(cfg.getExtraJson()));
         }
         // 没有 is_active=1 的生效行：区分「已存在但被停用」与「全新库零行」，但两者都明确报错，
         // 不再静默回退到 env 默认空凭证（coze.pat 未配置 → Bearer null → 秒 401 / 代理一抖就超时）。
@@ -157,13 +160,13 @@ public class ChatProviderManager implements ApplicationRunner {
         throw new IllegalStateException("尚未配置任何 AI 模型，请在【模型配置】中新增并启用一个模型后再使用 AI 助手");
     }
 
-    private ChatProvider build(String type, String baseUrl, String model, String botId, String apiKey) {
+    private ChatProvider build(String type, String baseUrl, String model, String botId, String apiKey, String extraJson) {
         Function<BuildCtx, ChatProvider> factory = registry.get(type);
         if (factory == null) {
             throw new IllegalStateException("未知供应商类型: " + type
                     + "（请确认已在 ChatProviderManager 注册表登记，且字典 ai_provider 数据与之对齐）");
         }
-        return factory.apply(new BuildCtx(baseUrl, model, botId, apiKey));
+        return factory.apply(new BuildCtx(baseUrl, model, botId, apiKey, extraJson));
     }
 
     /**

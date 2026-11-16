@@ -11,7 +11,7 @@ import java.util.function.Consumer;
  */
 public interface ChatProvider {
 
-    /** 供应商标识：coze | openai | deepseek | ollama */
+    /** 供应商标识：coze | openai | deepseek | ollama | anthropic */
     String name();
 
     /**

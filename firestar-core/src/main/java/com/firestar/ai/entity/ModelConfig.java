@@ -26,7 +26,7 @@ public class ModelConfig implements Serializable {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    /** coze | openai | deepseek | ollama */
+    /** coze | openai | deepseek | ollama | anthropic */
     private String provider;
 
     /** 当前生效行（运行期真值）；映射 DB 列 is_active（V99 建表命名） */
