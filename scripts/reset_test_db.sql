@@ -12,5 +12,8 @@
 --       标识符，创建/删除一个以占位符字面量命名的无用空库。
 --    3. 默认库名 firestar_test；可用 TEST_DB_NAME=xxx_test 覆盖（真开关）。
 -- ============================================================
+-- 【从 0 建库兼容】DROP ... IF EXISTS 在库不存在时是 no-op（不报错），
+-- 随后 CREATE 直接建库 —— 因此「库不存在」与「库存在」两条路径都能走通，
+-- 无需预先手工建库。字符集/排序规则与生产 deploy.sh 的幂等建库保持完全一致。
 DROP DATABASE IF EXISTS `{{IT_DB_NAME}}`;
 CREATE DATABASE `{{IT_DB_NAME}}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

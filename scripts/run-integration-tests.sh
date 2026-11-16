@@ -7,6 +7,8 @@
 #   bash bin/test.sh -Dtest=SmokeTest     # 只跑指定测试类
 #   bash bin/test.sh --no-reset -Dtest=RbacCrudTest
 #                                                             # 沿用现有库，快速重跑
+#   IT_REUSE_DB=1 bash bin/test.sh         # 沿用现有库（--no-reset 的环境变量版，供 CI 注入）
+#   IT_MAVEN_OFFLINE=1 bash bin/test.sh    # 强制离线（mvn -o），需本地仓库已含 surefire provider
 #   bash bin/test.sh --help               # 帮助
 #
 # 为什么需要脚本（而不是裸敲 mvn test）：
@@ -27,6 +29,12 @@
 #    全量 Flyway 重放（含 Flowable 62 张表）会写 binlog、占连接与磁盘 IO。
 #    本脚本只断言库名，不校验实例归属，实例选择由使用者负责。
 # CI（云效 alinux3 构建容器）无 MySQL 实例，仍只跑纯单测，见 docs/云效率流水线配置.yaml。
+#
+# Maven 联网策略（2026-11-16 修订）：默认【在线】执行 mvn test。
+#   离线（-o）只在 IT_MAVEN_OFFLINE=1 时启用。原因是 surefire 的 provider
+#   （surefire-junit-platform）只在真正执行 test goal 时才动态解析，
+#   「-DskipTests 预热」拿不到它，离线必然 BUILD FAILURE（详见脚本尾部注释）。
+#   在线并不会造成版本漂移：Maven 严格按 pom 声明的精确版本拉取。
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +46,10 @@ IT_LOG="logs/it.log"
 exec > >(tee "$IT_LOG") 2>&1
 echo "[it] 完整输出已记录到 ${IT_LOG}（每次运行覆盖，不累加）"
 
-RESET=1
+# RESET 初值可被 IT_REUSE_DB=1 覆盖（CI/流水线用环境变量控制，无需改命令行参数）。
+# 命令行 --no-reset 优先级更高（见下方参数解析），两者任一命中即沿用现有库。
+RESET="${IT_REUSE_DB:-0}"
+[ "$RESET" = "1" ] && RESET=0 || RESET=1
 MVN_ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -144,14 +155,35 @@ if [ "$RESET" = 1 ]; then
         -h "$DB_HOST_EFF" -P "$DB_PORT_EFF" -u "$DB_USER_EFF"
   echo "[it] 空库就绪；启动测试后由 Flyway 全量重放 schema + 种子"
 else
-  echo "[it] --no-reset：沿用现有库（可能含上轮残留数据，失败时请去掉该参数重跑）"
+  echo "[it] 沿用现有库（--no-reset 或 IT_REUSE_DB=1）；可能含上轮残留数据，失败时改为重建重跑"
 fi
 
 unset SPRING_PROFILES_ACTIVE || true
 START=$SECONDS
-if [ ${#MVN_ARGS[@]} -gt 0 ]; then
-  mvn -o test "${MVN_ARGS[@]}"
+
+# ---- [2026-11-16] Maven 离线策略：默认在线，IT_MAVEN_OFFLINE=1 显式切回 -o ----
+# 背景（云效 P1 run3 实锤）：原脚本硬编码 `mvn -o test`，
+#   配合「预热用 mvn -DskipTests test」时，预热阶段只编译、**不执行测试**，
+#   而 surefire 的 provider jar（surefire-junit-platform）是在
+#   「真正执行 test goal、探测到 JUnit5 平台」时才动态解析的插件依赖，
+#   静态预热覆盖不到 → 离线模式直接
+#   "The following artifacts could not be resolved: ...surefire-junit-platform:jar:3.2.5
+#    (absent): Cannot access ... in offline mode"
+#   → BUILD FAILURE，0 个测试被执行。
+# 结论：离线不是默认安全项，而是把「预热必须完美」当前提的脆性设计。
+# 改为默认在线（Maven 按 pom 声明的精确版本拉取，不会引入版本漂移），
+# 离线留给明确无网的场景显式开启。
+MVN_OFFLINE_FLAG=()
+if [ "${IT_MAVEN_OFFLINE:-0}" = "1" ]; then
+  MVN_OFFLINE_FLAG=(-o)
+  echo "[it] IT_MAVEN_OFFLINE=1 ：mvn -o test（离线；调用方需自行保证本地仓库完整，含 surefire provider）"
 else
-  mvn -o test
+  echo "[it] 默认在线执行 mvn test（surefire provider 按 pom 声明版本自动解析）"
+fi
+
+if [ ${#MVN_ARGS[@]} -gt 0 ]; then
+  mvn "${MVN_OFFLINE_FLAG[@]+"${MVN_OFFLINE_FLAG[@]}"}" test "${MVN_ARGS[@]}"
+else
+  mvn "${MVN_OFFLINE_FLAG[@]+"${MVN_OFFLINE_FLAG[@]}"}" test
 fi
 echo "[it] 完成，耗时 $((SECONDS - START))s"
