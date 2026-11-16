@@ -25,6 +25,18 @@ sources:
 #     命令失败会被后续命令的成功退出码掩盖（step 假绿）。
 # ops_stage 是 ACTION!=deploy 的独立分支，刻意不加 succeed()：那条路径下
 # test/build/deploy 全部 SKIP，加 succeed() 会把运维启停一并卡死。
+# ========== P3 集成测试门禁（2026-11-16 虎哥确认方案 A）==========
+# it_stage 插在 build_stage 与 deploy_stage 之间，两个 job 从 P3 原样搬运：
+#   it_source_job：构建机 git archive 干净源码包 + 上传制品。
+#                  version 用 p3src_ 前缀，与主流水线 build_job 的裸 BUILD_NUMBER 分命名空间，
+#                  避免共享 flow_generic_repo 里同版本制品撞车（P3 run1 的 HTTP 400 实测）。
+#   it_run_job：VMDeploy 下载 -> 全删旧目录 -> 双层解压 -> 175 用例。
+#               RUN_IT 在 run 块首判断：false/空 时秒退 SUCCESS（不产生 SKIP 态），
+#               保护 deploy_job 的 succeed() 门禁语义；真失败则 FAIL 卡住发版。
+# 门禁链：test_job -> build_job -> it_source_job -> it_run_job -> deploy_job（succeed() 串行）。
+# RUN_IT：云效全局变量，虎哥手动设置；只认字符串 true，其它值均视为关闭。
+# ECS 前置（已就绪）：it_ci 账号 + firestar_test 库 + /root/.it_ci.cnf。
+# =====================================================================
 stages:
   build_stage:
     name: 测试与构建
@@ -129,6 +141,542 @@ stages:
                 - staging/
               version: "${BUILD_NUMBER}"
 
+  it_stage:
+    name: 集成测试（部署前门禁，RUN_IT 控制）
+    jobs:
+      it_source_job:
+        name: git archive 打包（天然排除 target/.git/.env）
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        continueOnFail: false
+        condition: |
+          "${ACTION}" == "deploy" && succeed()
+        steps:
+          pack_step:
+            step: Command
+            name: 打干净源码包
+            with:
+              run: |
+                set -e
+                # git archive 只打包 git 跟踪文件 —— target/.git/.env 天然排除（实测 0.79MB）。
+                # 不用 tar 整目录：那会把 110MB 的 target 带进去并重演 P2 run1 的编译产物漂移。
+                rm -f firestar-it-src.tgz
+                git archive --format=tar.gz --output=firestar-it-src.tgz HEAD
+                ls -lh firestar-it-src.tgz
+                echo "TRACKED_FILES=$(git ls-files | wc -l)"
+                echo "SRC_PACK_OK"
+          upload_step:
+            step: ArtifactUpload
+            name: 源码包上传
+            with:
+              uploadType: packages
+              serviceConnection: ystkn5uj361puwbk
+              repo: flow_generic_repo
+              artifact: default
+              filePath:
+                - firestar-it-src.tgz
+              # version 必须全局唯一：flow_generic_repo 是共享仓库、artifact 名 default 也是通用名，
+              # 裸用 ${BUILD_NUMBER}(=1) 会撞上仓库里已有的 version=1 旧制品 -> HTTP 400: 300005
+              # （P3 run1 实测）。加 p3src_ 前缀隔离命名空间；下游 VMDeploy 靠
+              # $[...upload_step.artifacts.default]（step 路径 + artifact 名）引用，不依赖 version 字符串。
+              version: "p3src_${BUILD_NUMBER}"
+
+
+      it_run_job:
+        name: 集成测试（复用生产 3306 / firestar_test）
+        component: VMDeploy
+        needs:
+          - it_source_job
+        continueOnFail: false
+        condition: |
+          "${ACTION}" == "deploy" && succeed()
+        with:
+          # 依赖 build_stage 上传的干净源码包（P2 是 downloadArtifact:false，P3 改为下载制品）
+          artifact: $[stages.it_stage.it_source_job.upload_step.artifacts.default]
+          machineGroup: "qTjw4VWk6jWcfPpO"
+          artifactDownloadPath: /data/it_workspace/it_src_package.tgz
+          executeUser: root
+          run: |
+            set -e
+
+            # ---------------- 常量：全部硬钉，不接受外部覆盖 ----------------
+            IT_SRC=/data/it_workspace/firestar-service
+            IT_WORK=/data/it_workspace
+            IT_LOGDIR=$IT_WORK/mysql-logs
+            IT_CNF=/root/.it_ci.cnf
+            IT_PORT=3306
+            IT_DBNAME=firestar_test
+            IT_DBUSER=
+            IT_DBPASS=
+            MYSQL80=/usr/local/mysql80/bin
+            MYSQLCLI=$MYSQL80/mysql
+            IT_IDENT=$IT_WORK/p2_identity.txt
+            IT_WARMLOG=$IT_WORK/p2_mvn_warmup.log
+            IT_PROVIDERLOG=$IT_WORK/p2_mvn_provider.log
+            IT_EFFPOM=$IT_WORK/p2_effective_pom.xml
+            IT_RUNLOG=$IT_WORK/p2_it_stdout.log
+            IT_MEMSAMPLES=$IT_WORK/p2_mem_samples.txt
+
+            T0="$(date +%s)"
+            P2_FAIL_REASON=NONE
+            SAMPLER_PID=
+            IT_RC=NA
+            IT_SKIPPED=
+            MISSING=
+            IT_JAVA_HOME=
+            IT_MVN_BIN=
+
+            sec()   { printf '\n========== [P2] %s ==========\n' "$1"; }
+            mark()  { NOW="$(date +%s)"; printf '[P2][timing] %s +%ss\n' "$1" "$((NOW - T0))"; }
+            fatal() { printf '[P2][FATAL] %s\n' "$1"; P2_FAIL_REASON="$2"; exit 1; }
+
+            # ---------------- trap：只做「校验与报告」，绝不启停生产实例 ----------------
+            cleanup() {
+              set +e
+              RC=$?
+              sec "CLEANUP / 校验与报告（不启停 MySQL 实例，不删生产库）"
+              if [ "$P2_FAIL_REASON" = NONE ] && [ "$IT_RC" != 0 ]; then P2_FAIL_REASON=EARLY_EXIT; fi
+              echo "[P2][cleanup] enter rc=$RC reason=$P2_FAIL_REASON"
+              if [ -n "$SAMPLER_PID" ]; then kill "$SAMPLER_PID" 2>/dev/null; fi
+
+              P3306="$(ss -lnt 2>/dev/null | grep -c ':3306' || true)"
+              printf 'PROD_3306_STILL_LISTEN=%s\n' "$P3306"
+
+              # 隔离库现状：保留供人工观测（下轮 reset 会重建）
+              if [ -n "$IT_DBUSER" ] && [ -n "$IT_DBPASS" ]; then
+              ISTEST="$(MYSQL_PWD="$IT_DBPASS" "$MYSQLCLI" -h127.0.0.1 -P"$IT_PORT" \
+                          -u "$IT_DBUSER" -N -B \
+                          -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$IT_DBNAME'" 2>/dev/null || echo NA)"
+                printf 'IT_DB_TABLES_LEFT=%s （保留供人工观测）\n' "$ISTEST"
+              else
+                printf 'IT_DB_TABLES_LEFT=NA （账号未就绪）\n'
+              fi
+
+              # binlog 增长（文件系统口径，无需任何 DB 权限）
+              if [ -d /data/mysql80 ]; then
+                BINLOG_MB="$(du -sm /data/mysql80/binlog* 2>/dev/null | awk '{s+=$1} END {print s+0}' || true)"
+                printf 'BINLOG_MB_NOW=%s （log_bin=1，测试期写入）\n' "$BINLOG_MB"
+              fi
+
+              # P1 遗留：只报告，不操作
+              if [ -d /data/mysql_it ]; then
+                LEFTIT="$(find /data/mysql_it -mindepth 1 2>/dev/null | head -1 || true)"
+                printf 'STALE_MYSQL_IT_DIR=EXISTS leftover=%s （P1 遗留，本流水线不操作，请虎哥确认后手工清理）\n' "$([ -n "$LEFTIT" ] && echo YES || echo EMPTY)"
+              else
+                printf 'STALE_MYSQL_IT_DIR=ABSENT\n'
+              fi
+
+              if [ -f "$IT_MEMSAMPLES" ]; then
+                MIN_AVAIL="$(sort -n "$IT_MEMSAMPLES" 2>/dev/null | head -1 || true)"
+                printf 'MEM_AVAIL_MIN_KB=%s\n' "$MIN_AVAIL"
+                printf 'IT_MEMSAMPLES_COUNT=%s\n' "$(wc -l < "$IT_MEMSAMPLES" 2>/dev/null)"
+              fi
+
+              if [ "$IT_SKIPPED" = YES ]; then
+                VERDICT=SKIPPED_BY_RUN_IT
+              elif [ "$P2_FAIL_REASON" = NONE ] && [ "$IT_RC" = 0 ] && [ "$P3306" != 0 ]; then
+                VERDICT=GO
+              else
+                VERDICT=NO-GO
+              fi
+              printf '[P2] VERDICT=%s reason=%s tests_rc=%s prod3306=%s\n' \
+                "$VERDICT" "$P2_FAIL_REASON" "$IT_RC" "$P3306"
+              printf '[P2] EVIDENCE_DIR=%s （证据日志保留，请虎哥确认后手动清理）\n' "$IT_WORK"
+              printf '[P2] EVIDENCE_FILES=%s %s %s %s %s\n' \
+                "$IT_IDENT" "$IT_WARMLOG" "$IT_PROVIDERLOG" "$IT_EFFPOM" "$IT_RUNLOG"
+              # 证据日志按 run 号归档（清源码目录不碰这里），跑失败可回看历史现场
+              RUN_TAG="$(printenv BUILD_NUMBER 2>/dev/null || echo manual)"
+              [ -n "$RUN_TAG" ] || RUN_TAG=manual
+              EVID_DIR="$IT_WORK/evidence/$RUN_TAG"
+              mkdir -p "$EVID_DIR" 2>/dev/null || true
+              for lf in "$IT_IDENT" "$IT_WARMLOG" "$IT_PROVIDERLOG" "$IT_EFFPOM" "$IT_RUNLOG" "$IT_MEMSAMPLES"; do
+                if [ -f "$lf" ]; then cp "$lf" "$EVID_DIR/" 2>/dev/null || true; fi
+              done
+              printf '[P2] EVIDENCE_ARCHIVE=%s\n' "$EVID_DIR"
+              mark "cleanup_and_total"
+              echo "===== PROBE_DONE ====="
+            }
+            trap cleanup EXIT
+
+
+            # ---------------- [RUN_IT] 集成测试开关（虎哥手动设置的云效全局变量） ----------------
+            # 只认字符串 true：true=跑全量集成测试；false/空/未设=跳过。
+            # 双路取兜底：(1) 云效对 RUN_IT 变量的 run 块注入 (2) 环境变量 printenv RUN_IT。
+            # 关键：跳过时 exit 0（job 保持 SUCCESS），绝不产生 SKIP 态 ——
+            #       否则 deploy_job 的 succeed() 门禁在 RUN_IT=false 时可能被误判。
+            # IT_SKIPPED=YES 会让末尾 cleanup 把 VERDICT 标成 SKIPPED_BY_RUN_IT（不误报 GO）。
+            RUN_IT_FLAG="${RUN_IT}"
+            [ -n "$RUN_IT_FLAG" ] || RUN_IT_FLAG="$(printenv RUN_IT 2>/dev/null || true)"
+            case "$RUN_IT_FLAG" in
+              true)
+                echo "[IT] RUN_IT=true -> 执行全量集成测试（175 用例）"
+                ;;
+              *)
+                echo "[IT] RUN_IT='$RUN_IT_FLAG' -> 跳过集成测试（仅显式 true 才跑）"
+                IT_SKIPPED=YES
+                IT_RC=0
+                mark "skipped_by_RUN_IT"
+                exit 0
+                ;;
+            esac
+
+            # ---------------- [0] 身份反证：必须跑在 ECS 主机 ----------------
+            sec "0 IDENTITY / ANTI-FALSE-POSITIVE"
+            echo "EXEC_HOST=$(hostname 2>/dev/null || echo NA)"
+            echo "EXEC_UID=$(id -u 2>/dev/null || echo NA)"
+            PID1_COMM="$(cat /proc/1/comm 2>/dev/null || echo NA)"
+            NP_VAL="$(nproc 2>/dev/null || echo NA)"
+            MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo NA)"
+            echo "PID1_COMM=$PID1_COMM SPEC_nproc=$NP_VAL SPEC_MemTotal_kB=$MEM_KB"
+            free -h 2>/dev/null || true
+            if [ "$PID1_COMM" = bash ]; then
+              fatal "命令落在构建容器（PID1=bash），不是 ECS 主机" WRONG_HOST
+            fi
+            if [ "$NP_VAL" = 4 ] && [ "$MEM_KB" = 8388608 ]; then
+              fatal "规格是 LARGE_4C8G 构建容器，不是 ECS 主机" WRONG_HOST
+            fi
+            echo "LOCATION_VERDICT=ECS_HOST_LIKELY"
+            mark "identity"
+
+            # ---------------- [0.5] 源码同步：全删旧目录 + 解压构建机制品 ----------------
+            # 只在身份反证通过（确认是 ECS 主机）后才执行 rm -rf，避免误在构建容器删东西。
+            sec "0.5 SOURCE SYNC / 全删旧源码目录 + 解压干净源码包"
+            IT_PKG=/data/it_workspace/it_src_package.tgz
+            # 路径硬钉断言：只允许清空这个固定测试目录（绝不可能是生产路径）
+            if [ "$IT_SRC" != "/data/it_workspace/firestar-service" ]; then
+              fatal "IT_SRC 被篡改为 $IT_SRC，拒绝清目录" SRC_PATH_TAMPERED
+            fi
+            if [ ! -s "$IT_PKG" ]; then
+              fatal "构建机制品未下载或为空：$IT_PKG" SRC_PKG_MISSING
+            fi
+            echo "SRC_PKG_SIZE=$(du -h "$IT_PKG" 2>/dev/null | cut -f1 || echo NA)"
+            # 全删旧目录（含任何遗留 target/.env），再全新解压 —— 彻底根治编译产物漂移。
+            # 清空范围仅 firestar-service 子目录；/root/.it_ci.cnf、/data/mysql80、
+            # /data/it_workspace/*.log、/root/.m2 均在此目录之外，不受影响。
+            rm -rf "$IT_SRC"
+            mkdir -p "$IT_SRC"
+            # 第一层：云效 ArtifactUploadPackages 会把 firestar-it-src.tgz 再包成 default.tgz，
+            # 下载到 IT_PKG 的其实是那层壳 —— 必须先解开它（P3 run2 实测：只解一层得到 SRC_FILES=1）。
+            if ! tar xzf "$IT_PKG" -C "$IT_SRC"; then
+              fatal "源码包外层解压失败" SRC_EXTRACT_FAILED
+            fi
+            # 第二层：若解开后 IT_SRC 下没有 pom.xml、却恰好有一个 .tgz，那就是内层真源码包，
+            # 继续解开并移除壳文件。单层制品（直接就是源码）则跳过本段，保持兼容。
+            if [ ! -f "$IT_SRC/pom.xml" ]; then
+              INNER_TGZ="$(find "$IT_SRC" -maxdepth 1 -type f -name '*.tgz' 2>/dev/null | head -1 || true)"
+              if [ -n "$INNER_TGZ" ]; then
+                echo "SRC_NESTED=YES inner=$INNER_TGZ"
+                if ! tar xzf "$INNER_TGZ" -C "$IT_SRC"; then
+                  fatal "源码包内层解压失败" SRC_EXTRACT_INNER_FAILED
+                fi
+                rm -f "$INNER_TGZ"
+              fi
+            fi
+            echo "SRC_SYNC=FRESH （旧目录全删，干净源码已就位）"
+            echo "SRC_FILES=$(find "$IT_SRC" -type f 2>/dev/null | wc -l || echo NA)"
+            mark "source_sync"
+
+            # ---------------- [1] MySQL 8.0 客户端直证 ----------------
+            sec "1 MYSQL 8.0 CLIENT / 绝对路径直证"
+            if [ ! -x "$MYSQLCLI" ]; then
+              fatal "$MYSQLCLI 不存在" MISSING_MYSQL80_CLI
+            fi
+            echo "MYSQLCLI_PATH=$MYSQLCLI"
+            "$MYSQLCLI" --version || fatal "mysql --version 执行失败" MYSQL_CLI_VERSION_FAILED
+            echo "[note] 生产实例真实 socket=/data/mysql80/mysql.sock（见 /etc/mysql80.cnf），"
+            echo "       /etc/my.cnf 是 5.7 遗留文件（datadir=/var/lib/mysql），本流水线不读它。"
+            mark "mysql_client_version"
+
+            # ---------------- [2] 前置盘点：JDK17 / Maven / 源码 ----------------
+            sec "2 PREREQ / 工具链自动发现 + 源码检查"
+            echo "--- JDK 候选目录 ---"
+            ls -d /usr/local/jdk/* /opt/java/* /opt/jdk/* /usr/lib/jvm/* 2>/dev/null || true
+            for d in /usr/local/jdk/jdk-17.0.8 /usr/local/jdk/jdk-17* \
+                     /opt/java/jdk-17* /opt/jdk/jdk-17* /usr/lib/jvm/java-17*; do
+              if [ -x "$d/bin/java" ]; then
+                if "$d/bin/java" -version 2>&1 | grep -q '"17'; then
+                  IT_JAVA_HOME="$d"; break
+                fi
+              fi
+            done
+            echo "JDK17_HOME=$IT_JAVA_HOME"
+            if [ -n "$IT_JAVA_HOME" ]; then "$IT_JAVA_HOME/bin/java" -version 2>&1 | head -3 || true; fi
+
+            echo "--- Maven 候选 ---"
+            for d in /usr/local/maven/bin /opt/maven/bin /usr/local/apache-maven*/bin \
+                     /opt/apache-maven*/bin /usr/share/maven/bin; do
+              if [ -x "$d/mvn" ]; then IT_MVN_BIN="$d"; break; fi
+            done
+            if [ -z "$IT_MVN_BIN" ]; then
+              MVN_P="$(command -v mvn 2>/dev/null || true)"
+              if [ -n "$MVN_P" ]; then IT_MVN_BIN="$(dirname "$MVN_P")"; fi
+            fi
+            echo "MAVEN_BIN=$IT_MVN_BIN"
+            if [ -n "$IT_MVN_BIN" ]; then "$IT_MVN_BIN/mvn" -v 2>&1 | head -3 || true; fi
+
+            echo "--- 源码目录 ---"
+            echo "IT_SRC=$IT_SRC"
+            for f in pom.xml bin/test.sh scripts/run-integration-tests.sh \
+                     scripts/reset_test_db.sql \
+                     firestar-server/src/test/resources/application-it.properties; do
+              if [ ! -f "$IT_SRC/$f" ]; then MISSING="$MISSING $f"; fi
+            done
+            echo "SRC_MISSING=$MISSING"
+
+            if [ -n "$MISSING" ] || [ -z "$IT_JAVA_HOME" ] || [ -z "$IT_MVN_BIN" ]; then
+              echo "[P2][PREREQ] 缺项清单：源码=$MISSING JDK17=$IT_JAVA_HOME Maven=$IT_MVN_BIN"
+              fatal "前置不齐（未连数据库、未建任何库）" PREREQ_MISSING
+            fi
+            echo "PREREQ=ALL_GREEN"
+            mark "prereq"
+
+            # ---------------- [3] 复用安全性前置断言 ----------------
+            sec "3 REUSE SAFETY / 复用生产实例的前置断言"
+            P3306="$(ss -lnt 2>/dev/null | grep -c ':3306' || true)"
+            P3308="$(ss -lnt 2>/dev/null | grep -c ':3308' || true)"
+            echo "PROD_3306_LISTEN=$P3306 STALE_3308_LISTEN=$P3308"
+            if [ "$P3306" = 0 ]; then
+              fatal "生产 3306 未监听，ECS 环境异常，拒绝继续" PROD_3306_MISSING
+            fi
+            if [ "$P3308" != 0 ]; then
+              echo "[P2][WARN] 3308 仍在监听 —— P1 遗留实例？本流水线不碰它，请虎哥确认后手工清理"
+            fi
+
+            # 3.1 it_ci 凭据（只从本机文件读，不经云效变量区）
+            if [ ! -r "$IT_CNF" ]; then
+              fatal "缺少 $IT_CNF（请虎哥执行 scripts/76_ecs_provision_it_ci.sh 生成）" IT_CNF_MISSING
+            fi
+            IT_DBUSER="$(sed -n 's/^user=//p' "$IT_CNF" | head -1 | tr -d '\r' || true)"
+            IT_DBPASS="$(sed -n 's/^password=//p' "$IT_CNF" | head -1 | tr -d '\r' || true)"
+            if [ -z "$IT_DBUSER" ] || [ -z "$IT_DBPASS" ]; then
+              fatal "$IT_CNF 内容不完整（需要 user / password 两行）" IT_CNF_INVALID
+            fi
+            echo "IT_CNF_READ=OK user=$IT_DBUSER （口令不打印、不进云效变量区）"
+
+            # 3.2 源码目录不能带 .env/dev.env —— run-integration-tests.sh 会 source 它
+            #     并用它覆盖 DB_PASSWORD，导致连到错误的库
+            if [ -f "$IT_SRC/.env/dev.env" ]; then
+              fatal "源码目录存在 .env/dev.env：脚本会 source 它并覆盖 DB_PASSWORD" SRC_HAS_DEV_ENV
+            fi
+            echo "SRC_DEV_ENV_ABSENT=YES"
+
+            # 3.3 库名白名单：与 run-integration-tests.sh 同一套规则，再加一道
+            if [[ ! "$IT_DBNAME" =~ ^[A-Za-z0-9_]+_test$ ]]; then
+              fatal "目标库名 '$IT_DBNAME' 非法：必须以 _test 结尾" ILLEGAL_DB_NAME
+            fi
+            echo "DBNAME_WHITELIST=OK name=$IT_DBNAME"
+            mark "reuse_safety"
+
+            # ---------------- [4] 变量隔离：清外部注入，硬钉测试目标 ----------------
+            sec "4 VARIABLE ISOLATION / 清除一切外部 DB 注入"
+            unset DB_URL DB_HOST DB_PORT DB_USERNAME DB_PASSWORD \
+                  TEST_DB_HOST TEST_DB_PORT TEST_DB_NAME TEST_DB_USERNAME TEST_DB_PASSWORD \
+                  IT_DB_URL SPRING_DATASOURCE_URL SPRING_DATASOURCE_USERNAME \
+                  SPRING_DATASOURCE_PASSWORD SPRING_PROFILES_ACTIVE || true
+            export TEST_DB_HOST=127.0.0.1
+            export TEST_DB_PORT=$IT_PORT
+            export TEST_DB_NAME=$IT_DBNAME
+            export TEST_DB_USERNAME=$IT_DBUSER
+            export DB_PASSWORD="$IT_DBPASS"
+            export PATH="$MYSQL80:$IT_JAVA_HOME/bin:$IT_MVN_BIN:$PATH"
+            export JAVA_HOME="$IT_JAVA_HOME"
+            export MAVEN_OPTS="-Xmx1024m -Dfile.encoding=UTF-8"
+            echo "[it] 已清除外部 DB_* / SPRING_DATASOURCE_*；硬钉 127.0.0.1:3306/firestar_test"
+            echo "JAVA_HOME=$JAVA_HOME"
+            echo "DB_PASSWORD_SET=yes (值不打印)"
+            echo "mysql CLI now resolves to: $(command -v mysql)"
+            mysql --version || true
+            java -version 2>&1 | head -2 || true
+            mvn -v 2>&1 | head -2 || true
+            mark "variable_isolation"
+
+            # ---------------- [5] 连接生产实例 + 身份反查 + 权限边界自检 ----------------
+            sec "5 CONNECT PRODUCTION 3306 / 身份反查 + 越权防护自检"
+            # Q 函数末尾必须带 || true：mysql 失败时退出码非 0，而 run 块是
+            # set -e 的 —— 命令替换会把非 0 带出来，导致脚本在赋值那一行就被掐断，
+            # 精心写的「越权自检失败 → FATAL」根本来不及执行（实测踩过）。
+            Q() { MYSQL_PWD="$IT_DBPASS" "$MYSQLCLI" -h127.0.0.1 -P"$IT_PORT" \
+                  -u "$IT_DBUSER" -N -B -e "$1" 2>&1 || true; }
+
+            echo "--- 5.1 it_ci 连通性（TCP 127.0.0.1:3306） ---"
+            if ! MYSQL_PWD="$IT_DBPASS" "$MYSQLCLI" -h127.0.0.1 -P"$IT_PORT" \
+                    -u "$IT_DBUSER" -e 'SELECT 1' >/dev/null 2>&1; then
+              fatal "it_ci 连不上 127.0.0.1:3306（检查账号与 /root/.it_ci.cnf）" IT_USER_LOGIN_FAILED
+            fi
+            echo "IT_USER_LOGIN=OK"
+
+            echo "--- 5.2 实例身份反查（必须 8.0 + 3306 + 生产 datadir） ---"
+            V8="$(Q 'SELECT @@version')"
+            P8="$(Q 'SELECT @@port')"
+            D8="$(Q 'SELECT @@datadir')"
+            printf 'INSTANCE version=%s port=%s datadir=%s\n' "$V8" "$P8" "$D8" | tee "$IT_IDENT"
+            case "$V8" in
+              8.0*) ;;
+              *) fatal "实例版本不是 8.0（$V8），拒绝继续" WRONG_VERSION ;;
+            esac
+            if [ "$P8" != "$IT_PORT" ]; then
+              fatal "实例 port=$P8 不是 3306，可能连错实例" WRONG_PORT
+            fi
+            case "$D8" in
+              */mysql80*) ;;
+              *) fatal "实例 datadir=$D8 不是生产 datadir（/data/mysql80/）" WRONG_DATADIR ;;
+            esac
+            echo "INSTANCE_REUSED_PROD_3306=YES"
+
+            echo "--- 5.3 实例关键参数（记录基线） ---"
+            Q "SELECT CONCAT('SQL_MODE=',@@sql_mode),CONCAT('LCASE_TN=',@@lower_case_table_names),CONCAT('MAXCONN=',@@max_connections),CONCAT('BUFPOOL=',@@innodb_buffer_pool_size),CONCAT('LOG_BIN=',@@log_bin)"
+
+            echo "--- 5.4 越权防护自检：it_ci 必须碰不到生产库 firestar ---"
+            # 注意：库名/表名一律不加反引号 —— bash 双引号内的反引号会开启
+            # 嵌套命令替换（`firestar` 会被当命令执行），firestar/firestar_test/
+            # sys_user 都是合法标识符，不需要反引号。
+            DENYOUT="$(Q 'SELECT COUNT(*) FROM firestar.sys_user')"
+            if echo "$DENYOUT" | grep -qi "denied"; then
+              echo "IT_USER_CANNOT_SEE_PROD=YES"
+            else
+              fatal "it_ci 竟然能访问生产库 firestar（输出=$DENYOUT），权限边界失效" PERM_BOUNDARY_BROKEN
+            fi
+            echo "--- 5.5 库清单里也不能出现 firestar ---"
+            SEES="$(Q 'SHOW DATABASES' | grep -c '^firestar$' || true)"
+            echo "SEES_PROD_DB_IN_LIST=$SEES （必须为 0）"
+            if [ "$SEES" != 0 ]; then
+              fatal "it_ci 的库清单里出现了 firestar，权限边界失效" PERM_BOUNDARY_BROKEN
+            fi
+            echo "IT_DB_VISIBLE=$(Q 'SHOW DATABASES' | tr '\n' ' ' | cut -c1-120)"
+            mark "connect_and_boundary"
+
+            # ---------------- [6] 测试库可重建性自检 ----------------
+            sec "6 IT DB REBUILDABILITY / firestar_test 可 DROP+CREATE 自检"
+            # 这正是 scripts/reset_test_db.sql 要做的两件事，先显式验一遍，
+            # 失败时给出明确归因（而不是等 bin/test.sh 里报一串看不懂的错）。
+            DROPOUT="$(Q 'DROP DATABASE IF EXISTS firestar_test')"
+            if echo "$DROPOUT" | grep -qi "error"; then
+              fatal "it_ci 无法 DROP firestar_test：$DROPOUT" IT_DB_DROP_DENIED
+            fi
+            CREATEOUT="$(Q 'CREATE DATABASE firestar_test DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')"
+            if echo "$CREATEOUT" | grep -qi "error"; then
+              fatal "it_ci 无法 CREATE firestar_test：$CREATEOUT" IT_DB_CREATE_DENIED
+            fi
+            echo "IT_DB_REBUILD=OK （DROP+CREATE firestar_test 由 it_ci 完成，与本地 reset_test_db.sql 同语义）"
+            mark "it_db_rebuild"
+
+            # ---------------- [7] Maven 在线预热（编译依赖 + surefire provider）----------------
+            sec "7 MAVEN ONLINE WARMUP / 编译依赖 + surefire provider"
+            cd "$IT_SRC"
+            echo "CWD=$PWD"
+            # -Dmaven.resources.overwrite=true：强制资源插件覆盖拷贝。
+            # maven-resources-plugin 默认 overwrite=false —— 只在「源比目标新」时才拷贝；
+            # 若源码包里混进了旧 target/，解压后 target 会比 src 更新 → 插件判定「已更新」
+            # → 跳过拷贝 → Flyway 加载到旧版迁移脚本（P2 run1 的 Duplicate column 根因）。
+            if ! mvn -B -Dmaven.resources.overwrite=true -DskipTests test > "$IT_WARMLOG" 2>&1; then
+              tail -80 "$IT_WARMLOG" || true
+              fatal "Maven 在线预热失败（检查 settings.xml 镜像 / 网络）" MVN_WARMUP_FAILED
+            fi
+            tail -8 "$IT_WARMLOG" || true
+            ls -d /root/.m2/repository 2>/dev/null || echo "(.m2 路径非默认，读 mvn -v 的 home)"
+
+            # ---- 7.0 编译产物漂移护栏（P2 run1 实锤：改了迁移却跑的是旧版）----
+            # 逐个比对「源码里的迁移」与「Flyway 真正加载的 target 副本」的 sha256，
+            # 不一致立刻 FATAL —— 宁可这一轮直接失败，也不允许静默用旧产物跑出假结果。
+            echo "----- 编译产物漂移校验（src vs Flyway 实际加载的 target 副本）-----"
+            DRIFT_LIST=""
+            for f in V26.1__it_restore_agreement_ext.sql \
+                     V27.1__it_restore_v28_columns.sql \
+                     V74.1__it_restore_v75_columns.sql; do
+              SRCF="$IT_SRC/firestar-server/src/test/resources/db/migration/it/$f"
+              TGTF="$IT_SRC/firestar-server/target/test-classes/db/migration/it/$f"
+              if [ ! -f "$SRCF" ] || [ ! -f "$TGTF" ]; then
+                DRIFT_LIST="$DRIFT_LIST $f(missing)"
+                continue
+              fi
+              HA=$(sha256sum "$SRCF" | cut -c1-16 || true)
+              HB=$(sha256sum "$TGTF" | cut -c1-16 || true)
+              if [ "$HA" != "$HB" ]; then
+                DRIFT_LIST="$DRIFT_LIST $f(src=$HA,tgt=$HB)"
+              else
+                echo "  MATCH $f $HA"
+              fi
+            done
+            if [ -n "$DRIFT_LIST" ]; then
+              fatal "编译产物与源码不一致（Flyway 会加载旧版迁移）: $DRIFT_LIST" STALE_BUILD_ARTIFACT
+            fi
+            echo "BUILD_ARTIFACT_FRESH=YES"
+            mark "build_artifact_fresh"
+
+            # ---- 7.1 surefire provider 预取（P1 run3 的真因，已实证有效）----
+            # surefire 的 provider（surefire-junit-platform）是「真正执行 test goal、
+            # 探测到 JUnit5」时才动态解析的插件依赖；`-DskipTests` 预热拿不到，
+            # `-Dtest=不存在的类` 同样拿不到（surefire 直接跳过）。
+            # → 用 dependency:get 精准预取，版本从 effective-pom 推导（不写死）。
+            echo "----- surefire provider 预取 -----"
+            SUREFIRE_VER=""
+            SUREFIRE_VER="$(mvn -B -q help:evaluate -Dexpression=maven-surefire-plugin.version -DforceStdout 2>/dev/null | tr -d '\r' | grep -oE '[0-9][0-9A-Za-z.\-]*' | head -1 || true)"
+            if [ -z "$SUREFIRE_VER" ]; then
+              mvn -B -q help:effective-pom -Doutput="$IT_EFFPOM" >/dev/null 2>&1 || true
+              if [ -s "$IT_EFFPOM" ]; then
+                # 用 awk 提版本，避免脚本里出现 XML 尖括号（会被重定向白名单校验误判）
+                SUREFIRE_VER="$(awk '/maven-surefire-plugin/{f=1} f && match($0, /[0-9]+\.[0-9]+\.[0-9]+/) {print substr($0, RSTART, RLENGTH); exit}' "$IT_EFFPOM" 2>/dev/null || true)"
+              fi
+            fi
+            echo "SUREFIRE_VER=$SUREFIRE_VER"
+            if [ -n "$SUREFIRE_VER" ]; then
+              if mvn -B dependency:get -Dartifact="org.apache.maven.surefire:surefire-junit-platform:$SUREFIRE_VER" \
+                      > "$IT_PROVIDERLOG" 2>&1; then
+                echo "PROVIDER_WARMUP=OK version=$SUREFIRE_VER"
+              else
+                echo "----- provider 预取日志 tail -----"
+                tail -20 "$IT_PROVIDERLOG" || true
+                echo "[P2][WARN] provider 预取未成功；测试阶段走在线模式，由 surefire 自动解析兜底"
+              fi
+            else
+              echo "[P2][WARN] 未能推导 surefire 版本，跳过 provider 预取（测试阶段在线兜底）"
+            fi
+            PROVIDER_JAR="$(find /root/.m2/repository/org/apache/maven/surefire/surefire-junit-platform -name 'surefire-junit-platform-*.jar' 2>/dev/null | head -1 || true)"
+            if [ -n "$PROVIDER_JAR" ]; then
+              echo "SUREFIRE_PROVIDER=PRESENT $PROVIDER_JAR"
+            else
+              echo "SUREFIRE_PROVIDER=ABSENT（测试阶段走在线模式兜底）"
+            fi
+            mark "mvn_warmup_online"
+
+            # ---------------- [8] 全量集成测试：空库 -> Flyway -> 175 tests ----------------
+            sec "8 FULL INTEGRATION TESTS"
+            # 明确走在线：run3 证明离线模式对 surefire provider 有结构性缺口。
+            # 正式脚本已改为默认在线（IT_MAVEN_OFFLINE=1 才切回 -o）。
+            export IT_MAVEN_OFFLINE=0
+            echo "IT_MAVEN_OFFLINE=$IT_MAVEN_OFFLINE ：mvn test（在线）"
+            # 【库策略开关 · 分层方案】IT_DB_REUSE：
+            #   0（默认）= 每次 DROP+CREATE 重建 firestar_test —— 保证测试隔离、结果确定，
+            #              且库不存在时 DROP IF EXISTS 为 no-op、CREATE 自动从0建库。
+            #   1         = 沿用现有库（--no-reset）—— 仅在明确要复用现场时显式设 1；
+            #              残留数据可能让测试不稳定，不在默认路径。
+            # 值来自云效变量 IT_DB_REUSE（未设则 0）；只接受 0/1，其它值当 0。
+            IT_DB_REUSE="$(printenv IT_DB_REUSE 2>/dev/null || true)"
+            [ "$IT_DB_REUSE" = "1" ] || IT_DB_REUSE=0
+            export IT_REUSE_DB="$IT_DB_REUSE"
+            echo "IT_DB_REUSE=$IT_DB_REUSE -> IT_REUSE_DB=$IT_REUSE_DB（0=重建隔离 / 1=沿用现有库）"
+            P2_XMX="$(printenv P2_JVM_XMX 2>/dev/null || true)"
+            if [ -z "$P2_XMX" ]; then P2_XMX=768m; fi
+            echo "P2_JVM_XMX=$P2_XMX （探针默认降堆保护线上；设 off 可关闭，覆盖 pom 的 argLine）"
+            set +e
+            if [ "$P2_XMX" = off ]; then
+              bash bin/test.sh "-Dmaven.resources.overwrite=true" > "$IT_RUNLOG" 2>&1
+            else
+              bash bin/test.sh "-DargLine=-Xmx$P2_XMX" "-Dmaven.resources.overwrite=true" > "$IT_RUNLOG" 2>&1
+            fi
+            IT_RC=$?
+            set -e
+            echo "IT_RUNLOG=$IT_RUNLOG IT_RC=$IT_RC"
+            echo "----- 末尾 120 行 -----"
+            tail -120 "$IT_RUNLOG" || true
+            echo "----- 关键行（Tests run / BUILD / ERROR / Flyway）-----"
+            grep -E 'Tests run:|BUILD SUCCESS|BUILD FAILURE|\[ERROR\]|Flyway|FATAL' "$IT_RUNLOG" | tail -40 || true
+            if [ "$IT_RC" != 0 ]; then
+              fatal "集成测试失败 IT_RC=$IT_RC" TESTS_FAILED
+            fi
+            mark "integration_tests"
+            echo "[P2] ALL STEPS GREEN；接下来由 trap 完成校验与报告"
   deploy_stage:
     name: 部署
     jobs:
