@@ -8,6 +8,17 @@ sources:
     triggerEvents:
       - push
     branchesFilter: ^main$
+    # push 代码路径过滤（白名单正则，仅 Codeup 代码源的 push 事件生效；手动触发不受影响）：
+    # 只有「会影响构建/测试/部署」的路径发生变更才自动触发流水线。
+    # 依据：help.aliyun.com/zh/yunxiao/user-guide/pipeline-sources
+    #       -> sources.<source_id>.pathFilter「指定代码路径下的代码文件才会触发流水线运行」
+    # 顶层分布（git archive 权威清单，共 706 条目）：
+    #   firestar-core 441 / firestar-biz 180 / firestar-server 57  —— Java 源码+资源
+    #   bin 5 / scripts 5                                          —— 部署/测试脚本
+    #   pom.xml 1                                                  —— 根 Maven 聚合
+    # 以下变更「不触发」：docs 13 / README.md 1 / .env 2 / .gitignore 1（纯文档与模板）
+    # 典型收益：只改 docs/*.md 不再跑一轮「生产 ECS 集成测试 + 发版」。
+    pathFilter: '^(firestar-core/|firestar-biz/|firestar-server/|bin/|scripts/|pom\.xml$)'
     certificate:
       type: serviceConnection
       serviceConnection: bii4ow7cqitmb438
@@ -28,6 +39,9 @@ sources:
 # ========== P3 集成测试门禁（2026-11-16 虎哥确认方案 A）==========
 # it_stage 插在 build_stage 与 deploy_stage 之间，两个 job 从 P3 原样搬运：
 #   it_source_job：构建机 git archive 干净源码包 + 上传制品。
+#                  RUN_IT=false 时跳过 git archive（不打真包），改传最小占位 tgz 保住制品引用链，
+#                  使 it_run 的 $[...artifacts.default] 引用不为空（官方文档未明 SKIP/空引用语义，
+#                  历史 run141-143 栽在 condition 覆盖门禁上，故不赌）。
 #                  version 用 p3src_ 前缀，与主流水线 build_job 的裸 BUILD_NUMBER 分命名空间，
 #                  避免共享 flow_generic_repo 里同版本制品撞车（P3 run1 的 HTTP 400 实测）。
 #   it_run_job：VMDeploy 下载 -> 全删旧目录 -> 双层解压 -> 175 用例。
@@ -35,6 +49,9 @@ sources:
 #               保护 deploy_job 的 succeed() 门禁语义；真失败则 FAIL 卡住发版。
 # 门禁链：test_job -> build_job -> it_source_job -> it_run_job -> deploy_job（succeed() 串行）。
 # RUN_IT：云效全局变量，虎哥手动设置；只认字符串 true，其它值均视为关闭。
+#         两个 job 各自独立判断：it_source 决定是否打真包，it_run 决定是否跑测试。
+# push 路径过滤（sources.pathFilter，白名单正则，仅 push 触发生效、手动触发不受影响）：
+#   只认 firestar-core/biz/server + bin/ + scripts/ + pom.xml 变更；docs/README/.env 不触发。
 # ECS 前置（已就绪）：it_ci 账号 + firestar_test 库 + /root/.it_ci.cnf。
 # =====================================================================
 stages:
@@ -155,17 +172,40 @@ stages:
         steps:
           pack_step:
             step: Command
-            name: 打干净源码包
+            name: 打干净源码包（RUN_IT=false 时跳过）
             with:
               run: |
                 set -e
-                # git archive 只打包 git 跟踪文件 —— target/.git/.env 天然排除（实测 0.79MB）。
-                # 不用 tar 整目录：那会把 110MB 的 target 带进去并重演 P2 run1 的编译产物漂移。
+                # RUN_IT 开关：false/空 时不打真源码包（省掉 git archive 与 0.79MB 制品），
+                # 但保留 upload_step 上传一个最小占位 tgz —— 让 it_run 的
+                # $[stages.it_stage.it_source_job.upload_step.artifacts.default] 制品引用始终有效。
+                # 为什么不干脆让 upload_step 不执行 / 整个 it_source_job SKIP：
+                #   官方文档未写明「制品引用为空」与「SKIP 态对 succeed() 门禁」的语义，
+                #   历史 run141-143 正栽在 condition 覆盖门禁上。占位包把这两个未知量消掉，
+                #   it_run 在 run 块首本就秒退、不会去解这个占位包，零副作用。
+                RUN_IT_FLAG="${RUN_IT}"
+                [ -n "$RUN_IT_FLAG" ] || RUN_IT_FLAG="$(printenv RUN_IT 2>/dev/null || true)"
                 rm -f firestar-it-src.tgz
-                git archive --format=tar.gz --output=firestar-it-src.tgz HEAD
-                ls -lh firestar-it-src.tgz
-                echo "TRACKED_FILES=$(git ls-files | wc -l)"
-                echo "SRC_PACK_OK"
+                case "$RUN_IT_FLAG" in
+                  true)
+                    # git archive 只打包 git 跟踪文件 —— target/.git/.env 天然排除（实测 0.79MB）。
+                    # 不用 tar 整目录：那会把 110MB 的 target 带进去并重演 P2 run1 的编译产物漂移。
+                    git archive --format=tar.gz --output=firestar-it-src.tgz HEAD
+                    ls -lh firestar-it-src.tgz
+                    echo "TRACKED_FILES=$(git ls-files | wc -l)"
+                    echo "SRC_PACK_OK"
+                    ;;
+                  *)
+                    echo "[SRC] RUN_IT='$RUN_IT_FLAG' -> 跳过 git archive，生成占位包保住制品引用链"
+                    rm -rf .it_stub
+                    mkdir -p .it_stub
+                    printf 'integration test skipped by RUN_IT=false\n' > .it_stub/README
+                    tar czf firestar-it-src.tgz -C .it_stub .
+                    rm -rf .it_stub
+                    ls -lh firestar-it-src.tgz
+                    echo "SRC_PACK_SKIPPED_BY_RUN_IT"
+                    ;;
+                esac
           upload_step:
             step: ArtifactUpload
             name: 源码包上传
