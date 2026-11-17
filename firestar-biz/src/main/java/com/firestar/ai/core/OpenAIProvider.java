@@ -113,9 +113,15 @@ public class OpenAIProvider implements ChatProvider {
             assistantMsg.put("tool_calls", r.openAiToolCalls);
             messages.add(assistantMsg);
             for (ToolExec t : r.toolCalls) {
-                ToolResult tr = toolExecutor.execute(
-                        new ToolCall("openai-" + t.id, t.name, t.arguments),
-                        req.username(), req.isAdmin());
+                ToolCall call = new ToolCall("openai-" + t.id, t.name, t.arguments);
+                long toolStart = System.currentTimeMillis();
+                ToolResult tr = toolExecutor.execute(call, req.username(), req.isAdmin());
+                // N-13：所有工具（含 search_knowledge 等非 draft 工具）统一发审计帧，
+                // 由 AiChatController 用本地 convId 落库；draft 帧只负责前端渲染，不再重复记账。
+                ChatChunk auditFrame = ToolAuditFrame.of(toolStart, call, tr, objectMapper);
+                if (auditFrame != null) {
+                    onChunk.accept(auditFrame);
+                }
                 // 草稿类工具：把结构化预览作为 draft SSE 事件下发给前端（渲染「待确认表单」卡片）
                 if (t.name != null && t.name.startsWith("draft_")) {
                     try {

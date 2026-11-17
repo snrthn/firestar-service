@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 统一 HTTP 客户端工厂（供应商无关）。
@@ -17,11 +18,22 @@ import java.time.Duration;
 @Component
 public class HttpClientFactory {
 
+    /**
+     * 按 connectTimeout 复用共享的 HttpClient 实例。
+     *
+     * <p>JDK 17 的 HttpClient 内部持有连接池与selector管理线程，本身线程安全、适合共享。
+     * 本工厂是 Spring 单例，ChatProviderManager.reload() 热切时会重建各 provider；
+     * 若每次构建都 new 一个 HttpClient，旧实例的连接池无法显式 close（JDK17 HttpClient 无 close()），
+     * 会随热切不断累积。改为按超时缓存共享实例后，provider 重建不再新建连接，泄漏从根源消除。
+     * 每个 connectTimeout 值对应一个实例，连接按目标 host 由 JDK 内部自动隔离复用。</p>
+     */
+    private final ConcurrentHashMap<Duration, HttpClient> sharedClients = new ConcurrentHashMap<>();
+
     public HttpClient newClient(Duration connectTimeout) {
-        return HttpClient.newBuilder()
-                .connectTimeout(connectTimeout)
+        return sharedClients.computeIfAbsent(connectTimeout, timeout -> HttpClient.newBuilder()
+                .connectTimeout(timeout)
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
+                .build());
     }
 
     public HttpClient newClient() {

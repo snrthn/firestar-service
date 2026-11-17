@@ -35,4 +35,13 @@ public record ChatChunk(String type, String text, String data) {
     public static ChatChunk toolCall(String name, String argumentsJson) {
         return new ChatChunk("tool_call", name, argumentsJson);
     }
+
+    /**
+     * 工具调用审计帧（N-13）：data 携带完整审计 JSON
+     * {toolName, argsJson, resultJson, isError, latencyMs}，由 AiChatController 统一落 ai_tool_calls 表。
+     * 与上面的两参数版本重载共存；provider 直连路径用本版本。
+     */
+    public static ChatChunk toolCall(String payloadJson) {
+        return new ChatChunk("tool_call", null, payloadJson);
+    }
 }

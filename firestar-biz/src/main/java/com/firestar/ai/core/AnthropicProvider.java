@@ -170,9 +170,14 @@ public class AnthropicProvider implements ChatProvider {
                 useBlock.put("input", tu.inputNode(objectMapper));
                 assistantContent.add(useBlock);
 
-                ToolResult tr = toolExecutor.execute(
-                        new ToolCall(tu.id, tu.name, tu.arguments(objectMapper)),
-                        req.username(), req.isAdmin());
+                ToolCall call = new ToolCall(tu.id, tu.name, tu.arguments(objectMapper));
+                long toolStart = System.currentTimeMillis();
+                ToolResult tr = toolExecutor.execute(call, req.username(), req.isAdmin());
+                // N-13：所有工具统一发审计帧，由 AiChatController 用本地 convId 落库。
+                ChatChunk auditFrame = ToolAuditFrame.of(toolStart, call, tr, objectMapper);
+                if (auditFrame != null) {
+                    onChunk.accept(auditFrame);
+                }
                 if (tu.name != null && tu.name.startsWith("draft_")) {
                     try {
                         String draftPayload = objectMapper.writeValueAsString(Map.of(

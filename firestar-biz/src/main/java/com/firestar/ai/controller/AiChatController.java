@@ -2,6 +2,7 @@ package com.firestar.ai.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.firestar.ai.core.ChatProviderManager;
+import com.firestar.ai.core.ToolAuditFrame;
 import com.firestar.ai.dto.AiChatRequest;
 import com.firestar.ai.config.AiProperties;
 import com.firestar.ai.service.AiChatService;
@@ -15,7 +16,6 @@ import com.firestar.common.RequirePerm;
 import com.firestar.common.SecurityContextUtils;
 import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -143,17 +143,24 @@ public class AiChatController {
                                     .data(objectMapper.writeValueAsString(
                                             Map.of("mode", chunk.text(), "reason", chunk.data()))));
                             case "draft" -> {
-                                // 草稿预览帧：落审计 + 透传给前端渲染「待确认表单」卡片
-                                try {
-                                    JsonNode dp = objectMapper.readTree(chunk.data());
-                                    String toolName = dp.has("toolName") ? dp.get("toolName").asText() : "draft_shipment_create";
-                                    String argsJson = dp.has("argsJson") ? dp.get("argsJson").asText() : "{}";
-                                    String resultJson = dp.has("resultJson") ? dp.get("resultJson").asText() : "{}";
-                                    chatService.recordToolCall(convIdBox[0], toolName, argsJson, resultJson, 0, false, 0);
-                                } catch (Exception ignored) {
-                                    // 审计写失败不阻塞前端
-                                }
+                                // 草稿预览帧：仅透传给前端渲染「待确认表单」卡片。
+                                // 审计统一由 tool_call 帧负责（N-13），此处不再 recordToolCall 避免双写。
                                 emitter.send(SseEmitter.event().name("draft").data(chunk.data()));
+                            }
+                            case "tool_call" -> {
+                                // N-13：直连供应商（OpenAI/DeepSeek/Anthropic）的工具调用审计帧。
+                                // provider 只有外部 session id，本地 convId 在这里才有，故统一在此落库。
+                                // 下游不感知此帧（不 emitter.send），纯服务端审计。
+                                try {
+                                    ToolAuditFrame.Data audit = ToolAuditFrame.parse(chunk, objectMapper);
+                                    if (audit != null) {
+                                        chatService.recordToolCall(convIdBox[0], audit.toolName(),
+                                                audit.argsJson(), audit.resultJson(), 0,
+                                                audit.isError(), audit.latencyMs());
+                                    }
+                                } catch (Exception ignored) {
+                                    // 审计写失败不阻塞主链路（与 draft 旧行为一致）
+                                }
                             }
                             case "error" -> emitter.send(SseEmitter.event().name("error").data(chunk.text()));
                             case "done" -> { /* 结束统一在下方 */ }
