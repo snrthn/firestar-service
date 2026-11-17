@@ -1,18 +1,15 @@
 package com.firestar.ai.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.firestar.ai.core.CozePluginVerifier;
 import com.firestar.ai.service.AiChatService;
 import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
 import com.firestar.ai.tool.ToolExecutor;
-import com.firestar.common.SecurityContextUtils;
 import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
 import com.firestar.service.UserRoleService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

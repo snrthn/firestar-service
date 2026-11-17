@@ -24,7 +24,6 @@ import com.firestar.mapper.ShipmentLineMapper;
 import com.firestar.mapper.ShipmentMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.mapper.WriteOffMapper;
-import com.firestar.service.ReceivableService;
 import com.firestar.service.UserRoleService;
 import com.firestar.service.impl.ReceivableServiceImpl;
 import com.firestar.service.impl.WriteOffServiceImpl;

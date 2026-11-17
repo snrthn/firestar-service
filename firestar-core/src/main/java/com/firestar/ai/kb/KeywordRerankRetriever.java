@@ -1,6 +1,5 @@
 package com.firestar.ai.kb;
 
-import com.firestar.entity.HelpArticle;
 import com.firestar.ai.entity.KbChunk;
 import com.firestar.ai.entity.KbDoc;
 import com.firestar.mapper.HelpArticleMapper;

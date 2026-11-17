@@ -14,7 +14,6 @@ import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ReceiptVO;
 import com.firestar.dto.TaskInfo;
 import com.firestar.dto.TimelineNodeVO;
-import com.firestar.entity.Customer;
 import com.firestar.entity.DictData;
 import com.firestar.entity.FileStorage;
 import com.firestar.entity.Project;

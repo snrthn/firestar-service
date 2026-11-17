@@ -4,7 +4,6 @@ import com.firestar.dto.NotificationVO;
 import com.firestar.dto.NotifyCommand;
 import com.firestar.dto.PublishNotificationRequest;
 import com.firestar.dto.TemplateSaveRequest;
-import com.firestar.dto.TemplateVO;
 import com.firestar.entity.NotificationTemplate;
 
 import java.util.List;

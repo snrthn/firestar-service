@@ -6,7 +6,6 @@ import com.firestar.mapper.UserMapper;
 import com.firestar.realtime.RealtimeGateway;
 import com.firestar.realtime.SseEndpointSupport;
 import jakarta.servlet.http.HttpServletRequest;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

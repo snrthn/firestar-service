@@ -1,7 +1,6 @@
 package com.firestar.ai.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.ai.core.ChatProviderManager;
 import com.firestar.ai.crypto.CryptoService;
 import com.firestar.ai.dto.ModelConfigMasked;

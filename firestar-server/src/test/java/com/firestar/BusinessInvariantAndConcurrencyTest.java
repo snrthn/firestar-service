@@ -1,7 +1,6 @@
 package com.firestar;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.firestar.dto.ReceiptRequest;
 import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentLineCreateReq;

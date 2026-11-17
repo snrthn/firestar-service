@@ -8,7 +8,6 @@ import com.firestar.entity.User;
 import com.firestar.mapper.UserMapper;
 import com.firestar.service.FeedbackService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.security.core.Authentication;

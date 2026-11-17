@@ -1,6 +1,5 @@
 package com.firestar.ai.kb;
 
-import com.firestar.ai.entity.KbDoc;
 
 /**
  * 发布完成事件（设计 §7.3 预留，发布事务内切片完成后发出）。
