@@ -35,8 +35,13 @@ uploads/
 .vscode/
 
 ### Logs ###
+# *.log       命中当前日志；*.log.* 命中滚动压缩日志（app.log.2026-11-05.0.gz）
+# logs/        不带前导 / → 匹配任意层级的 logs 目录（根 logs/ 与 firestar-server/logs/ 都覆盖）
+#              历史坑：原写法 /logs/ 只匹配仓库根，导致 firestar-server/logs/ 下的
+#              app.log.*.gz 漏网被提交（app.log.2026-11-05.0.gz）。
 *.log
-/logs/
+*.log.*
+logs/
 
 ### Maven ###
 .mvn/timing.properties
