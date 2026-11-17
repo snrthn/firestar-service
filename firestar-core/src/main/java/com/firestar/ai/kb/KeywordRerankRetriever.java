@@ -7,6 +7,8 @@ import com.firestar.mapper.HelpArticleMapper;
 import com.firestar.ai.mapper.KbChunkMapper;
 import com.firestar.ai.mapper.KbDocMapper;
 import com.firestar.ai.service.KbTreeRules;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -32,6 +34,7 @@ import java.util.stream.Collectors;
  * 纯逻辑单测用 mock mapper 覆盖 ACL 过滤 + 重排。</p>
  */
 @Component
+@ConditionalOnProperty(name = "kb.retriever", havingValue = "keyword", matchIfMissing = true)
 public class KeywordRerankRetriever implements KbRetriever {
 
     private static final int DEFAULT_TOP_K = 4;
@@ -40,13 +43,31 @@ public class KeywordRerankRetriever implements KbRetriever {
     private final KbChunkMapper chunkMapper;
     private final HelpArticleMapper helpMapper;
     private final KbDocMapper docMapper;
+    private final KbReranker reranker;
 
+    /**
+     * Spring 注入用构造器（4 参）。rerank 实现由 {@code kb.retriever.rerank} 条件装配，
+     * 切换只改配置 + Bean，不改本类。
+     */
+    @Autowired
     public KeywordRerankRetriever(KbChunkMapper chunkMapper,
-                                 HelpArticleMapper helpMapper,
-                                 KbDocMapper docMapper) {
+                                  HelpArticleMapper helpMapper,
+                                  KbDocMapper docMapper,
+                                  KbReranker reranker) {
         this.chunkMapper = chunkMapper;
         this.helpMapper = helpMapper;
         this.docMapper = docMapper;
+        this.reranker = reranker;
+    }
+
+    /**
+     * 兼容构造器（3 参）：供单测直接 new 使用，默认绑定规则重排。
+     * 生产环境由 Spring 走上面的 4 参构造器。
+     */
+    public KeywordRerankRetriever(KbChunkMapper chunkMapper,
+                                  HelpArticleMapper helpMapper,
+                                  KbDocMapper docMapper) {
+        this(chunkMapper, helpMapper, docMapper, new RuleKbReranker());
     }
 
     @Override
@@ -93,7 +114,7 @@ public class KeywordRerankRetriever implements KbRetriever {
         scored = scored.stream()
                 .map(h -> new KbChunkHit(h.docId(), h.version(), h.sourceType(), h.title(),
                         h.headingPath(), h.anchor(), h.content(), h.sourceRef(),
-                        score(h, terms), h.fileId()))
+                        reranker.score(h, terms), h.fileId()))
                 .filter(h -> h.score() > 0)
                 .sorted(Comparator.comparingDouble(KbChunkHit::score).reversed())
                 .collect(Collectors.toList());
@@ -123,34 +144,4 @@ public class KeywordRerankRetriever implements KbRetriever {
         return String.join(" ", terms);
     }
 
-    /** 相关度评分（纯函数，可单测）：标题 +5/处，heading +3/处，正文 +1/处（每 term 封顶 10）。 */
-    static double score(KbChunkHit h, List<String> terms) {
-        String title = (h.title() == null ? "" : h.title()).toLowerCase();
-        String heading = (h.headingPath() == null ? "" : h.headingPath()).toLowerCase();
-        String content = (h.content() == null ? "" : h.content()).toLowerCase();
-        double s = 0;
-        for (String t : terms) {
-            if (title.contains(t)) {
-                s += 5;
-            }
-            if (heading.contains(t)) {
-                s += 3;
-            }
-            s += Math.min(countOccurrences(content, t), 10) * 1.0;
-        }
-        return s;
-    }
-
-    private static int countOccurrences(String text, String sub) {
-        if (text.isEmpty() || sub.isEmpty()) {
-            return 0;
-        }
-        int count = 0;
-        int idx = 0;
-        while ((idx = text.indexOf(sub, idx)) >= 0) {
-            count++;
-            idx += sub.length();
-        }
-        return count;
-    }
 }

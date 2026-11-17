@@ -1,5 +1,6 @@
 package com.firestar.ai.kb;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
  * 拦截机密文档」的策略而不动调用方。</p>
  */
 @Component
+@ConditionalOnProperty(name = "kb.egress.policy", havingValue = "allow-all", matchIfMissing = true)
 public class AllowAllKbEgressPolicy implements KbEgressPolicy {
 
     @Override

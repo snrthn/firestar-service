@@ -6,6 +6,12 @@ import com.firestar.ai.entity.KbAttachment;
 import com.firestar.ai.entity.KbChunk;
 import com.firestar.ai.entity.KbDoc;
 import com.firestar.ai.kb.KbMarkdownSplitter;
+import com.firestar.ai.kb.KbPublishGate;
+import com.firestar.ai.kb.KbPublishRequestedEvent;
+import com.firestar.ai.kb.KbPublishedEvent;
+import com.firestar.ai.kb.PublishDecision;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import com.firestar.ai.mapper.KbAttachmentMapper;
 import com.firestar.ai.mapper.KbChunkMapper;
 import com.firestar.ai.mapper.KbDocMapper;
@@ -61,6 +67,8 @@ public class KbDocService {
     private static final String ROLE_ORIGINAL = "ORIGINAL";
     private static final String ROLE_EXPIRED = "EXPIRED";
     private static final String STATUS_PUBLISHED = "PUBLISHED";
+    /** 设计 §7.3 预留：接 Flowable 审核后发布门可把文档置此状态；当前流程永不进入。 */
+    private static final String STATUS_PENDING_REVIEW = "PENDING_REVIEW";
     private static final String TYPE_FOLDER = "FOLDER";
     private static final String TYPE_DOC = "DOC";
     private static final String FILE_NORMAL = "NORMAL";
@@ -71,17 +79,39 @@ public class KbDocService {
     private final KbChunkMapper chunkMapper;
     private final FileStorageMapper fileMapper;
     private final FileStorageService fileStorageService;
+    private final KbPublishGate publishGate;
 
+    /** 发布事件发布器（设计 §7.3 预留）；无 Spring 上下文的场景为 null，发布时跳过事件。 */
+    @Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
+
+    /**
+     * Spring 注入用构造器（6 参）。publishGate 由 {@code kb.publish.gate} 条件装配，
+     * 发布主流程只调接口，切 Flowable 审核不动本类。
+     */
+    @Autowired
     public KbDocService(KbDocMapper docMapper,
                         KbAttachmentMapper attachmentMapper,
                         KbChunkMapper chunkMapper,
                         FileStorageMapper fileMapper,
-                        FileStorageService fileStorageService) {
+                        FileStorageService fileStorageService,
+                        KbPublishGate publishGate) {
         this.docMapper = docMapper;
         this.attachmentMapper = attachmentMapper;
         this.chunkMapper = chunkMapper;
         this.fileMapper = fileMapper;
         this.fileStorageService = fileStorageService;
+        this.publishGate = publishGate;
+    }
+
+    /** 兼容构造器（5 参）：默认发布门直接放行；供无 Spring 上下文的场景使用。 */
+    public KbDocService(KbDocMapper docMapper,
+                        KbAttachmentMapper attachmentMapper,
+                        KbChunkMapper chunkMapper,
+                        FileStorageMapper fileMapper,
+                        FileStorageService fileStorageService) {
+        this(docMapper, attachmentMapper, chunkMapper, fileMapper, fileStorageService,
+                new com.firestar.ai.kb.NoopKbPublishGate());
     }
 
     // ==================== 查询 ====================
@@ -394,6 +424,16 @@ public class KbDocService {
         if (isFolder(d)) {
             throw new BizException("文件夹不能发布");
         }
+        // 发布门扩展点（设计 §7.3）：默认 Noop 放行；切 Flowable 审核时在此拦截。
+        PublishDecision decision = publishGate.beforePublish(d);
+        if (decision == null || !decision.allowed()) {
+            String reason = (decision == null || decision.reason() == null)
+                    ? "发布被审核策略拦截" : decision.reason();
+            throw new BizException(reason);
+        }
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new KbPublishRequestedEvent(d, operator));
+        }
         int newVersion = (d.getVersion() == null ? 1 : d.getVersion()) + 1;
         LocalDateTime now = LocalDateTime.now();
         docMapper.update(null, new LambdaUpdateWrapper<KbDoc>()
@@ -430,6 +470,9 @@ public class KbDocService {
                 .eq(KbAttachment::getRole, ROLE_ORIGINAL)
                 .set(KbAttachment::getRole, ROLE_EXPIRED)
                 .set(KbAttachment::getExpiredAt, now));
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new KbPublishedEvent(id, newVersion, chunks.size()));
+        }
     }
 
     // ==================== 附件（REFERENCE）管理 ====================
