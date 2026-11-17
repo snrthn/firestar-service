@@ -24,6 +24,15 @@ public class EgressMasker {
 
     private final ObjectMapper objectMapper;
     private final Map<String, MaskAction> ruleMap = new ConcurrentHashMap<>();
+
+    /**
+     * 出域模式（strict / relaxed / log-only），由 ai.egress.mode 配置驱动，applyConfig 时热更新。
+     *
+     * <p>当前状态：已接入配置但尚未参与脱敏判定 —— 脱敏行为完全由 ruleMap 的字段级规则决定，
+     * 三种模式行为一致。属预留开关，待 relaxed / log-only 的差异化规则落地后接入。
+     * 因「只写不读」触发未使用告警，这里定点压制并注明原因，不做全局屏蔽。</p>
+     */
+    @SuppressWarnings("unused")
     private volatile MaskMode mode = MaskMode.STRICT;
 
     public EgressMasker(ObjectMapper objectMapper, AiProperties aiProperties) {

@@ -366,43 +366,6 @@ public class WriteOffServiceImpl implements WriteOffService {
 
     // ===================== 私有：装配 =====================
 
-    private WriteOffLedgerVO toReceiptLedgerVO(WriteOff w) {
-        WriteOffLedgerVO vo = new WriteOffLedgerVO();
-        vo.setId(w.getId());
-        vo.setLedgerType(LEDGER_RECEIPT);
-        vo.setLedgerNo(w.getWriteOffNo());
-        vo.setBizId(w.getReceiptId());
-        vo.setReceivableId(w.getReceivableId());
-        vo.setAmount(w.getAmount());
-        vo.setStatus(w.getStatus());
-        vo.setMethod(w.getWriteOffMethod());
-        vo.setLedgerDate(w.getWriteOffDate());
-        vo.setCreatedAt(w.getCreatedAt());
-        vo.setCreatedBy(w.getCreatedBy());
-        vo.setOriginalLedgerId(w.getOriginalWriteOffId());
-        vo.setReverseReason(reverseReasonOf(w.getExt()));
-        return vo;
-    }
-
-    private WriteOffLedgerVO toInvoiceLedgerVO(InvoiceAllocation a) {
-        WriteOffLedgerVO vo = new WriteOffLedgerVO();
-        vo.setId(a.getId());
-        vo.setLedgerType(LEDGER_INVOICE);
-        vo.setLedgerNo(a.getAllocationNo());
-        vo.setBizId(a.getInvoiceId());
-        vo.setReceivableId(a.getReceivableId());
-        vo.setAmount(a.getAmount());
-        vo.setStatus(a.getStatus());
-        // 该表无 method 列：开票核销均由分配明细产生，口径恒 MANUAL
-        vo.setMethod("MANUAL");
-        vo.setLedgerDate(a.getCreatedAt() == null ? null : a.getCreatedAt().toLocalDate());
-        vo.setCreatedAt(a.getCreatedAt());
-        vo.setCreatedBy(a.getCreatedBy());
-        vo.setOriginalLedgerId(a.getOriginalAllocationId());
-        vo.setReverseReason(reverseReasonOf(a.getExt()));
-        return vo;
-    }
-
     /** 批量翻译：应收单号+项目 / 主单号 / 项目号 / 创建人名（四次批量查，禁 N+1） */
     private void fillNames(List<WriteOffLedgerVO> rows) {
         if (rows.isEmpty()) {
@@ -455,14 +418,6 @@ public class WriteOffServiceImpl implements WriteOffService {
         }
     }
 
-    private String reverseReasonOf(Map<String, Object> ext) {
-        if (ext == null) {
-            return null;
-        }
-        Object r = ext.get("reverseReason");
-        return r == null ? null : r.toString();
-    }
-
     private PoolItemVO poolItem(Long id, String no, BigDecimal amount,
                                 BigDecimal unmatched, LocalDate docDate) {
         PoolItemVO item = new PoolItemVO();
@@ -481,12 +436,6 @@ public class WriteOffServiceImpl implements WriteOffService {
         return projectMapper.selectList(new LambdaQueryWrapper<Project>()
                         .in(Project::getId, projectIds))
                 .stream().collect(Collectors.toMap(Project::getId, Project::getProjectNo, (a, b) -> a));
-    }
-
-    private IPage<WriteOffLedgerVO> emptyPage(int pn, int ps) {
-        Page<WriteOffLedgerVO> page = new Page<>(pn, ps, 0);
-        page.setRecords(List.of());
-        return page;
     }
 
     // ===================== 私有：账务（同构复制 Receipt/InvoiceServiceImpl） =====================

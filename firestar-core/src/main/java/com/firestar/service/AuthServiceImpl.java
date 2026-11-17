@@ -21,17 +21,13 @@ import com.firestar.entity.User;
 import com.firestar.entity.LoginLog;
 import com.firestar.entity.UserRole;
 import com.firestar.exception.BizException;
-import com.firestar.service.LogService;
 import com.firestar.mapper.MenuMapper;
 import com.firestar.mapper.OrgMapper;
-import com.firestar.mapper.PermissionMapper;
 import com.firestar.mapper.PostMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.RoleMenuMapper;
-import com.firestar.mapper.RolePermissionMapper;
 import com.firestar.mapper.UserMapper;
 import com.firestar.mapper.UserRoleMapper;
-import com.firestar.service.TokenBlacklistService;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -71,8 +67,6 @@ public class AuthServiceImpl implements AuthService {
     private final UserMapper userMapper;
     private final UserRoleMapper userRoleMapper;
     private final RoleMapper roleMapper;
-    private final RolePermissionMapper rolePermissionMapper;
-    private final PermissionMapper permissionMapper;
     private final RoleMenuMapper roleMenuMapper;
     private final MenuMapper menuMapper;
     private final OrgMapper orgMapper;
@@ -86,8 +80,8 @@ public class AuthServiceImpl implements AuthService {
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
-                           RoleMapper roleMapper, RolePermissionMapper rolePermissionMapper,
-                           PermissionMapper permissionMapper, RoleMenuMapper roleMenuMapper,
+                           RoleMapper roleMapper,
+                           RoleMenuMapper roleMenuMapper,
                            MenuMapper menuMapper, OrgMapper orgMapper, PostMapper postMapper,
                            TokenBlacklistService blacklistService,
                            JwtUtil jwtUtil, JwtProperties jwtProperties,
@@ -97,8 +91,6 @@ public class AuthServiceImpl implements AuthService {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
         this.roleMapper = roleMapper;
-        this.rolePermissionMapper = rolePermissionMapper;
-        this.permissionMapper = permissionMapper;
         this.roleMenuMapper = roleMenuMapper;
         this.menuMapper = menuMapper;
         this.orgMapper = orgMapper;

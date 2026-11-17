@@ -43,9 +43,27 @@ class DatabaseCheckServiceTest {
     @Autowired
     private DataSource dataSource;
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> check() {
         return service.check();
+    }
+
+    /**
+     * 从自检报告里取嵌套 Map。
+     *
+     * <p>DatabaseCheckService.check() 的契约是 {@code Map<String, Object>}，嵌套节点的实际类型
+     * （tables / flyway / seedData / connection）由服务端固定，但静态类型只能到 Object，
+     * 直接强转会产生 unchecked 告警。转换集中在这两个辅助方法里（各带一处
+     * {@code @SuppressWarnings("unchecked")}），调用点保持类型安全、无告警。</p>
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object node) {
+        return (Map<String, Object>) node;
+    }
+
+    /** 同 asMap：取嵌套 List（tables 列表 / flyway.applied 列表）。 */
+    @SuppressWarnings("unchecked")
+    private static <T> List<T> asList(Object node) {
+        return (List<T>) node;
     }
 
     @Test
@@ -55,7 +73,7 @@ class DatabaseCheckServiceTest {
         assertTrue(Boolean.TRUE.equals(r.get("healthy")),
                 "firestar_test 集成测试库应健康，实际错误：" + r.get("errors"));
 
-        Map<String, Object> tables = (Map<String, Object>) r.get("tables");
+        Map<String, Object> tables = asMap(r.get("tables"));
         // 单一来源：生产与测试共用 DatabaseCheckService 的基线常量
         assertEquals(DatabaseCheckService.EXPECTED_TABLE_COUNT, tables.get("businessTableCount"));
         assertEquals(DatabaseCheckService.EXPECTED_TABLE_COUNT, tables.get("expected"));
@@ -68,7 +86,7 @@ class DatabaseCheckServiceTest {
         // 一旦 V3 被跳过 / 半途失败，这里会立刻掉到 0 或 7，而不是等到部署后才发现。
         assertEquals(62, tables.get("engineTableCount"), "V3 应建出 62 张引擎表");
 
-        Map<String, Object> flyway = (Map<String, Object>) r.get("flyway");
+        Map<String, Object> flyway = asMap(r.get("flyway"));
         // 不写死「75 个版本」这类会随迁移推进而腐化的数字，只要求完整重放
         assertTrue(((Number) flyway.get("appliedCount")).intValue() >= 100,
                 "Flyway 应已重放完整迁移序列，实际 " + flyway.get("appliedCount"));
@@ -88,9 +106,8 @@ class DatabaseCheckServiceTest {
         }
         assertFalse(rawNames.isEmpty(), "应能读到表清单");
 
-        Map<String, Object> tables = (Map<String, Object>) check().get("tables");
-        @SuppressWarnings("unchecked")
-        List<String> business = (List<String>) tables.get("tables");
+        Map<String, Object> tables = asMap(check().get("tables"));
+        List<String> business = asList(tables.get("tables"));
 
         // 引擎表必须被排除干净：业务表清单里不能出现任何引擎表名
         for (String name : business) {
@@ -113,7 +130,7 @@ class DatabaseCheckServiceTest {
     @Test
     @DisplayName("3. 种子数据条数与当前迁移一致（期望值单一来源）")
     void seedDataCountsMatchBaseline() {
-        Map<String, Object> seed = (Map<String, Object>) check().get("seedData");
+        Map<String, Object> seed = asMap(check().get("seedData"));
         // 只维护一份：DatabaseCheckService.readSeedData 的 public 常量
         assertEquals(DatabaseCheckService.EXPECTED_DICT_TYPE_COUNT, seed.get("dictTypeCount"));
         assertEquals(DatabaseCheckService.EXPECTED_DICT_DATA_COUNT, seed.get("dictDataCount"));
@@ -125,9 +142,8 @@ class DatabaseCheckServiceTest {
     @Test
     @DisplayName("4. Flyway 版本记录 checksum 非 NULL（防手工伪造版本表）")
     void flywayChecksumsAreReal() {
-        Map<String, Object> flyway = (Map<String, Object>) check().get("flyway");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> applied = (List<Map<String, Object>>) flyway.get("applied");
+        Map<String, Object> flyway = asMap(check().get("flyway"));
+        List<Map<String, Object>> applied = asList(flyway.get("applied"));
         // 与 appliedCount 自洽即可，不再写死「74 个版本」
         assertEquals(((Number) flyway.get("appliedCount")).intValue(), applied.size());
         assertTrue(applied.size() >= 3, "至少应有奠基版本记录");
@@ -150,7 +166,7 @@ class DatabaseCheckServiceTest {
     @Test
     @DisplayName("5. 连接信息不含明文密码，且确实连的是集成测试库")
     void connectionInfoHasNoPlainPassword() throws Exception {
-        Map<String, Object> conn = (Map<String, Object>) check().get("connection");
+        Map<String, Object> conn = asMap(check().get("connection"));
         String url = String.valueOf(conn.get("url"));
         assertTrue(url.startsWith("jdbc:mysql://"), "URL 应为 jdbc:mysql 开头，实际 " + url);
         assertFalse(url.contains("password="), "URL 不得携带明文密码参数");

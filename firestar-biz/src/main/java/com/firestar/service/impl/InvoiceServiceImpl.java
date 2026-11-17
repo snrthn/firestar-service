@@ -873,17 +873,6 @@ public class InvoiceServiceImpl implements InvoiceService {
     }
 
     /**
-     * 发票业务单号：FP-yyyyMMdd-NNN。取含逻辑删除行的当日最大序号 +1（同 generateReceiptNo 范式）——
-     * 已删发票仍占用 uk_tenant_invoice_no 唯一键，复用号会撞键 500（2026-10-27 收款单同款教训）。
-     */
-    private String generateInvoiceNo() {
-        String date = LocalDateTime.now().format(ALLOCATION_NO_DATE_FMT);
-        Integer maxSeq = invoiceMapper.selectMaxDailySeq(date);
-        int next = (maxSeq == null ? 0 : maxSeq) + 1;
-        return String.format("FP-%s-%03d", date, next);
-    }
-
-    /**
      * 业务申请单号（V95 发票流程重构）：FP-yyyyMMdd-NNN，创建即生成、不可空、不可改。
      * 与税务发票号 invoice_no 同前缀但落不同列（apply_no vs invoice_no），
      * 查 selectMaxApplyDailySeq（原生 SQL 含逻辑删除行，防撞 uk_tenant_apply_no）。
@@ -937,7 +926,7 @@ public class InvoiceServiceImpl implements InvoiceService {
     }
 
     /**
-     * 核销明细单号 IA-yyyyMMdd-NNN：取【含逻辑删除行】的当日最大序号 +1（同 generateInvoiceNo 范式）。
+     * 核销明细单号 IA-yyyyMMdd-NNN：取【含逻辑删除行】的当日最大序号 +1（同 generateApplyNo 范式）。
      *
      * <p>⚠️ 不能用 BaseMapper.selectCount + 1：MP 逻辑删除拦截器会给它追加 is_deleted=0，
      * 而 uk_tenant_allocation_no(tenant_id, allocation_no) 唯一键不区分 is_deleted ——

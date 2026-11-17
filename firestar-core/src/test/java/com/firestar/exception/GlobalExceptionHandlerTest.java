@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.mock.http.MockHttpInputMessage;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 
 import java.util.Objects;
@@ -42,7 +43,8 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("400：HttpMessageNotReadableException 必须返回 400 + code=400 + 可读提示")
     void messageNotReadableReturns400() {
-        HttpMessageNotReadableException ex = new HttpMessageNotReadableException("boom", (Throwable) null);
+        HttpMessageNotReadableException ex =
+                new HttpMessageNotReadableException("boom", new MockHttpInputMessage(new byte[0]));
 
         ResponseEntity<Result<Void>> resp = handler.handleMsgNotReadable(ex);
 

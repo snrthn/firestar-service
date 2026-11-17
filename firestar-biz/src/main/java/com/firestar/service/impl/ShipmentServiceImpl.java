@@ -57,7 +57,6 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -80,8 +79,6 @@ public class ShipmentServiceImpl implements ShipmentService {
 
     /** 发货审批流程 process_code（P3 引擎，一步 ROLE_SALES_MANAGER 节点，决策#1） */
     public static final String SHIPMENT_PROCESS_CODE = "shipment_approval";
-
-    private static final DateTimeFormatter BATCH_NO_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private static final String DICT_SHIPMENT_STATUS = "shipment_status";
     private static final String DICT_SHIPMENT_LINE_STATUS = "shipment_line_status";

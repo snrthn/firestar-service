@@ -79,13 +79,13 @@ public class ChatProviderManager implements ApplicationRunner {
         this.dictDataMapper = dictDataMapper;
         // 构造器内初始化注册表：此时上方 final 字段均已赋值，lambda 捕获 this 运行时已完整。
         this.registry = Map.of(
-                "coze", c -> new CozeProvider(c.baseUrl(), c.botId(), c.apiKey(), objectMapper, httpClientFactory),
-                "openai", c -> new OpenAIProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
+                "coze", c -> new CozeProvider(c.baseUrl(), c.botId(), c.apiKey(), this.objectMapper, this.httpClientFactory),
+                "openai", c -> new OpenAIProvider(c.baseUrl(), c.apiKey(), c.model(), this.objectMapper, this.toolExecutor, this.httpClientFactory),
                 // DeepSeek 为 OpenAI 兼容协议，复用 OpenAIProvider 的 SSE 解析 + 工具调用循环，仅 name 不同
-                "deepseek", c -> new DeepSeekProvider(c.baseUrl(), c.apiKey(), c.model(), objectMapper, toolExecutor, httpClientFactory),
-                "ollama", c -> new OllamaProvider(c.baseUrl(), c.model(), objectMapper),
+                "deepseek", c -> new DeepSeekProvider(c.baseUrl(), c.apiKey(), c.model(), this.objectMapper, this.toolExecutor, this.httpClientFactory),
+                "ollama", c -> new OllamaProvider(c.baseUrl(), c.model(), this.objectMapper),
                 // Anthropic 原生 Messages API（/v1/messages），extraJson 传 maxTokens / anthropicVersion
-                "anthropic", c -> new AnthropicProvider(c.baseUrl(), c.apiKey(), c.model(), c.extraJson(), objectMapper, toolExecutor, httpClientFactory)
+                "anthropic", c -> new AnthropicProvider(c.baseUrl(), c.apiKey(), c.model(), c.extraJson(), this.objectMapper, this.toolExecutor, this.httpClientFactory)
         );
     }
 

@@ -1,7 +1,6 @@
 package com.firestar.config;
 
 import com.firestar.common.RequirePerm;
-import com.firestar.config.JwtAuthenticationFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.core.Authentication;

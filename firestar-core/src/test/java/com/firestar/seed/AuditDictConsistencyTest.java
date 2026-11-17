@@ -36,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * </ul>
  *
  * <p>新增一个 {@code targetType} 的正确姿势：
- * ① 在业务方法上写 {@code @Auditable(targetType="XXX")}；
- * ② 新建 Flyway 迁移往 {@code sys_dict_data} 插 {@code audit_target_type / XXX}；
+ * ① 在业务方法上写 <code>@Auditable(targetType="XXX")</code>;
+ * ② 新建 Flyway 迁移往 <code>sys_dict_data</code> 插 <code>audit_target_type / XXX</code>;
  * ③ 同步 {@code DatabaseCheckService.EXPECTED_DICT_DATA_COUNT}（由 bin/test.sh 全量重放校验）。
  * 漏掉 ② 本测试会让 CI 变红；漏掉 ③ DatabaseCheckServiceTest 会让本地全量测试变红。
  *

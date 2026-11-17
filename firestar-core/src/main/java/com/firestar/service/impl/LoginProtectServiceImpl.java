@@ -9,7 +9,6 @@ import com.firestar.entity.UserRole;
 import com.firestar.exception.LoginRateLimitException;
 import com.firestar.mapper.LoginFailMapper;
 import com.firestar.mapper.LoginIpLimitMapper;
-import com.firestar.mapper.LoginLogMapper;
 import com.firestar.mapper.RoleMapper;
 import com.firestar.mapper.UserRoleMapper;
 import com.firestar.service.LoginProtectService;
@@ -46,7 +45,6 @@ public class LoginProtectServiceImpl implements LoginProtectService {
 
     private final LoginFailMapper failMapper;
     private final LoginIpLimitMapper ipMapper;
-    private final LoginLogMapper loginLogMapper;
     private final LogService logService;
     private final NotificationService notificationService;
     private final RoleMapper roleMapper;
@@ -69,14 +67,12 @@ public class LoginProtectServiceImpl implements LoginProtectService {
 
     public LoginProtectServiceImpl(LoginFailMapper failMapper,
                                    LoginIpLimitMapper ipMapper,
-                                   LoginLogMapper loginLogMapper,
                                    LogService logService,
                                    NotificationService notificationService,
                                    RoleMapper roleMapper,
                                    UserRoleMapper userRoleMapper) {
         this.failMapper = failMapper;
         this.ipMapper = ipMapper;
-        this.loginLogMapper = loginLogMapper;
         this.logService = logService;
         this.notificationService = notificationService;
         this.roleMapper = roleMapper;

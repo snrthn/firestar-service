@@ -503,17 +503,17 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         // 必须含 taskCandidateGroup + roleCodesOf 段，否则 ROLE 审批人（如 ROLE_SALES_MANAGER）判假阴性。
         // 2026-10-25 修（虎哥线上问题）：businessKey 跨表相撞（发票 #2 vs 收款单 #2），
         // 三处查询全部加 processDefinitionKey 收敛到本流程类型，杜绝「出纳看到别人的发票详情」。
-        for (Task t : taskService.createTaskQuery()
+        if (!taskService.createTaskQuery()
                 .processInstanceBusinessKey(businessKey)
                 .processDefinitionKey(processKey)
-                .taskCandidateOrAssigned(username).list()) {
+                .taskCandidateOrAssigned(username).list().isEmpty()) {
             return true;
         }
         for (String roleCode : roleCodesOf(username)) {
-            for (Task t : taskService.createTaskQuery()
+            if (!taskService.createTaskQuery()
                     .processInstanceBusinessKey(businessKey)
                     .processDefinitionKey(processKey)
-                    .taskCandidateGroup(roleCode).list()) {
+                    .taskCandidateGroup(roleCode).list().isEmpty()) {
                 return true;
             }
         }
@@ -570,7 +570,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             return Collections.emptyList();
         }
         // 跨实例统一按开始时间升序（单实例查询已隐含此序，跨实例必须显式排）
-        allTasks.sort(Comparator.comparing(HistoricTaskInstance::getStartTime,
+        allTasks.sort(Comparator.comparing(HistoricTaskInstance::getCreateTime,
                 Comparator.nullsLast(Comparator.naturalOrder())));
         return buildTimelineFromTasks(allTasks);
     }
@@ -587,7 +587,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             TimelineNodeVO vo = new TimelineNodeVO();
             vo.setNodeId(h.getTaskDefinitionKey());
             vo.setNodeName(h.getName());
-            vo.setStartTime(toLocalDateTime(h.getStartTime()));
+            vo.setStartTime(toLocalDateTime(h.getCreateTime()));
             vo.setEndTime(toLocalDateTime(h.getEndTime()));
             // 结果四态（2026-10-25 修，虎哥线上问题：撤回被渲染成「已驳回」误导）：
             //   ACTIVE  进行中（endTime = null）

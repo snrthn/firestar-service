@@ -67,8 +67,6 @@ public class KbDocService {
     private static final String ROLE_ORIGINAL = "ORIGINAL";
     private static final String ROLE_EXPIRED = "EXPIRED";
     private static final String STATUS_PUBLISHED = "PUBLISHED";
-    /** 设计 §7.3 预留：接 Flowable 审核后发布门可把文档置此状态；当前流程永不进入。 */
-    private static final String STATUS_PENDING_REVIEW = "PENDING_REVIEW";
     private static final String TYPE_FOLDER = "FOLDER";
     private static final String TYPE_DOC = "DOC";
     private static final String FILE_NORMAL = "NORMAL";
@@ -335,7 +333,11 @@ public class KbDocService {
             }
             newParentId = req.getTargetId();
         } else {
-            newParentId = req.getParentId() == null ? 0L : req.getParentId();
+            // 旧契约兜底通道（position 为空时生效）：parentId/sortNo 已是 @Deprecated，
+            // 但存量客户端仍在用，不能删。此处定点读取并说明原因，不做全局压制。
+            @SuppressWarnings("deprecation")
+            Long legacyParentId = req.getParentId();
+            newParentId = legacyParentId == null ? 0L : legacyParentId;
         }
 
         KbTreeRules.assertNoCycle(all, id, newParentId);
@@ -371,8 +373,11 @@ public class KbDocService {
                 }
             }
         } else {
-            sortNo = req.getSortNo() != null
-                    ? req.getSortNo() : KbTreeRules.nextSortNo(all, newParentId);
+            // 旧契约兜底通道：sortNo 已是 @Deprecated，但存量客户端仍在用，不能删。
+            @SuppressWarnings("deprecation")
+            Integer legacySortNo = req.getSortNo();
+            sortNo = legacySortNo != null
+                    ? legacySortNo : KbTreeRules.nextSortNo(all, newParentId);
         }
 
         docMapper.update(null, new LambdaUpdateWrapper<KbDoc>()
@@ -658,7 +663,8 @@ public class KbDocService {
             }
         }
         if (!toRemove.isEmpty()) {
-            attachmentMapper.deleteBatchIds(toRemove);
+            attachmentMapper.delete(new LambdaQueryWrapper<KbAttachment>()
+                    .in(KbAttachment::getId, toRemove));
         }
         LocalDateTime now = LocalDateTime.now();
         for (Long fileId : refs) {

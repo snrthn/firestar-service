@@ -64,7 +64,12 @@ public class User extends AuditedEntity {
      * 职级编码 → sys_level.level_code（可空，非必填；V39 新增，P3 LEVEL 节点解析依据）。
      * updateStrategy=IGNORED：updateById 时显式写入 null —— 否则 MP 默认忽略 null 字段，
      * 前端把职级下拉清空后保存，DB 里的旧值清不掉（实测：RESTORE 返回成功但 level_code 仍是 L3）。
+     *
+     * <p>IGNORED 在 MP 3.5.7 已标记 deprecated，但这是唯一能表达「清空时也写 null」的语义，
+     * 换成 NOT_NULL 会导致旧值清不掉（功能回归）。故此处定点压制并保留原因说明，
+     * 后续若 MP 提供官方替代策略再行迁移。</p>
      */
+    @SuppressWarnings("deprecation")
     @TableField(value = "level_code", updateStrategy = FieldStrategy.IGNORED)
     private String levelCode;
 }

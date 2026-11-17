@@ -1,6 +1,5 @@
 package com.firestar.ai.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.firestar.ai.entity.AiConversation;
 import com.firestar.ai.entity.AiToolCall;
 import com.firestar.ai.mapper.AiConversationMapper;
@@ -64,7 +63,7 @@ class AiChatServiceTest {
 
         AiToolCall tc = new AiToolCall();
         tc.setResultJson("{\"shipment\":1}");
-        when(toolCallMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(tc);
+        when(toolCallMapper.selectOne(any())).thenReturn(tc);
 
         assertEquals("{\"shipment\":1}", service.getLatestDraft(10L, 1L));
     }

@@ -26,8 +26,17 @@ public class KbNodeMoveReq {
     /** BEFORE/AFTER 时为兄弟节点 id；APPEND 时为目标父 id（0 = 根） */
     private Long targetId;
 
-    /** @deprecated 旧契约，仅兼容保留 */
+    /**
+     * @deprecated 旧契约，仅兼容保留。
+     * <p>注意：除 javadoc 标签外必须同时打 {@code @Deprecated} 注解 ——
+     * Lombok 依据注解把废弃语义传递给生成的 getter/ setter，缺注解时
+     * IDE 侧无法识别为已废弃（javac 报「未使用 @Deprecated 对已过时的项目进行注释」）。</p>
+     */
+    @Deprecated
     private Long parentId;
-    /** @deprecated 旧契约，仅兼容保留 */
+    /**
+     * @deprecated 旧契约，仅兼容保留（同 {@link #parentId}，需同时打 @Deprecated 注解）。
+     */
+    @Deprecated
     private Integer sortNo;
 }

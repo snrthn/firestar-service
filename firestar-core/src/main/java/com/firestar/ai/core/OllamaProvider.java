@@ -17,12 +17,9 @@ import java.util.function.Consumer;
  */
 public class OllamaProvider implements ChatProvider {
 
-    private final String baseUrl;
-    private final String model;
-
+    // 占位实现：baseUrl/model/objectMapper 暂不参与逻辑（L3 走云端，无需本地推理）。
+    // 保留构造器签名为将来填充 Ollama 本地调用，调用方无需改动。
     public OllamaProvider(String baseUrl, String model, ObjectMapper objectMapper) {
-        this.baseUrl = baseUrl;
-        this.model = model;
     }
 
     @Override

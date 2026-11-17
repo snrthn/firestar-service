@@ -19,16 +19,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * 本实现按通用约定拼接 {@code timestamp + "\n" + nonce + "\n" + body} 后做 HMAC-SHA256，
  * 并校验时间戳 5 分钟内（防重放）。</p>
  *
- * <p>⚠️ 与扣子平台签名规范对齐：若平台实际头名 / 拼接顺序不同，
- * 仅改下方 {@code SIGNATURE_HEADER / TIMESTAMP_HEADER / NONCE_HEADER} 常量与拼接串即可，
- * 不动验签主流程。</p>
+ * <p>⚠️ 与扣子平台签名规范对齐：头名在 {@code AiPluginController} 的 {@code @RequestHeader} 中定义，
+ * 拼接顺序在本类 {@link #verify} 的 payload 处；若平台规范不同，改这两处即可，不动验签主流程。</p>
  */
 @Component
 public class CozePluginVerifier {
 
-    private static final String SIGNATURE_HEADER = "X-Coze-Signature";
-    private static final String TIMESTAMP_HEADER = "X-Coze-Timestamp";
-    private static final String NONCE_HEADER = "X-Coze-Nonce";
     private static final long MAX_AGE_SECONDS = 300;
 
     /** 已使用 nonce → 过期时间戳（秒）。5 分钟窗口内同一 nonce 仅可成功验签一次，防重放。 */

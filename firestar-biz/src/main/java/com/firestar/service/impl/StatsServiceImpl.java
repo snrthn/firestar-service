@@ -594,7 +594,6 @@ public class StatsServiceImpl implements StatsService {
     public FulfillmentVO fulfillment(StatsQuery q) {
         FulfillmentVO v = new FulfillmentVO();
         List<Long> pids = resolveProjectIds(q);
-        LocalDate[] p = periodDates(q);
         if (pids != null && pids.isEmpty()) return v;
 
         // D-09 退货率 = Σ 已完成退货额 / Σ 已发货额（排除 REJECTED）
