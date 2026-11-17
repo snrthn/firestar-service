@@ -76,7 +76,8 @@ public class DatabaseCheckService {
     // V211：ai_provider 字典新增 Anthropic 原生供应商 1 项 → 156→157。
     public static final long EXPECTED_DICT_DATA_COUNT = 157L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
-    public static final long EXPECTED_ROLE_COUNT = 7L;
+    // V2 种子 7 个基础角色；V213 新增 ROLE_OPS_ADMIN(运维管理员) + ROLE_TEST(测试账号) → 7+2=9。
+    public static final long EXPECTED_ROLE_COUNT = 9L;
     public static final long EXPECTED_ROLE_CONFLICT_COUNT = 4L;
 
     /**
