@@ -181,6 +181,45 @@ else
   echo "[it] 默认在线执行 mvn test（surefire provider 按 pom 声明版本自动解析）"
 fi
 
+# ---- [2026-11-18] class 版本预检：拦住「高版本 JDK 编译产物」导致的 UnsupportedClassVersionError ----
+# 实锤链条（本次 BUILD FAILURE 的真因，不是业务代码问题）：
+#   1) VS Code 的 Java 扩展（redhat.java 1.58.0）自带 JRE 25.0.4.1，编辑/保存 .java 时会把
+#      增量编译结果写进 target/classes 与 target/test-classes，产出 class major=69；
+#   2) 之后 Maven（JDK 17）跑 mvn test，maven-compiler-plugin 见「class 比源文件新」就打印
+#      "Nothing to compile - all classes are up to date" 跳过重编；
+#   3) surefire fork 的 JVM 是 JDK 17（支持上限 61）→ 加载 69 的 class 直接
+#      "class file version 69.0 ... only recognizes up to 61.0" → BUILD FAILURE。
+# 恶心之处：报错点名的是随机一个测试类（本次 EmbeddingPropertiesTest），看着像业务代码坏了。
+# 对策：跑测试前抽样各模块 target 下的 class，major > 61 就清掉该模块的 classes/test-classes
+#   让 Maven 全量重编。只清这两个子目录 —— target 根下的 fat jar 可能正被运行中的实例锁定，
+#   整体 rm -rf target 会撞文件锁甚至打断在跑的服务。
+# 注：parent pom 已显式锁 <maven.compiler.release>17</maven.compiler.release>（Maven 侧根治），
+#   本段是针对「IDE 绕过 Maven 直接编译」的兜底。
+IT_CLASS_MAJOR=61   # Java 17
+stale_modules=""
+stale_clean=""
+for itm in firestar-core firestar-biz firestar-server; do
+  [ -d "$itm/target" ] || continue
+  sample=$(find "$itm/target/classes" "$itm/target/test-classes" -name '*.class' -print -quit 2>/dev/null || true)
+  if [ -z "$sample" ]; then continue; fi
+  major=$(od -An -tu1 -j6 -N2 "$sample" 2>/dev/null | awk 'NF { print $1 * 256 + $2; exit }' || true)
+  if [ -n "$major" ] && [ "$major" -gt "$IT_CLASS_MAJOR" ]; then
+    stale_modules="${stale_modules} ${itm}(major=${major})"
+    stale_clean="${stale_clean} ${itm}"
+  fi
+done
+if [ -n "$stale_modules" ]; then
+  echo "[it] ⚠️ 检测到高版本 JDK 编译产物：${stale_modules# }"
+  echo "[it]    常见原因：VS Code Java 扩展自带 JRE 25 往 target 写了 major=69 的 class，"
+  echo "[it]    而 maven-compiler-plugin 判定「已是最新」跳过重编 → surefire(JDK 17) 加载即报"
+  echo "[it]    UnsupportedClassVersionError（报错指向随机测试类，极易误判为业务问题）。"
+  echo "[it]    自动清理 classes/test-classes 并强制重编（不动 target 根下的 jar）..."
+  for itm in ${stale_clean}; do
+    find "$itm/target/classes" "$itm/target/test-classes" -type f -delete 2>/dev/null || true
+  done
+  echo "[it]    清理完成，Maven 将全量重编上述模块"
+fi
+
 if [ ${#MVN_ARGS[@]} -gt 0 ]; then
   mvn "${MVN_OFFLINE_FLAG[@]+"${MVN_OFFLINE_FLAG[@]}"}" test "${MVN_ARGS[@]}"
 else
