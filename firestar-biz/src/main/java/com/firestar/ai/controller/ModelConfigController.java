@@ -104,6 +104,7 @@ public class ModelConfigController {
         e.setApiKey(req.apiKey());
         e.setExtraJson(req.extraJson());
         e.setActive(req.active());
+        e.setSortNo(req.sortNo());
         return e;
     }
 }

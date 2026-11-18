@@ -7,9 +7,8 @@ package com.firestar.ai.dto;
  *
  * <p>V214：新增 modelType（chat|embedding|rerank|tts），缺省按 chat 处理以兼容旧客户端。</p>
  *
- * <p>V215：<b>故意不含 sortNo</b>。展示顺序只有两条写入路径：新增时追加到末尾
- * （Service 取当前最大 sort_no + 10），以及页面「上移/下移」走 {@code /ai/model-config/sort}
- * 整表重排。表单里再开一个 sortNo 输入框会变成第三套写法，容易出现「编辑保存把顺序打乱」。</p>
+ * <p>V215：新增 sortNo（列表排序号）。表单可直接填写：<b>null = 新增排到末尾 / 编辑保持不变</b>；
+ * 页面「上移/下移」走 {@code /ai/model-config/sort} 整表重排（回写 1..N），两条路径并行不冲突。</p>
  */
 public record ModelConfigRequest(
         Long id,
@@ -21,7 +20,9 @@ public record ModelConfigRequest(
         String apiKey,
         String extraJson,
         /** 是否设为当前类型下的生效供应商（每类型唯一，运行期真值） */
-        Integer active) {
+        Integer active,
+        /** 列表排序号（升序，1..N 连续）；null = 新增排到末尾 / 编辑保持不变 */
+        Integer sortNo) {
 
     /** 兼容旧客户端：未传 modelType 时按 chat。 */
     public String effectiveModelType() {

@@ -30,9 +30,9 @@ import java.util.stream.Collectors;
  * 同一 provider（如 dashscope）可同时存在 chat/embedding/rerank/tts 多行，互不干扰。
  * is_active 语义为「每类型唯一」，由本类 ensureUniqueActive 按类型置 0（DB 唯一键只约束 model_type+provider）。</p>
  *
- * <p><b>展示顺序（V215）</b>：列表按 sort_no 升序（同号按 id），新配置追加到末尾，
- * 页面「上移/下移」走 {@link #reorder(List, String)} 按整表 id 顺序重写 sort_no（步长 10）。
- * 顺序只影响展示，不影响运行期生效行（is_active 决定）。</p>
+ * <p><b>展示顺序（V215）</b>：列表按 sort_no 升序（同号按 id），数值即展示序号（1..N 连续）。
+ * 新增默认追加到末尾（表单也可直接填），「上移/下移」走 {@link #reorder(List, String)}
+ * 按整表 id 顺序重写 sort_no。顺序只影响展示，不影响运行期生效行（is_active 决定）。</p>
  *
  * <p>审计：create / update / delete 均标 {@link Auditable}（before/after 仅快照非敏感字段
  * modelType/provider/baseUrl/model/active，密钥永远不进审计日志）。保存使某行 active=1 后调用
@@ -92,7 +92,7 @@ public class ModelConfigService {
 
     @Auditable(operationType = "CREATE", targetType = "AI_MODEL_CONFIG",
             targetIdSpEl = "#result", entityClass = ModelConfig.class,
-            fields = {"modelType", "provider", "baseUrl", "model", "active"})
+            fields = {"modelType", "provider", "baseUrl", "model", "active", "sortNo"})
     public Long create(ModelConfig input, String operator) {
         String type = normalizeType(input.getModelType());
         ModelConfig toSave = new ModelConfig();
@@ -100,8 +100,8 @@ public class ModelConfigService {
         toSave.setProvider(input.getProvider());
         toSave.setBaseUrl(input.getBaseUrl());
         toSave.setModel(input.getModel());
-        // V215：新配置一律排在列表末尾（最大 sort_no + 10），不打断管理员已调好的顺序
-        toSave.setSortNo(nextSortNo());
+        // V215：表单没填排序号 → 追加到列表末尾（max+1），不打断管理员已调好的顺序
+        toSave.setSortNo(input.getSortNo() != null ? input.getSortNo() : nextSortNo());
         toSave.setBotId(blank(input.getBotId()) ? null : cryptoService.encrypt(input.getBotId()));
         toSave.setApiKey(blank(input.getApiKey()) ? null : cryptoService.encrypt(input.getApiKey()));
         toSave.setExtraJson(blank(input.getExtraJson()) ? null : cryptoService.encrypt(input.getExtraJson()));
@@ -123,7 +123,7 @@ public class ModelConfigService {
 
     @Auditable(operationType = "UPDATE", targetType = "AI_MODEL_CONFIG",
             targetIdSpEl = "#id", entityClass = ModelConfig.class,
-            fields = {"modelType", "provider", "baseUrl", "model", "active"})
+            fields = {"modelType", "provider", "baseUrl", "model", "active", "sortNo"})
     public void update(Long id, ModelConfig input, String operator) {
         ModelConfig old = mapper.selectById(id);
         if (old == null) {
@@ -142,6 +142,8 @@ public class ModelConfigService {
         toSave.setApiKey(blank(input.getApiKey()) ? old.getApiKey() : cryptoService.encrypt(input.getApiKey()));
         toSave.setExtraJson(blank(input.getExtraJson()) ? old.getExtraJson() : cryptoService.encrypt(input.getExtraJson()));
         toSave.setActive(zeroIfNull(input.getActive()));
+        // V215：排序号表单可填；null = 保持原值（MyBatis-Plus updateById 跳过 null 字段）
+        toSave.setSortNo(input.getSortNo());
         toSave.setUpdatedBy(operator);
         assertProviderUnique(type, input.getProvider(), id);
         mapper.updateById(toSave);
@@ -171,9 +173,9 @@ public class ModelConfigService {
     /**
      * 整表重排（V215，页面「上移/下移」唯一入口）。
      *
-     * <p>入参是<b>页面当前展示的完整 id 顺序</b>，按 {@code (index + 1) * 10} 回写 sort_no。
-     * 校验 ids 与库内行集合完全一致：多一人同时新增/删除配置，用「部分 id」重排会把
-     * 未知行挤到随机位置，所以宁可报错让前端刷新重来。</p>
+     * <p>入参是<b>页面当前展示的完整 id 顺序</b>，按 {@code index + 1} 回写 sort_no
+     * （1..N 连续，数值即展示序号）。校验 ids 与库内行集合完全一致：多一人同时新增/
+     * 删除配置，用「部分 id」重排会把未知行挤到随机位置，所以宁可报错让前端刷新重来。</p>
      *
      * <p>只更新 sort_no 真正变化的行（BlockAttackInnerInterceptor 要求主键等值更新，
      * 故逐行 updateById）；不做 chat 热重载 —— 顺序不影响运行期生效行。</p>
@@ -201,7 +203,7 @@ public class ModelConfigService {
 
         Map<Long, Integer> current = all.stream()
                 .collect(Collectors.toMap(ModelConfig::getId, c -> c.getSortNo() == null ? 0 : c.getSortNo()));
-        int seq = 10;
+        int seq = 1;
         for (Long id : ordered) {
             if (current.getOrDefault(id, 0) != seq) {
                 ModelConfig patch = new ModelConfig();
@@ -210,17 +212,17 @@ public class ModelConfigService {
                 patch.setUpdatedBy(operator);
                 mapper.updateById(patch);
             }
-            seq += 10;
+            seq++;
         }
         log.info("[AI] 模型配置顺序已重排，共 {} 行，操作人={}", ordered.size(), operator);
     }
 
-    /** 追加到末尾用的排序号：当前最大值 + 10（空表从 10 开始）。 */
+    /** 追加到末尾用的排序号：当前最大值 + 1（空表从 1 开始）。 */
     private int nextSortNo() {
         return listAll().stream()
                 .mapToInt(c -> c.getSortNo() == null ? 0 : c.getSortNo())
                 .max()
-                .orElse(0) + 10;
+                .orElse(0) + 1;
     }
 
     /**
