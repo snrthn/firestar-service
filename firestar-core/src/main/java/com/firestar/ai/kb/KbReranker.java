@@ -18,4 +18,16 @@ public interface KbReranker {
      * @return 相关度分，越大越相关
      */
     double score(KbChunkHit hit, List<String> terms);
+
+    /**
+     * 批量重排（V214）：一次给多个命中算分，模型版可一次 HTTP 完成，避免逐条请求。
+     * 默认实现逐条调 {@link #score}，规则版无需改动；模型版覆盖此方法走批量 API。
+     *
+     * @param hits  命中切片（顺序即返回分数的顺序）
+     * @param terms 查询切词
+     * @return 与 hits 等长、同序的相关度分
+     */
+    default List<Double> scoreBatch(List<KbChunkHit> hits, List<String> terms) {
+        return hits.stream().map(h -> Double.valueOf(score(h, terms))).toList();
+    }
 }

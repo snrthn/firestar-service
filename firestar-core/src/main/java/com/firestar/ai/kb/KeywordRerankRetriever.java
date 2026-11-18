@@ -107,13 +107,18 @@ public class KeywordRerankRetriever implements KbRetriever {
         List<KbChunkHit> helpHits = HelpArticleSource.buildChunks(
                 helpMapper.selectEnabled());
 
-        // 4) 统一重排：重算 score + 过滤无相关 + 降序
-        List<KbChunkHit> scored = new ArrayList<>(mdHits);
-        scored.addAll(helpHits);
+        // 4) 统一重排：批量算分（V214：规则版逐条、模型版一次 HTTP）+ 过滤无相关 + 降序
+        List<KbChunkHit> allHits = new ArrayList<>(mdHits);
+        allHits.addAll(helpHits);
+        List<Double> scores = reranker.scoreBatch(allHits, terms);
+        List<KbChunkHit> scored = new ArrayList<>(allHits.size());
+        for (int i = 0; i < allHits.size(); i++) {
+            KbChunkHit h = allHits.get(i);
+            double s = (scores != null && i < scores.size()) ? scores.get(i) : reranker.score(h, terms);
+            scored.add(new KbChunkHit(h.docId(), h.version(), h.sourceType(), h.title(),
+                    h.headingPath(), h.anchor(), h.content(), h.sourceRef(), s, h.fileId()));
+        }
         scored = scored.stream()
-                .map(h -> new KbChunkHit(h.docId(), h.version(), h.sourceType(), h.title(),
-                        h.headingPath(), h.anchor(), h.content(), h.sourceRef(),
-                        reranker.score(h, terms), h.fileId()))
                 .filter(h -> h.score() > 0)
                 .sorted(Comparator.comparingDouble(KbChunkHit::score).reversed())
                 .collect(Collectors.toList());

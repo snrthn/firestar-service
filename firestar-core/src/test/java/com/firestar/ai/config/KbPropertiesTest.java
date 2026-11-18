@@ -47,10 +47,27 @@ class KbPropertiesTest {
     }
 
     @Test
+    @DisplayName("3b. model 重排是 V214 合法值（此前只有 rule）")
+    void modelRerankIsValid() {
+        KbProperties p = new KbProperties();
+        p.setRerank("model");
+        assertDoesNotThrow(p::validate);
+    }
+
+    @Test
     @DisplayName("4. null 值也 fail-fast（防止配置被显式置空后静默失效）")
     void nullValueFailsFast() {
         KbProperties p = new KbProperties();
         p.setRetriever(null);
         assertThrows(IllegalStateException.class, p::validate);
+    }
+
+    @Test
+    @DisplayName("5. hybrid 是合法检索源（P1#5），单测无 EmbeddingProperties 时跳过联动校验")
+    void hybridIsValid() {
+        KbProperties p = new KbProperties();
+        p.setRetriever("hybrid");
+        assertDoesNotThrow(p::validate);
+        assertEquals("hybrid", p.getRetriever());
     }
 }

@@ -1,6 +1,7 @@
 package com.firestar.ai.config;
 
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -28,7 +29,9 @@ public class KbProperties {
     private static final Logger log = LoggerFactory.getLogger(KbProperties.class);
 
     public static final String RETRIEVER_KEYWORD = "keyword";
+    public static final String RETRIEVER_HYBRID = "hybrid";
     public static final String RERANK_RULE = "rule";
+    public static final String RERANK_MODEL = "model";
     public static final String EGRESS_ALLOW_ALL = "allow-all";
     public static final String PUBLISH_NOOP = "noop";
 
@@ -36,8 +39,12 @@ public class KbProperties {
     private static final Map<String, Map<String, String>> SUPPORTED = new LinkedHashMap<>();
 
     static {
-        SUPPORTED.put("kb.retriever", values(RETRIEVER_KEYWORD + "=关键词+FULLTEXT检索（当前唯一实现）"));
-        SUPPORTED.put("kb.retriever.rerank", values(RERANK_RULE + "=规则重排（当前唯一实现）"));
+        SUPPORTED.put("kb.retriever", values(
+                RETRIEVER_KEYWORD + "=关键词+FULLTEXT检索",
+                RETRIEVER_HYBRID + "=关键词+ES向量混合检索（需配 kb.embedding.provider≠none）"));
+        SUPPORTED.put("kb.retriever.rerank", values(
+                RERANK_RULE + "=规则重排",
+                RERANK_MODEL + "=模型语义重排（需配 rerank 类型模型配置，未配置自动降级规则）"));
         SUPPORTED.put("kb.egress.policy", values(EGRESS_ALLOW_ALL + "=全量放行（当前唯一实现）"));
         SUPPORTED.put("kb.publish.gate", values(PUBLISH_NOOP + "=直接发布（当前唯一实现）"));
     }
@@ -56,6 +63,10 @@ public class KbProperties {
     private String egressPolicy = EGRESS_ALLOW_ALL;
     private String publishGate = PUBLISH_NOOP;
 
+    /** 可选注入：Spring 环境才有，纯单测 new 时为 null，联动校验跳过。 */
+    @Autowired(required = false)
+    private EmbeddingProperties embeddingProperties;
+
     /**
      * 启动期 fail-fast 校验：任一开关配了尚未实现的值，直接抛异常终止启动，
      * 错误信息列出该开关当前支持的值。默认值为唯一实现，不配置也可正常启动。
@@ -66,6 +77,13 @@ public class KbProperties {
         check("kb.retriever.rerank", rerank);
         check("kb.egress.policy", egressPolicy);
         check("kb.publish.gate", publishGate);
+        // 联动校验：hybrid 必须有 embedding 实现，否则 EsHybridRetriever 注入 EmbeddingProvider 失败
+        if (RETRIEVER_HYBRID.equals(retriever) && embeddingProperties != null
+                && !embeddingProperties.isEnabled()) {
+            throw new IllegalStateException("[KB] kb.retriever=hybrid 但 kb.embedding.provider="
+                    + embeddingProperties.getProvider() + "，混合检索需要 local/cloud embedding，"
+                    + "请配置 provider 或改回 keyword。");
+        }
         log.info("[KB] 扩展点配置 OK: retriever={}, rerank={}, egress.policy={}, publish.gate={}",
                 retriever, rerank, egressPolicy, publishGate);
     }

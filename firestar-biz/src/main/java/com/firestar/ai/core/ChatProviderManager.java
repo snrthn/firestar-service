@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -144,8 +145,11 @@ public class ChatProviderManager implements ApplicationRunner {
      * 无生效行时明确报错，提示用户在【模型配置】页启用/新增，避免静默拿空凭证发起必败请求。
      */
     private ChatProvider buildActive() {
-        ModelConfig cfg = modelConfigMapper.selectOne(
-                new LambdaQueryWrapper<ModelConfig>().eq(ModelConfig::getActive, 1));
+        // V214：必须限定 model_type='chat'，否则 dashscope 的 embedding/rerank/tts 生效行
+        // 会被误当成对话供应商构建（同一 provider 现在可存在多类型配置行）。
+        ModelConfig cfg = modelConfigMapper.selectOne(new LambdaQueryWrapper<ModelConfig>()
+                .eq(ModelConfig::getModelType, "chat")
+                .eq(ModelConfig::getActive, 1));
         if (cfg != null) {
             return build(cfg.getProvider(), cfg.getBaseUrl(), cfg.getModel(),
                     cryptoService.decrypt(cfg.getBotId()), cryptoService.decrypt(cfg.getApiKey()),
@@ -153,7 +157,8 @@ public class ChatProviderManager implements ApplicationRunner {
         }
         // 没有 is_active=1 的生效行：区分「已存在但被停用」与「全新库零行」，但两者都明确报错，
         // 不再静默回退到 env 默认空凭证（coze.pat 未配置 → Bearer null → 秒 401 / 代理一抖就超时）。
-        long total = modelConfigMapper.selectCount(new LambdaQueryWrapper<>());
+        long total = modelConfigMapper.selectCount(
+                new LambdaQueryWrapper<ModelConfig>().eq(ModelConfig::getModelType, "chat"));
         if (total > 0) {
             throw new IllegalStateException("当前没有启用的 AI 模型，请在【模型配置】中启用一个模型");
         }
@@ -170,6 +175,13 @@ public class ChatProviderManager implements ApplicationRunner {
     }
 
     /**
+     * 仅用于非对话模型类型（embedding / rerank / tts）的供应商。
+     * V214 起 ai_provider 字典由四类模型共用，dashscope 只实现 Embedding/Rerank/TTS，
+     * 不实现 ChatProvider —— 它出现在字典里是正常的，不应触发「未登记实现」告警。
+     */
+    private static final Set<String> NON_CHAT_ONLY_PROVIDERS = Set.of("dashscope");
+
+    /**
      * 启动期字典对齐校验（防御性）：字典 ai_provider 声明了某供应商但注册表无实现时告警。
      * 不阻断启动——字典表可能尚未就绪，或运营临时停用某字典项；真正约束在运行时 build()。
      */
@@ -181,6 +193,9 @@ public class ChatProviderManager implements ApplicationRunner {
                             .eq(DictData::getTypeCode, "ai_provider")
                             .eq(DictData::getStatus, "ENABLED"));
             for (DictData d : declared) {
+                if (NON_CHAT_ONLY_PROVIDERS.contains(d.getDictValue())) {
+                    continue;
+                }
                 if (!registry.containsKey(d.getDictValue())) {
                     log.warn("[AI] 字典 ai_provider 声明了供应商 '{}' 但 ChatProviderManager 未登记对应实现，"
                             + "选择该供应商时运行时将报错", d.getDictValue());

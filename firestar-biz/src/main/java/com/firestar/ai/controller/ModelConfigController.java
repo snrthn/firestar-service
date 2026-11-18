@@ -84,6 +84,7 @@ public class ModelConfigController {
 
     private ModelConfig toEntity(ModelConfigRequest req) {
         ModelConfig e = new ModelConfig();
+        e.setModelType(req.effectiveModelType());
         e.setProvider(req.provider());
         e.setBaseUrl(req.baseUrl());
         e.setModel(req.model());

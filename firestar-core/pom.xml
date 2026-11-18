@@ -38,6 +38,12 @@
             <version>${mybatis-plus.version}</version>
         </dependency>
 
+        <!-- 搜索引擎：Elasticsearch Java Client（版本由 Boot 3.3.4 BOM 管理，当前 8.13.4；用于 P1#5 混合检索兼容性验证） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+        </dependency>
+
         <!-- 审批引擎：Flowable 7（支持 Spring Boot 3） -->
         <dependency>
             <groupId>org.flowable</groupId>

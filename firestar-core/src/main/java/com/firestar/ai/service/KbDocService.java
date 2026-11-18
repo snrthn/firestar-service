@@ -9,6 +9,7 @@ import com.firestar.ai.kb.KbMarkdownSplitter;
 import com.firestar.ai.kb.KbPublishGate;
 import com.firestar.ai.kb.KbPublishRequestedEvent;
 import com.firestar.ai.kb.KbPublishedEvent;
+import com.firestar.ai.kb.KbDocDeletedEvent;
 import com.firestar.ai.kb.PublishDecision;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -413,6 +414,9 @@ public class KbDocService {
         chunkMapper.delete(new LambdaQueryWrapper<KbChunk>()
                 .eq(KbChunk::getDocId, id));
         docMapper.deleteById(id);
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new KbDocDeletedEvent(id));
+        }
     }
 
     /**

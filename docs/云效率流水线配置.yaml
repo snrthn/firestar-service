@@ -107,6 +107,10 @@ stages:
                 #   - AuditDictConsistencyTest: 静态扫描 @Auditable 注解 ↔ sys_dict_data
                 #     字典的双向差集（枚举漏补字典就 fail），不连库、不需要 MySQL。
                 #     见 firestar-core/src/test/java/com/firestar/seed/
+                #   - DatabaseCheckSeedBaselineGuardTest: 静态扫描迁移脚本 ↔ 种子基线，
+                #     「加了字典却忘了同步 DatabaseCheckService 期望值」就在构建期 fail
+                #     （这个坑历史复发过 6 次，每次都表现为 /system/db-check 503 /
+                #     前端「后端连接失败」，与字典毫无关联、极难排查）。同样不需要 MySQL。
                 # ⚠️ 多模块 reactor（core / biz / server）：-Dtest 会作用到每个模块，
                 #    SmokeTest / AuthControllerStreamTest 只在 firestar-server，
                 #    core / biz 零匹配会被 surefire 3.2.5 直接判失败，必须带
@@ -114,7 +118,7 @@ stages:
                 # =====================================================================
                 echo "[info] Running unit tests only (excluding integration tests that require MySQL)..."
                 mvn -B test \
-                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,GlobalExceptionHandlerTest,LoginRateLimitFilterTest' \
+                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,DatabaseCheckSeedBaselineGuardTest,GlobalExceptionHandlerTest,LoginRateLimitFilterTest' \
                   -Dsurefire.failIfNoSpecifiedTests=false \
                   -Dmaven.test.failure.ignore=false
       build_job:

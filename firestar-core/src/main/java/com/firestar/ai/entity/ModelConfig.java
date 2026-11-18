@@ -26,7 +26,10 @@ public class ModelConfig implements Serializable {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    /** coze | openai | deepseek | ollama | anthropic */
+    /** 模型类型：chat | embedding | rerank | tts（V214）。所有查询必须带此条件，避免跨类型串数据。 */
+    private String modelType;
+
+    /** coze | openai | deepseek | ollama | anthropic | dashscope */
     private String provider;
 
     /** 当前生效行（运行期真值）；映射 DB 列 is_active（V99 建表命名） */

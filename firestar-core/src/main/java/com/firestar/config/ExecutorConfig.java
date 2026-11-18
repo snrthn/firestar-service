@@ -22,6 +22,9 @@ public class ExecutorConfig {
     /** 审计日志专用线程池 bean 名，切面按名注入 */
     public static final String LOG_WRITE_EXECUTOR = "logWriteExecutor";
 
+    /** 知识库向量化专用线程池 bean 名（发布后异步生成 embedding，不阻塞发布主流程）。 */
+    public static final String KB_VECTORIZE_EXECUTOR = "kbVectorizeExecutor";
+
     @Bean(name = LOG_WRITE_EXECUTOR)
     public Executor logWriteExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -29,6 +32,24 @@ public class ExecutorConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("audit-log-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * 知识库向量化线程池：单线程足够（切片生成是 IO 密集、低频操作），队列有界，
+     * 打满后 CallerRuns 由发布线程兜底执行，保证向量不丢；不参与业务事务。
+     */
+    @Bean(name = KB_VECTORIZE_EXECUTOR)
+    public Executor kbVectorizeExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("kb-vector-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);

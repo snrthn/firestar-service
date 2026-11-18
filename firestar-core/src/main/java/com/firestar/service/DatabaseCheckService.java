@@ -69,12 +69,14 @@ public class DatabaseCheckService {
      * 改这里即可，不要再去测试文件里改数字。
      */
     // V206：新增字典类型 kb_attachment_role，35→36；本迁移不建表，EXPECTED_TABLE_COUNT 仍为 48。
-    public static final long EXPECTED_DICT_TYPE_COUNT = 36L;
+    // V214：新增字典类型 ai_model_type（chat/embedding/rerank/tts 模型类型下拉）→ 36→37。
+    public static final long EXPECTED_DICT_TYPE_COUNT = 37L;
     // V206：file_type 删 3 加 2、file_biz_type 加 kb_doc、kb_attachment_role 加 4 项 → 150→154。
     // V209：@Auditable(targetType="KB_DOC") 补 audit_target_type 字典 1 项 → 154→155。
     // V210：@Auditable(targetType="KB_ATTACHMENT") 补 audit_target_type 字典 1 项 → 155→156。
     // V211：ai_provider 字典新增 Anthropic 原生供应商 1 项 → 156→157。
-    public static final long EXPECTED_DICT_DATA_COUNT = 157L;
+    // V214：ai_model_type 新增 4 项（chat/embedding/rerank/tts）+ ai_provider 新增 dashscope 1 项 → 157→162。
+    public static final long EXPECTED_DICT_DATA_COUNT = 162L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     // V2 种子 7 个基础角色；V213 新增 ROLE_OPS_ADMIN(运维管理员) + ROLE_TEST(测试账号) → 7+2=9。
     public static final long EXPECTED_ROLE_COUNT = 9L;
@@ -377,10 +379,21 @@ public class DatabaseCheckService {
  *   KbDocService 六个写方法标了 @Auditable(targetType="KB_DOC")，
  *   AuditDictConsistencyTest 双向差集要求在字典里真实存在，故新增 1 条 sys_dict_data，
  *   不新增字典类型、不建表 → tableCount 仍 51、dictTypeCount 仍 36、dictDataCount 154→155。
- *   ⚠️ 这是「枚举与字典双写」的第 5 轮补漏，已有 CI 门禁兜底，别绕过测试直接改注解值。
-        * ⚠️ 本类常量已四次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
-        *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏）。
-        *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量。
+         *   ⚠️ 这是「枚举与字典双写」的第 5 轮补漏，已有 CI 门禁兜底，别绕过测试直接改注解值。
+         * V214（AI 模型配置按类型扩展 chat/embedding/rerank/tts）净变化：
+         *   新增字典类型 ai_model_type（1 个类型 / 4 个项：chat、embedding、rerank、tts），
+         *   ai_provider 字典补 dashscope（阿里云百炼）1 个项；
+         *   只给 sys_model_config 加列 + 换唯一键，**不新增表** → tableCount 仍 51；
+         *   → dictTypeCount 36→37、dictDataCount 157→162。
+         *   ⚠️ 这已是「加了字典却忘了同步这里」的第 6 轮复发（2026-11-18 线上再现，
+         *      /system/db-check 直接 503，前端工作台显示「后端连接失败」）。
+         *      为此已加构建期护栏 DatabaseCheckSeedBaselineGuardTest：
+         *      baselineVersion 之后任何动字典表的迁移都必须声明新的累计基线，
+         *      漏声明/漏改本类常量都会在构建期 fail，不再等到部署才炸。
+        * ⚠️ 本类常量已多次因「迁移改了种子数却没同步这里」误报（V19/V20/V22 各一次；
+        *    V32+V34+V35 于 2026-10-21 线上一次性暴露，报错文案却指向 V2，排查被带偏；
+        *    V214 于 2026-11-18 再次复发 —— 报错的却是「后端连接失败」，与字典毫无关联）。
+        *    今后任何新增字典/种子类的 Flyway 迁移都务必同步本段常量（护栏会替你把关）。
      */
     private Map<String, Object> readSeedData(Connection conn, List<String> errors) {
         Map<String, Object> result = new LinkedHashMap<>();
