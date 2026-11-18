@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.firestar.ai.config.EmbeddingProperties;
 import com.firestar.ai.core.HttpClientFactory;
 import com.firestar.ai.service.ModelCredentialResolver;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -27,8 +25,6 @@ import java.util.List;
 @Component
 @ConditionalOnProperty(name = "kb.retriever.rerank", havingValue = "model")
 public class DashScopeRerankProvider implements RerankProvider {
-
-    private static final Logger log = LoggerFactory.getLogger(DashScopeRerankProvider.class);
 
     private final ModelCredentialResolver credentials;
     private final HttpClientFactory clientFactory;

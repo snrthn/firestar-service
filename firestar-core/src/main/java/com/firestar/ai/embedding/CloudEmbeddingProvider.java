@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.firestar.ai.config.EmbeddingProperties;
 import com.firestar.ai.core.HttpClientFactory;
 import com.firestar.ai.service.ModelCredentialResolver;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -33,8 +31,6 @@ import java.util.List;
 @Component
 @ConditionalOnProperty(name = "kb.embedding.provider", havingValue = "cloud")
 public class CloudEmbeddingProvider implements EmbeddingProvider {
-
-    private static final Logger log = LoggerFactory.getLogger(CloudEmbeddingProvider.class);
 
     private final EmbeddingProperties props;
     private final HttpClientFactory clientFactory;

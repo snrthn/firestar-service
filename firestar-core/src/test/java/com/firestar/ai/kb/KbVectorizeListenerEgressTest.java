@@ -10,7 +10,6 @@ import com.firestar.ai.entity.KbDoc;
 import com.firestar.ai.es.EsVectorStore;
 import com.firestar.ai.mapper.KbChunkMapper;
 import com.firestar.ai.mapper.KbDocMapper;
-import com.firestar.config.ExecutorConfig;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
