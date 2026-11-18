@@ -30,6 +30,9 @@ public class AiMessage implements Serializable {
 
     private String content;
 
+    /** 思考过程文本（推理模型 reasoning_content 聚合；NULL = 无思考过程），仅展示用，不回灌上下文 */
+    private String reasoningText;
+
     private Integer tokensPrompt;
 
     private Integer tokensCompletion;

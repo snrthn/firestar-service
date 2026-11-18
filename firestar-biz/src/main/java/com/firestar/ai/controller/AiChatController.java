@@ -99,6 +99,8 @@ public class AiChatController {
         CompletableFuture.runAsync(() -> {
             long start = System.currentTimeMillis();
             StringBuilder sb = new StringBuilder();
+            // 思考过程聚合（reasoning 帧），流结束后随 assistant 消息落库（仅展示，不回灌上下文）
+            StringBuilder reasoningSb = new StringBuilder();
             // convId 用数组盒包裹：既是 effectively final（供 chunk lambda 捕获），又能在 catch 中读取/赋值
             final Long[] convIdBox = {null};
             String provider = "unknown";
@@ -160,10 +162,12 @@ public class AiChatController {
                                 emitter.send(SseEmitter.event().name("token")
                                         .data(objectMapper.writeValueAsString(chunk.text())));
                             }
-                            case "reasoning" ->
-                                // 思考过程独立通道：只透传给前端渲染（Thinking 组件），不拼正文、不落库
+                            case "reasoning" -> {
+                                // 思考过程独立通道：只透传给前端渲染（不拼正文）；同时聚合落库供历史回放
+                                reasoningSb.append(chunk.text());
                                 emitter.send(SseEmitter.event().name("reasoning")
                                         .data(objectMapper.writeValueAsString(chunk.text())));
+                            }
                             case "fallback" -> emitter.send(SseEmitter.event().name("fallback")
                                     .data(objectMapper.writeValueAsString(
                                             Map.of("mode", chunk.text(), "reason", chunk.data()))));
@@ -195,7 +199,9 @@ public class AiChatController {
                     }
                 });
                 emitter.send(SseEmitter.event().name("done").data(""));
-                chatService.appendAssistantMessage(convIdBox[0], sb.toString(), provider, System.currentTimeMillis() - start);
+                chatService.appendAssistantMessage(convIdBox[0], sb.toString(),
+                        reasoningSb.length() > 0 ? reasoningSb.toString() : null,
+                        provider, System.currentTimeMillis() - start);
                 chatService.endConversation(convIdBox[0]);
                 emitter.complete();
             } catch (RuntimeException re) {

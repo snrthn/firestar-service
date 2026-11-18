@@ -148,4 +148,27 @@ class AiChatServiceTest {
         verify(msgMapper).insert(any(AiMessage.class));
         verify(convMapper).updateById(any(AiConversation.class));
     }
+
+    @Test
+    void appendAssistantMessage_withReasoning_persistsReasoningText() {
+        org.mockito.ArgumentCaptor<AiMessage> cap = org.mockito.ArgumentCaptor.forClass(AiMessage.class);
+        service.appendAssistantMessage(10L, "回答正文", "思考过程文本", "deepseek-reasoner", 1200L);
+
+        verify(msgMapper).insert(cap.capture());
+        AiMessage saved = cap.getValue();
+        assertEquals("assistant", saved.getRole());
+        assertEquals("回答正文", saved.getContent());
+        assertEquals("思考过程文本", saved.getReasoningText(), "思考过程随 assistant 消息落库");
+        assertEquals("deepseek-reasoner", saved.getModelVersion());
+        assertEquals(1200, saved.getLatencyMs());
+    }
+
+    @Test
+    void appendAssistantMessage_withoutReasoning_reasoningNull() {
+        org.mockito.ArgumentCaptor<AiMessage> cap = org.mockito.ArgumentCaptor.forClass(AiMessage.class);
+        service.appendAssistantMessage(10L, "回答正文", "glm-4", 300L);
+
+        verify(msgMapper).insert(cap.capture());
+        org.junit.jupiter.api.Assertions.assertNull(cap.getValue().getReasoningText(), "无思考过程时应为 null");
+    }
 }

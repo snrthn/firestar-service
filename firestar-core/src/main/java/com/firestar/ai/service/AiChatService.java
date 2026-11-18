@@ -60,12 +60,19 @@ public class AiChatService {
         }
     }
 
-    /** 落 assistant 消息（流式结束后调用） */
+    /** 落 assistant 消息（流式结束后调用）；reasoningText 可空（无思考过程） */
     public void appendAssistantMessage(Long convId, String content, String modelVersion, long latencyMs) {
+        appendAssistantMessage(convId, content, null, modelVersion, latencyMs);
+    }
+
+    /** 落 assistant 消息（含思考过程文本）：reasoning 只落库不回灌上下文，仅供历史回放展示 */
+    public void appendAssistantMessage(Long convId, String content, String reasoningText,
+                                       String modelVersion, long latencyMs) {
         AiMessage m = new AiMessage();
         m.setConversationId(convId);
         m.setRole("assistant");
         m.setContent(content);
+        m.setReasoningText(reasoningText);
         m.setModelVersion(modelVersion);
         m.setLatencyMs((int) latencyMs);
         msgMapper.insert(m);

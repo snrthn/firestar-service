@@ -60,7 +60,8 @@ public class AiConversationController {
         List<AiMessage> msgs = chatService.listMessages(convId, currentUserId);
         Map<Long, String> toolNames = chatService.toolNamesOf(convId);
         return Result.success(msgs.stream().map(m -> new ConversationMessageVO(
-                m.getId(), m.getRole(), m.getContent(), toolNames.get(m.getId()),
+                m.getId(), m.getRole(), m.getContent(), m.getReasoningText(),
+                toolNames.get(m.getId()),
                 m.getModelVersion(), m.getLatencyMs(), m.getCreatedAt())).toList());
     }
 
