@@ -5,6 +5,7 @@ import com.firestar.ai.core.ChatProviderManager;
 import com.firestar.ai.core.ToolAuditFrame;
 import com.firestar.ai.dto.AiChatRequest;
 import com.firestar.ai.config.AiProperties;
+import com.firestar.ai.entity.AiMessage;
 import com.firestar.ai.service.AiChatService;
 import com.firestar.ai.service.PromptConfigService;
 import com.firestar.ai.spi.ChatMessage;
@@ -44,7 +45,8 @@ import java.util.concurrent.CompletableFuture;
  * 但本控制器走的是 JWT 过滤器鉴权、不做内部 token 解析，故 SecurityConfig 已对
  * {@code /sse/ai/**} 单独声明 authenticated()，插在 /sse/** permitAll 之前，避免被误放行。</p>
  *
- * <p>流协议事件：{@code token}(文本增量) / {@code done}(结束) / {@code error}(错误) / {@code fallback}(降级兜底帧)。
+ * <p>流协议事件：{@code token}(文本增量) / {@code reasoning}(思考过程增量) / {@code done}(结束) /
+ * {@code error}(错误) / {@code fallback}(降级兜底帧) / {@code draft}(草稿预览帧)。
  * 降级时下发 fallback 帧，前端据此把抽屉切到普通搜索 / 报错形态（见 §4.3）。</p>
  */
 @RestController
@@ -104,7 +106,15 @@ public class AiChatController {
                 // provider / convId 在此惰性解析：buildActive() 在无生效模型时会抛清晰异常，
                 // 放进 runAsync 内才能经 fail() 以 SSE error 帧下发给前端，而非返回 500。
                 provider = providerManager.activeProvider().name();
-                convIdBox[0] = chatService.startConversation(userId, username, provider, req.message());
+                // 多轮上下文：请求体带 conversationId = 续聊（归属校验 + 回灌历史）；
+                // 空 = 新开会话。续聊返回本轮之前的 user/assistant 历史，供下方回灌。
+                List<AiMessage> history = null;
+                if (req.conversationId() != null) {
+                    history = chatService.continueConversation(req.conversationId(), userId, req.message());
+                    convIdBox[0] = req.conversationId();
+                } else {
+                    convIdBox[0] = chatService.startConversation(userId, username, provider, req.message());
+                }
                 // 流起始元数据帧：携带 conversationId，供前端事后按会话拉取草稿（Coze 模式 SSE 流不经过草稿结果）
                 try {
                     emitter.send(SseEmitter.event().name("meta")
@@ -126,6 +136,15 @@ public class AiChatController {
                     systemInstruction = aiProperties.getChatSystemInstruction();
                 }
                 messages.add(ChatMessage.of("system", systemInstruction));
+                // 续聊：回灌该会话最近的 user/assistant 文本历史（最多 HISTORY_LIMIT 条），
+                // 让模型能接着此前话题聊；tool 行不回灌（供应商要求与 assistant(tool_calls) 严格配对）。
+                if (history != null) {
+                    for (AiMessage h : history) {
+                        if (h.getContent() != null && !h.getContent().isBlank()) {
+                            messages.add(ChatMessage.of(h.getRole(), h.getContent()));
+                        }
+                    }
+                }
                 messages.add(ChatMessage.of("user", req.message()));
                 TurnRequest tr = new TurnRequest(extId,
                         messages,
@@ -135,8 +154,16 @@ public class AiChatController {
                         switch (chunk.type()) {
                             case "token" -> {
                                 sb.append(chunk.text());
-                                emitter.send(SseEmitter.event().name("token").data(chunk.text()));
+                                // JSON 编码后下发：SseEmitter 发送时不补空格，而前端按 SSE 规范剥掉
+                                // data: 后的一个空格——裸文本的前导空格会被吞（英文思考/正文全粘连）。
+                                // JSON 还能彻底规避换行被拆成多个 data 行的问题。
+                                emitter.send(SseEmitter.event().name("token")
+                                        .data(objectMapper.writeValueAsString(chunk.text())));
                             }
+                            case "reasoning" ->
+                                // 思考过程独立通道：只透传给前端渲染（Thinking 组件），不拼正文、不落库
+                                emitter.send(SseEmitter.event().name("reasoning")
+                                        .data(objectMapper.writeValueAsString(chunk.text())));
                             case "fallback" -> emitter.send(SseEmitter.event().name("fallback")
                                     .data(objectMapper.writeValueAsString(
                                             Map.of("mode", chunk.text(), "reason", chunk.data()))));

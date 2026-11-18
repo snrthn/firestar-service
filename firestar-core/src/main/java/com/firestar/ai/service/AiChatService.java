@@ -7,10 +7,15 @@ import com.firestar.ai.mapper.AiConversationMapper;
 import com.firestar.ai.mapper.AiMessageMapper;
 import com.firestar.ai.mapper.AiToolCallMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -127,5 +132,83 @@ public class AiChatService {
                 .orderByDesc(AiToolCall::getId)
                 .last("LIMIT 1"));
         return tc != null ? tc.getResultJson() : null;
+    }
+
+    // ===== 历史会话（回放 / 续聊 / 删除）=====
+
+    /** 续聊时回灌的历史消息条数上限（防超长上下文拖爆 token 预算） */
+    public static final int HISTORY_LIMIT = 20;
+
+    /** 归属校验（越权 404，与「会话不存在」不可区分，同 getLatestDraft 口径） */
+    private AiConversation requireOwned(Long convId, Long currentUserId) {
+        AiConversation conv = convMapper.selectById(convId);
+        if (conv == null || !Objects.equals(conv.getUserId(), currentUserId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "会话不存在或无权访问");
+        }
+        return conv;
+    }
+
+    /**
+     * 当前用户的历史会话分页（updatedAt 倒序，最近活跃在前）。
+     */
+    public IPage<AiConversation> listConversations(Long userId, int pageNum, int pageSize) {
+        return convMapper.selectPage(new Page<>(pageNum, Math.min(pageSize, 50)),
+                new LambdaQueryWrapper<AiConversation>()
+                        .eq(AiConversation::getUserId, userId)
+                        .orderByDesc(AiConversation::getUpdatedAt)
+                        .orderByDesc(AiConversation::getId));
+    }
+
+    /**
+     * 会话消息列表（时间升序，含 user/assistant/tool 全部角色），归属校验后返回。
+     * tool 行的 content 是工具结果 JSON，前端按 toolName 映射渲染业务卡。
+     */
+    public List<AiMessage> listMessages(Long convId, Long currentUserId) {
+        requireOwned(convId, currentUserId);
+        return msgMapper.selectList(new LambdaQueryWrapper<AiMessage>()
+                .eq(AiMessage::getConversationId, convId)
+                .orderByAsc(AiMessage::getId));
+    }
+
+    /** 会话内 message_id → 工具名（tool 消息渲染业务卡的分类依据） */
+    public Map<Long, String> toolNamesOf(Long convId) {
+        Map<Long, String> out = new HashMap<>();
+        for (AiToolCall tc : toolCallMapper.selectList(new LambdaQueryWrapper<AiToolCall>()
+                .eq(AiToolCall::getConversationId, convId))) {
+            out.put(tc.getMessageId(), tc.getToolName());
+        }
+        return out;
+    }
+
+    /** 删除会话及其消息 / 工具调用记录，归属校验后物理删除 */
+    public void deleteConversation(Long convId, Long currentUserId) {
+        requireOwned(convId, currentUserId);
+        toolCallMapper.delete(new LambdaQueryWrapper<AiToolCall>().eq(AiToolCall::getConversationId, convId));
+        msgMapper.delete(new LambdaQueryWrapper<AiMessage>().eq(AiMessage::getConversationId, convId));
+        convMapper.deleteById(convId);
+    }
+
+    /**
+     * 继续既有会话：归属校验 → 追加本轮 user 消息 → 会话重新置为进行中（结束后端统一落 status=2）。
+     * 返回本轮之前的纯文本历史（user/assistant，时间升序，截取最近 HISTORY_LIMIT 条），
+     * 供 Controller 回灌进供应商 messages 实现<b>多轮上下文</b>；tool 行不回灌（OpenAI 系需要
+     * assistant(tool_calls) 与 tool 结果严格配对，直拼裸 tool 消息会被供应商 400 拒绝）。
+     */
+    public List<AiMessage> continueConversation(Long convId, Long userId, String userText) {
+        AiConversation conv = requireOwned(convId, userId);
+        List<AiMessage> all = msgMapper.selectList(new LambdaQueryWrapper<AiMessage>()
+                .eq(AiMessage::getConversationId, convId)
+                .in(AiMessage::getRole, "user", "assistant")
+                .orderByAsc(AiMessage::getId));
+        int from = Math.max(0, all.size() - HISTORY_LIMIT);
+        List<AiMessage> history = from > 0 ? all.subList(from, all.size()) : all;
+        AiMessage m = new AiMessage();
+        m.setConversationId(convId);
+        m.setRole("user");
+        m.setContent(userText);
+        msgMapper.insert(m);
+        conv.setStatus(1);
+        convMapper.updateById(conv);
+        return history;
     }
 }

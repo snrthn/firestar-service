@@ -2,11 +2,19 @@ package com.firestar.ai.spi;
 
 /**
  * 流式输出块（供应商无关）。
- * type ∈ token(文本增量) | done(结束) | error(错误) | fallback(降级兜底) | tool_call(工具调用，未来 OpenAI 用)。
+ * type ∈ token(文本增量) | reasoning(思考过程增量) | done(结束) | error(错误) | fallback(降级兜底) | tool_call(工具调用审计)。
  */
 public record ChatChunk(String type, String text, String data) {
     public static ChatChunk token(String t) {
         return new ChatChunk("token", t, null);
+    }
+
+    /**
+     * 思考过程增量帧（推理模型 o1 / deepseek-reasoner 等的 reasoning_content）。
+     * 与正文 token 分通道下发：不混入正文流、不落 ai_messages 正文（回放不出现思考串场）。
+     */
+    public static ChatChunk reasoning(String t) {
+        return new ChatChunk("reasoning", t, null);
     }
 
     public static ChatChunk done() {

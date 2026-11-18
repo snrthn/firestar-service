@@ -145,8 +145,8 @@ public class OpenAIProvider implements ChatProvider {
         onChunk.accept(ChatChunk.done());
     }
 
-    /** 解析一轮 SSE，逐帧下发文本增量，并聚合 tool_calls 分片（tool_calls 必须跨行拼接，故仍聚合） */
-    private RoundResult parseSse(InputStream in, Consumer<ChatChunk> onChunk) throws Exception {
+    /** 解析一轮 SSE，逐帧下发文本增量，并聚合 tool_calls 分片（tool_calls 必须跨行拼接，故仍聚合）。包级私有供单测直喂 SSE 流 */
+    RoundResult parseSse(InputStream in, Consumer<ChatChunk> onChunk) throws Exception {
         RoundResult r = new RoundResult();
         BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         String line;
@@ -173,11 +173,10 @@ public class OpenAIProvider implements ChatProvider {
                 onChunk.accept(ChatChunk.token(t));   // 逐帧下发，保证流式而非凑整段
             } else if (delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()
                     && !delta.get("reasoning_content").asText().isEmpty()) {
-                // 推理模型（o1/deepseek-reasoner 等）将思考过程放在 reasoning_content，
-                // 当 content 为空时回退读取，避免前端收到空回复（与 Coze 侧处理一致）。
+                // 思考过程（reasoning 模型 o1 / deepseek-reasoner 等）独立通道下发：
+                // 不拼进 r.content（否则会污染落库正文、多轮回灌时把思考串进上下文），也不占正文 token 流。
                 String t = delta.get("reasoning_content").asText();
-                r.content += t;
-                onChunk.accept(ChatChunk.token(t));   // 逐帧下发
+                onChunk.accept(ChatChunk.reasoning(t));
             }
             JsonNode tcArr = delta.get("tool_calls");
             if (tcArr != null && tcArr.isArray()) {
@@ -236,8 +235,8 @@ public class OpenAIProvider implements ChatProvider {
         return out;
     }
 
-    /** 一轮聚合结果 */
-    private static class RoundResult {
+    /** 一轮聚合结果（包级可见供单测断言） */
+    static class RoundResult {
         String content = "";
         List<ToolExec> toolCalls = new ArrayList<>();
         List<Map<String, Object>> openAiToolCalls = new ArrayList<>();
