@@ -25,5 +25,7 @@ public record ModelConfigMasked(
         boolean botIdSet,
         boolean apiKeySet,
         boolean extraSet,
-        String extraJson) {
+        String extraJson,
+        /** 列表排序号（V215）：升序展示，页面「上移/下移」时按整表重排写回 */
+        Integer sortNo) {
 }

@@ -40,6 +40,14 @@ public class ModelConfig implements Serializable {
 
     private String model;
 
+    /**
+     * 列表排序号（V215）：升序展示，整十步长（10/20/30…）。
+     * 由 {@code ModelConfigService#create} 追加到末尾，页面「上移/下移」通过
+     * {@code reorder} 整表重排写入；不在新增/编辑表单里直接编辑（避免两套写入路径打架）。
+     */
+    @TableField("sort_no")
+    private Integer sortNo;
+
     /** 密文（仅 coze）：Bot ID */
     private String botId;
 

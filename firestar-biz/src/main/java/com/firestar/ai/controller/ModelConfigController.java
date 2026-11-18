@@ -3,6 +3,7 @@ package com.firestar.ai.controller;
 import com.firestar.ai.core.ChatProviderManager;
 import com.firestar.ai.dto.ModelConfigMasked;
 import com.firestar.ai.dto.ModelConfigRequest;
+import com.firestar.ai.dto.ModelConfigSortRequest;
 import com.firestar.ai.entity.ModelConfig;
 import com.firestar.ai.service.ModelConfigService;
 import com.firestar.common.RequirePerm;
@@ -71,6 +72,17 @@ public class ModelConfigController {
     @RequirePerm("sys:modelConfig:edit")
     public Result<Void> delete(@PathVariable Long id) {
         service.delete(id);
+        return Result.success();
+    }
+
+    /**
+     * 整表重排（V215）：提交页面当前展示的完整 id 顺序，后端按 10/20/30… 回写 sort_no。
+     * 顺序只影响【模型配置】页展示，不影响运行期生效行（is_active 决定）。
+     */
+    @PutMapping("/sort")
+    @RequirePerm("sys:modelConfig:edit")
+    public Result<Void> sort(@RequestBody ModelConfigSortRequest req) {
+        service.reorder(req == null ? null : req.ids(), SecurityContextUtils.currentUsername());
         return Result.success();
     }
 
