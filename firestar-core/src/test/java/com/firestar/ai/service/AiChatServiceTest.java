@@ -36,6 +36,8 @@ class AiChatServiceTest {
     private AiMessageMapper msgMapper;
     @Mock
     private AiToolCallMapper toolCallMapper;
+    @Mock
+    private com.firestar.ai.mapper.AiMessageFeedbackMapper feedbackMapper;
     @InjectMocks
     private AiChatService service;
 
@@ -170,5 +172,62 @@ class AiChatServiceTest {
 
         verify(msgMapper).insert(cap.capture());
         org.junit.jupiter.api.Assertions.assertNull(cap.getValue().getReasoningText(), "无思考过程时应为 null");
+    }
+
+    private AiMessage assistantMessage() {
+        AiMessage m = new AiMessage();
+        m.setId(77L);
+        m.setConversationId(10L);
+        m.setRole("assistant");
+        return m;
+    }
+
+    private AiConversation ownedConversation() {
+        AiConversation c = new AiConversation();
+        c.setId(10L);
+        c.setUserId(1L);
+        return c;
+    }
+
+    @Test
+    void rateMessage_like_inserts() {
+        when(msgMapper.selectById(77L)).thenReturn(assistantMessage());
+        when(convMapper.selectById(10L)).thenReturn(ownedConversation());
+        when(feedbackMapper.selectOne(any())).thenReturn(null);
+
+        service.rateMessage(77L, 1L, "like");
+
+        org.mockito.ArgumentCaptor<com.firestar.ai.entity.AiMessageFeedback> cap =
+                org.mockito.ArgumentCaptor.forClass(com.firestar.ai.entity.AiMessageFeedback.class);
+        verify(feedbackMapper).insert(cap.capture());
+        assertEquals("LIKE", cap.getValue().getFeedbackType());
+        assertEquals(77L, cap.getValue().getMessageId());
+    }
+
+    @Test
+    void rateMessage_cancel_deletesExisting() {
+        when(msgMapper.selectById(77L)).thenReturn(assistantMessage());
+        when(convMapper.selectById(10L)).thenReturn(ownedConversation());
+        com.firestar.ai.entity.AiMessageFeedback existing = new com.firestar.ai.entity.AiMessageFeedback();
+        existing.setId(5L);
+        existing.setFeedbackType("LIKE");
+        when(feedbackMapper.selectOne(any())).thenReturn(existing);
+
+        service.rateMessage(77L, 1L, "");
+
+        verify(feedbackMapper).deleteById(5L);
+        verify(feedbackMapper, never()).insert(any(com.firestar.ai.entity.AiMessageFeedback.class));
+    }
+
+    @Test
+    void rateMessage_foreignMessage_throws404() {
+        when(msgMapper.selectById(77L)).thenReturn(assistantMessage());
+        AiConversation other = new AiConversation();
+        other.setId(10L);
+        other.setUserId(999L);
+        when(convMapper.selectById(10L)).thenReturn(other);
+
+        assertThrows(ResponseStatusException.class, () -> service.rateMessage(77L, 1L, "LIKE"));
+        verify(feedbackMapper, never()).insert(any(com.firestar.ai.entity.AiMessageFeedback.class));
     }
 }

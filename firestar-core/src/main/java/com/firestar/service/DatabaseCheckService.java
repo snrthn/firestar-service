@@ -57,8 +57,9 @@ public class DatabaseCheckService {
      *            V207 新增 sys_kb_doc / sys_kb_chunk / sys_kb_attachment（知识库三表），48→51；
      *            V208 只给 sys_kb_doc 加 parent_id/node_type/sort_no/path 四列（树形结构，
      *            方案 A 节点同构），**不新增表**，tableCount 仍为 51，别误 +1。
+     *            V217 新增 ai_message_feedback（AI 回答赞踩），51→52。
      */
-    public static final int EXPECTED_TABLE_COUNT = 51;
+    public static final int EXPECTED_TABLE_COUNT = 52;
 
     /**
      * 种子数据条数基线（与 readSeedData 一一对应）。

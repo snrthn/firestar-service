@@ -2,6 +2,7 @@ package com.firestar.ai.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.firestar.ai.core.ChatProviderManager;
+import com.firestar.ai.core.DsmlTokenFilter;
 import com.firestar.ai.core.ToolAuditFrame;
 import com.firestar.ai.dto.AiChatRequest;
 import com.firestar.ai.config.AiProperties;
@@ -28,6 +29,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -98,9 +100,24 @@ public class AiChatController {
 
         CompletableFuture.runAsync(() -> {
             long start = System.currentTimeMillis();
+            // 每次聊天请求一个 requestId：随 meta 帧下发、随 assistant 消息落库，供前端复制与排障
+            String requestId = UUID.randomUUID().toString();
             StringBuilder sb = new StringBuilder();
             // 思考过程聚合（reasoning 帧），流结束后随 assistant 消息落库（仅展示，不回灌上下文）
             StringBuilder reasoningSb = new StringBuilder();
+            // DSML 伪工具调用过滤器：模型把 tool call 写成 <|DSML|> 文本时整块剥离，
+            // 跨帧标记缓冲，下游 sb（落库内容）与 SSE token 帧同为清洗后文本。
+            DsmlTokenFilter dsmlFilter = new DsmlTokenFilter(text -> {
+                sb.append(text);
+                try {
+                    // JSON 编码下发：SseEmitter 不补空格，前端按 SSE 规范剥 data: 后一个空格，
+                    // 裸文本前导空格会被吞（英文粘连）；JSON 同时规避换行拆多 data 行。
+                    emitter.send(SseEmitter.event().name("token")
+                            .data(objectMapper.writeValueAsString(text)));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
             // convId 用数组盒包裹：既是 effectively final（供 chunk lambda 捕获），又能在 catch 中读取/赋值
             final Long[] convIdBox = {null};
             String provider = "unknown";
@@ -120,7 +137,8 @@ public class AiChatController {
                 // 流起始元数据帧：携带 conversationId，供前端事后按会话拉取草稿（Coze 模式 SSE 流不经过草稿结果）
                 try {
                     emitter.send(SseEmitter.event().name("meta")
-                            .data(objectMapper.writeValueAsString(Map.of("conversationId", convIdBox[0]))));
+                            .data(objectMapper.writeValueAsString(
+                                    Map.of("conversationId", convIdBox[0], "requestId", requestId))));
                 } catch (Exception ignored) {
                     // 客户端未连接等：best-effort，不影响后续流程
                 }
@@ -155,12 +173,8 @@ public class AiChatController {
                     try {
                         switch (chunk.type()) {
                             case "token" -> {
-                                sb.append(chunk.text());
-                                // JSON 编码后下发：SseEmitter 发送时不补空格，而前端按 SSE 规范剥掉
-                                // data: 后的一个空格——裸文本的前导空格会被吞（英文思考/正文全粘连）。
-                                // JSON 还能彻底规避换行被拆成多个 data 行的问题。
-                                emitter.send(SseEmitter.event().name("token")
-                                        .data(objectMapper.writeValueAsString(chunk.text())));
+                                // DSML 清洗后由 filter 回调统一 append sb + 下发 token 帧
+                                dsmlFilter.accept(chunk.text());
                             }
                             case "reasoning" -> {
                                 // 思考过程独立通道：只透传给前端渲染（不拼正文）；同时聚合落库供历史回放
@@ -198,11 +212,20 @@ public class AiChatController {
                         throw new RuntimeException(e);
                     }
                 });
-                emitter.send(SseEmitter.event().name("done").data(""));
-                chatService.appendAssistantMessage(convIdBox[0], sb.toString(),
+                // 冲刷 DSML filter 尾部缓冲（最后一段正常文本），再进行落库与收尾
+                dsmlFilter.finish();
+                Long assistantMessageId = chatService.appendAssistantMessage(convIdBox[0], sb.toString(),
                         reasoningSb.length() > 0 ? reasoningSb.toString() : null,
-                        provider, System.currentTimeMillis() - start);
+                        provider, System.currentTimeMillis() - start, requestId);
+                // message_id 帧在 done 之前：前端收到后即可给这条回答挂赞/踩（无需等下次回放）
+                try {
+                    emitter.send(SseEmitter.event().name("message_id")
+                            .data(objectMapper.writeValueAsString(assistantMessageId)));
+                } catch (Exception ignored) {
+                    /* 客户端已断开：不影响落库 */
+                }
                 chatService.endConversation(convIdBox[0]);
+                emitter.send(SseEmitter.event().name("done").data(""));
                 emitter.complete();
             } catch (RuntimeException re) {
                 re.printStackTrace();

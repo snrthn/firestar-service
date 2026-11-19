@@ -3,6 +3,7 @@ package com.firestar.ai.controller;
 import com.firestar.ai.entity.AiConversation;
 import com.firestar.ai.mapper.AiConversationMapper;
 import com.firestar.ai.mapper.AiMessageMapper;
+import com.firestar.ai.mapper.AiMessageFeedbackMapper;
 import com.firestar.ai.mapper.AiToolCallMapper;
 import com.firestar.ai.service.AiChatService;
 import com.firestar.entity.User;
@@ -48,6 +49,8 @@ class AiDraftEndpointSecurityTest {
     @Mock
     private AiToolCallMapper toolCallMapper;
     @Mock
+    private AiMessageFeedbackMapper feedbackMapper;
+    @Mock
     private UserMapper userMapper;
 
     @BeforeAll
@@ -75,7 +78,7 @@ class AiDraftEndpointSecurityTest {
     @Test
     void latestDraft_otherUsersConversation_returns404() throws Exception {
         // 真实编排服务
-        AiChatService chatService = new AiChatService(convMapper, msgMapper, toolCallMapper);
+        AiChatService chatService = new AiChatService(convMapper, msgMapper, toolCallMapper, feedbackMapper);
         AiConversationController controller = new AiConversationController(chatService, userMapper);
         MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())

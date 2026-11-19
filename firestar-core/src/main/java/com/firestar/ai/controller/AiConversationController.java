@@ -12,6 +12,7 @@ import com.firestar.mapper.UserMapper;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -59,10 +60,21 @@ public class AiConversationController {
         Long currentUserId = DataScopeHelper.currentUserId(userMapper);
         List<AiMessage> msgs = chatService.listMessages(convId, currentUserId);
         Map<Long, String> toolNames = chatService.toolNamesOf(convId);
+        Map<Long, String> myFeedback = chatService.feedbackOf(convId, currentUserId);
         return Result.success(msgs.stream().map(m -> new ConversationMessageVO(
                 m.getId(), m.getRole(), m.getContent(), m.getReasoningText(),
-                toolNames.get(m.getId()),
+                m.getRequestId(), myFeedback.get(m.getId()), toolNames.get(m.getId()),
                 m.getModelVersion(), m.getLatencyMs(), m.getCreatedAt())).toList());
+    }
+
+    /** 对某条 AI 回答点赞/点踩；type=LIKE|DISLIKE，空串取消（同类型再点一次即取消） */
+    @RequirePerm("ai:assistant:use")
+    @PostMapping("/message/{messageId}/feedback")
+    public Result<Void> feedback(@PathVariable Long messageId,
+                                 @RequestParam(defaultValue = "") String type) {
+        Long currentUserId = DataScopeHelper.currentUserId(userMapper);
+        chatService.rateMessage(messageId, currentUserId, type);
+        return Result.success();
     }
 
     /** 删除会话（连同消息与工具调用记录），物理删除 */

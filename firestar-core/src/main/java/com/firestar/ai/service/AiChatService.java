@@ -2,8 +2,10 @@ package com.firestar.ai.service;
 
 import com.firestar.ai.entity.AiConversation;
 import com.firestar.ai.entity.AiMessage;
+import com.firestar.ai.entity.AiMessageFeedback;
 import com.firestar.ai.entity.AiToolCall;
 import com.firestar.ai.mapper.AiConversationMapper;
+import com.firestar.ai.mapper.AiMessageFeedbackMapper;
 import com.firestar.ai.mapper.AiMessageMapper;
 import com.firestar.ai.mapper.AiToolCallMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -28,12 +30,14 @@ public class AiChatService {
     private final AiConversationMapper convMapper;
     private final AiMessageMapper msgMapper;
     private final AiToolCallMapper toolCallMapper;
+    private final AiMessageFeedbackMapper feedbackMapper;
 
     public AiChatService(AiConversationMapper convMapper, AiMessageMapper msgMapper,
-                         AiToolCallMapper toolCallMapper) {
+                         AiToolCallMapper toolCallMapper, AiMessageFeedbackMapper feedbackMapper) {
         this.convMapper = convMapper;
         this.msgMapper = msgMapper;
         this.toolCallMapper = toolCallMapper;
+        this.feedbackMapper = feedbackMapper;
     }
 
     /** 开会话 + 落首条 user 消息，返回会话 id */
@@ -60,7 +64,7 @@ public class AiChatService {
         }
     }
 
-    /** 落 assistant 消息（流式结束后调用）；reasoningText 可空（无思考过程） */
+    /** 落 assistant 消息（流式结束后调用）；reasoningText / requestId 可空（旧调用点兼容） */
     public void appendAssistantMessage(Long convId, String content, String modelVersion, long latencyMs) {
         appendAssistantMessage(convId, content, null, modelVersion, latencyMs);
     }
@@ -68,14 +72,22 @@ public class AiChatService {
     /** 落 assistant 消息（含思考过程文本）：reasoning 只落库不回灌上下文，仅供历史回放展示 */
     public void appendAssistantMessage(Long convId, String content, String reasoningText,
                                        String modelVersion, long latencyMs) {
+        appendAssistantMessage(convId, content, reasoningText, modelVersion, latencyMs, null);
+    }
+
+    /** 落 assistant 消息（含思考过程与请求 id），返回 message id 供前端点赞/点踩定位。 */
+    public Long appendAssistantMessage(Long convId, String content, String reasoningText,
+                                       String modelVersion, long latencyMs, String requestId) {
         AiMessage m = new AiMessage();
         m.setConversationId(convId);
         m.setRole("assistant");
         m.setContent(content);
         m.setReasoningText(reasoningText);
         m.setModelVersion(modelVersion);
+        m.setRequestId(requestId);
         m.setLatencyMs((int) latencyMs);
         msgMapper.insert(m);
+        return m.getId();
     }
 
     /** 落工具调用审计（插件回调路径调用）。返回写入的 message id（供 tool_call 关联） */
@@ -187,10 +199,17 @@ public class AiChatService {
         return out;
     }
 
-    /** 删除会话及其消息 / 工具调用记录，归属校验后物理删除 */
+    /** 删除会话及其消息 / 工具调用 / 赞踩记录，归属校验后物理删除 */
     public void deleteConversation(Long convId, Long currentUserId) {
         requireOwned(convId, currentUserId);
         toolCallMapper.delete(new LambdaQueryWrapper<AiToolCall>().eq(AiToolCall::getConversationId, convId));
+        List<Long> messageIds = msgMapper.selectList(new LambdaQueryWrapper<AiMessage>()
+                        .eq(AiMessage::getConversationId, convId))
+                .stream().map(AiMessage::getId).toList();
+        if (!messageIds.isEmpty()) {
+            feedbackMapper.delete(new LambdaQueryWrapper<AiMessageFeedback>()
+                    .in(AiMessageFeedback::getMessageId, messageIds));
+        }
         msgMapper.delete(new LambdaQueryWrapper<AiMessage>().eq(AiMessage::getConversationId, convId));
         convMapper.deleteById(convId);
     }
@@ -217,5 +236,62 @@ public class AiChatService {
         conv.setStatus(1);
         convMapper.updateById(conv);
         return history;
+    }
+
+    // ===== 回答赞踩（V217）=====
+
+    /**
+     * 当前用户对某条 AI 回答点赞/点踩；type 传空串表示取消。
+     * 归属校验：消息 → 会话 → 当前用户，越权 404（与会话接口同口径）。
+     */
+    public void rateMessage(Long messageId, Long userId, String type) {
+        AiMessage msg = msgMapper.selectById(messageId);
+        if (msg == null || !"assistant".equals(msg.getRole())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "消息不存在或无权访问");
+        }
+        requireOwned(msg.getConversationId(), userId);
+
+        AiMessageFeedback existing = feedbackMapper.selectOne(new LambdaQueryWrapper<AiMessageFeedback>()
+                .eq(AiMessageFeedback::getMessageId, messageId)
+                .eq(AiMessageFeedback::getUserId, userId));
+
+        boolean cancel = type == null || type.isBlank();
+        if (cancel) {
+            if (existing != null) feedbackMapper.deleteById(existing.getId());
+            return;
+        }
+        String normalized = type.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!"LIKE".equals(normalized) && !"DISLIKE".equals(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "反馈类型只能是 LIKE / DISLIKE");
+        }
+        if (existing != null) {
+            if (!normalized.equals(existing.getFeedbackType())) {
+                existing.setFeedbackType(normalized);
+                feedbackMapper.updateById(existing);
+            }
+            return;
+        }
+        AiMessageFeedback f = new AiMessageFeedback();
+        f.setMessageId(messageId);
+        f.setUserId(userId);
+        f.setFeedbackType(normalized);
+        feedbackMapper.insert(f);
+    }
+
+    /** 当前用户在某会话内每条 assistant 消息的反馈状态（messageId → LIKE|DISLIKE），供回放渲染 */
+    public Map<Long, String> feedbackOf(Long convId, Long userId) {
+        requireOwned(convId, userId);
+        List<Long> ids = msgMapper.selectList(new LambdaQueryWrapper<AiMessage>()
+                        .eq(AiMessage::getConversationId, convId)
+                        .eq(AiMessage::getRole, "assistant"))
+                .stream().map(AiMessage::getId).toList();
+        if (ids.isEmpty()) return Map.of();
+        Map<Long, String> out = new HashMap<>();
+        for (AiMessageFeedback f : feedbackMapper.selectList(new LambdaQueryWrapper<AiMessageFeedback>()
+                .eq(AiMessageFeedback::getUserId, userId)
+                .in(AiMessageFeedback::getMessageId, ids))) {
+            out.put(f.getMessageId(), f.getFeedbackType());
+        }
+        return out;
     }
 }

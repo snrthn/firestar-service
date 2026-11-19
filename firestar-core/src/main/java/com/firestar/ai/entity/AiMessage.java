@@ -41,5 +41,8 @@ public class AiMessage implements Serializable {
 
     private String modelVersion;
 
+    /** 本轮请求的 request_id（SSE meta 帧下发，排障用），V217 新增 */
+    private String requestId;
+
     private LocalDateTime createdAt;
 }
