@@ -297,6 +297,8 @@ class EntityMappingConsistencyTest {
             "ai_conversations=com.firestar.ai.entity.AiConversation",
             "ai_messages=com.firestar.ai.entity.AiMessage",
             "ai_tool_calls=com.firestar.ai.entity.AiToolCall",
+            // V217 新增：AI 回答赞踩（普通实体，无 JSON 列、不继承逻辑删除基类）
+            "ai_message_feedback=com.firestar.ai.entity.AiMessageFeedback",
             // V207 知识库三表（V208 又给 sys_kb_doc 加了 parent_id / node_type / sort_no / path）
             // 实体同在 com.firestar.ai.entity，与 AiPromptConfig 一样刻意不继承 BaseEntity
             "sys_kb_doc=com.firestar.ai.entity.KbDoc",
