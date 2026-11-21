@@ -1,11 +1,13 @@
 package com.firestar.service.impl;
 
+import com.firestar.ai.kb.KbFileTextExtractor;
 import com.firestar.exception.BizException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * V206 classify 契约的纯逻辑单测（不连库、不启 Spring、不碰 OSS）。
@@ -66,6 +68,14 @@ class FileTypeResolveTest {
         assertEquals("ATTACHMENT", infer("unknown"));
         assertEquals("ATTACHMENT", infer(null));
         assertEquals("ATTACHMENT", infer(""));
+    }
+
+    @Test
+    @DisplayName("知识库附件格式契约：解析器支持的格式必须全部允许上传（md 曾被旧白名单 500 拒绝）")
+    void kbAttachmentFormatsAreUploadable() {
+        for (String ext : KbFileTextExtractor.SUPPORTED_EXTENSIONS) {
+            assertTrue(FileServiceImpl.isAllowedExtension(ext), "上传白名单漏了 ." + ext);
+        }
     }
 
     @Test

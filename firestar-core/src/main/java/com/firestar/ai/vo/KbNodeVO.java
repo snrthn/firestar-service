@@ -25,4 +25,6 @@ public class KbNodeVO {
     private Boolean hasChild;
     private String aclRoles;
     private LocalDateTime updatedAt;
+    /** 已发布节点是否留有未重新发布的保存修改（树节点状态点用） */
+    private Boolean hasUnpublishedEdits;
 }

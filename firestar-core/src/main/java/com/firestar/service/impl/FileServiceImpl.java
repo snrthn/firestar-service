@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.ai.kb.KbFileTextExtractor;
 import com.firestar.common.DataScopeHelper;
 import com.firestar.common.IpUtil;
 import com.firestar.dto.FileDownloadLogVO;
@@ -44,6 +45,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 文件业务实现。
@@ -61,11 +63,21 @@ import java.util.stream.Collectors;
 public class FileServiceImpl implements FileService {
 
     /** 扩展名白名单（红线 4：上传要校验格式，防恶意文件）
-     *  V24 新增 mp3/mp4（媒体文件，配套前端音视频预览，2026-10-16） */
-    private static final Set<String> ALLOWED_EXT = Set.of(
-            "pdf", "jpg", "jpeg", "png", "gif", "webp", "bmp",
-            "doc", "docx", "xls", "xlsx", "txt", "csv", "zip", "ofd",
-            "mp3", "mp4");
+     *  V24 新增 mp3/mp4（媒体文件，配套前端音视频预览，2026-10-16）。
+     *  V218：并入知识库解析器支持格式（KbFileTextExtractor.SUPPORTED_EXTENSIONS）——
+     *  此前知识库附件 accept 含 md，上传却撞这里的旧白名单直接 500，两处共用真源防再漂移。 */
+    private static final List<String> ALLOWED_EXT = Stream.concat(
+            Stream.of("pdf", "jpg", "jpeg", "png", "gif", "webp", "bmp",
+                    "doc", "docx", "xls", "xlsx", "txt", "csv", "zip", "ofd",
+                    "mp3", "mp4"),
+            KbFileTextExtractor.SUPPORTED_EXTENSIONS.stream())
+            .distinct()
+            .toList();
+
+    /** 供同包单测校验「知识库附件格式全部可上传」契约，不开放给业务代码绕过校验。 */
+    static boolean isAllowedExtension(String ext) {
+        return ALLOWED_EXT.contains(ext);
+    }
 
     /**
      * V206：file_type 值域（纯媒体格式）。服务端白名单，绝不把前端自由字符串直接落库。
@@ -102,7 +114,8 @@ public class FileServiceImpl implements FileService {
      *
      * <p>所以：类型只认扩展名，映射不到的一律 {@code application/octet-stream}
      * （浏览器只会下载、不会渲染），并附带 {@code X-Content-Type-Options: nosniff}
-     * 禁止浏览器自作聪明嗅探。
+     * 禁止浏览器自作聪明嗅探。html / htm 虽然为知识库解析而允许上传，但刻意不映射
+     * text/html —— raw 接口回放同源 HTML 会复活上面的 XSS 攻击面。
      */
     private static final Map<String, String> SAFE_CONTENT_TYPE = Map.ofEntries(
             Map.entry("pdf", "application/pdf"),
@@ -113,6 +126,11 @@ public class FileServiceImpl implements FileService {
             Map.entry("webp", "image/webp"),
             Map.entry("bmp", "image/bmp"),
             Map.entry("txt", "text/plain;charset=UTF-8"),
+            Map.entry("md", "text/plain;charset=UTF-8"),
+            Map.entry("markdown", "text/plain;charset=UTF-8"),
+            Map.entry("log", "text/plain;charset=UTF-8"),
+            Map.entry("text", "text/plain;charset=UTF-8"),
+            Map.entry("json", "text/plain;charset=UTF-8"),
             Map.entry("csv", "text/csv;charset=UTF-8"),
             Map.entry("doc", "application/msword"),
             Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),

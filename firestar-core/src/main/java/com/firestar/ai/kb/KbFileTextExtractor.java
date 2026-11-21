@@ -39,6 +39,16 @@ import java.util.List;
  */
 public final class KbFileTextExtractor {
 
+    /**
+     * 解析器支持的扩展名清单（业务真源）。
+     * 前端知识库附件文件框的 accept 与服务端上传白名单 FileServiceImpl.ALLOWED_EXT
+     * 都必须覆盖这里全部格式——历史上前端 accept 含 md 而上传白名单不含，
+     * 导致 md 前端能选、上传直接 500。新增格式时只改这一处，并同步前端 accept。
+     */
+    public static final List<String> SUPPORTED_EXTENSIONS = List.of(
+            "txt", "md", "markdown", "csv", "log", "text", "json",
+            "docx", "xlsx", "pdf", "html", "htm");
+
     /** 不支持的附件类型（调用方据此优雅跳过，不影响其它切片） */
     public static final class UnsupportedFileTypeException extends Exception {
         public UnsupportedFileTypeException(String message) {
@@ -64,6 +74,9 @@ public final class KbFileTextExtractor {
             return "";
         }
         String ext = ext(originalName);
+        if (!SUPPORTED_EXTENSIONS.contains(ext)) {
+            throw new UnsupportedFileTypeException("不支持的附件类型：." + (ext.isEmpty() ? "(无扩展名)" : ext));
+        }
         switch (ext) {
             case "txt":
             case "md":

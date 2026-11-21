@@ -5,6 +5,7 @@ import com.firestar.exception.BizException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -330,5 +331,30 @@ class KbTreeRulesTest {
         cross.add(doc(99, 20, 10, "/20/99/"));
         assertThrows(BizException.class,
                 () -> KbTreeRules.resolveSiblingOrder(cross, 40, 0, "AFTER", 99L));
+    }
+
+    @Test
+    @DisplayName("未发布修改判定：仅 PUBLISHED 且 updatedAt 晚于 publishedAt 才算")
+    void hasUnpublishedEdits() {
+        LocalDateTime t0 = LocalDateTime.of(2026, 11, 21, 10, 0);
+        LocalDateTime t1 = t0.plusMinutes(5);
+
+        KbDoc published = doc(1, 0, 10, "/1/");
+        published.setStatus("PUBLISHED");
+        published.setPublishedAt(t0);
+        published.setUpdatedAt(t0);
+        assertFalse(KbTreeRules.hasUnpublishedEdits(published), "刚发布两者相等，不算有未发布修改");
+
+        published.setUpdatedAt(t1);
+        assertTrue(KbTreeRules.hasUnpublishedEdits(published), "发布后保存过，updatedAt 晚于 publishedAt");
+
+        published.setStatus("DRAFT");
+        assertFalse(KbTreeRules.hasUnpublishedEdits(published), "草稿态不适用该标记");
+
+        published.setStatus("PUBLISHED");
+        published.setPublishedAt(null);
+        assertFalse(KbTreeRules.hasUnpublishedEdits(published), "老数据缺 publishedAt 保守不误报");
+
+        assertFalse(KbTreeRules.hasUnpublishedEdits(null));
     }
 }

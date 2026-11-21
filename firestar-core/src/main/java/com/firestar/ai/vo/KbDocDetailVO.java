@@ -19,4 +19,6 @@ public class KbDocDetailVO {
     private String aclRoles;
     private Boolean egressAllowed;
     private LocalDateTime updatedAt;
+    /** 已发布文档是否留有未重新发布的保存修改（后端权威计算，前端只读） */
+    private Boolean hasUnpublishedEdits;
 }

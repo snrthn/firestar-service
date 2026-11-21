@@ -191,6 +191,7 @@ public class KbDocService {
         vo.setAclRoles(d.getAclRoles());
         vo.setEgressAllowed(d.getEgressAllowed() == null || d.getEgressAllowed() == 1);
         vo.setUpdatedAt(d.getUpdatedAt());
+        vo.setHasUnpublishedEdits(KbTreeRules.hasUnpublishedEdits(d));
         return vo;
     }
 
@@ -559,6 +560,7 @@ public class KbDocService {
         a.setCreatedAt(now);
         a.setTenantId(0L);
         attachmentMapper.insert(a);
+        touchDocForRepublish(d, operator);
         return a.getId();
     }
 
@@ -571,8 +573,9 @@ public class KbDocService {
         if (a == null) {
             throw new BizException("附件关系不存在");
         }
-        require(a.getDocId());
+        KbDoc d = require(a.getDocId());
         attachmentMapper.deleteById(attId);
+        touchDocForRepublish(d, operator);
     }
 
     /** 切换 REFERENCE 附件是否纳入检索；改的是登记层的 indexable，下次发布生效 */
@@ -584,10 +587,32 @@ public class KbDocService {
         if (a == null) {
             throw new BizException("附件关系不存在");
         }
-        require(a.getDocId());
+        KbDoc d = require(a.getDocId());
         attachmentMapper.update(null, new LambdaUpdateWrapper<KbAttachment>()
                 .eq(KbAttachment::getId, attId)
                 .set(KbAttachment::getIndexable, indexable == 1 ? 1 : 0));
+        touchDocForRepublish(d, operator);
+    }
+
+    /**
+     * 附件增 / 删 / 切换检索都只落 attachment 表，不走正文 update()，不会自动刷新文档的
+     * updatedAt；但这些变更同样要等下次发布才生效，必须让「有未发布修改」标志亮起。
+     * 这里显式刷新 sys_kb_doc 的时间戳，与 KbTreeRules.hasUnpublishedEdits 的权威口径对齐。
+     *
+     * <p>注意：updated_at / published_at 是秒精度 DATETIME，发布后同一秒内改附件时
+     * LocalDateTime.now() 可能仍等于 publishedAt，导致严格不等式不成立。这种场景把时间
+     * 顶到 publishedAt + 1s，保证标志可靠点亮（最多偏差 1 秒，不影响排序语义）。</p>
+     */
+    private void touchDocForRepublish(KbDoc d, String operator) {
+        LocalDateTime now = LocalDateTime.now();
+        if (STATUS_PUBLISHED.equals(d.getStatus()) && d.getPublishedAt() != null
+                && !now.isAfter(d.getPublishedAt())) {
+            now = d.getPublishedAt().plusSeconds(1);
+        }
+        docMapper.update(null, new LambdaUpdateWrapper<KbDoc>()
+                .eq(KbDoc::getId, d.getId())
+                .set(KbDoc::getUpdatedBy, operator)
+                .set(KbDoc::getUpdatedAt, now));
     }
 
     /**
@@ -702,6 +727,7 @@ public class KbDocService {
         vo.setHasChild(parentsWithChildren.contains(d.getId()));
         vo.setAclRoles(d.getAclRoles());
         vo.setUpdatedAt(d.getUpdatedAt());
+        vo.setHasUnpublishedEdits(KbTreeRules.hasUnpublishedEdits(d));
         return vo;
     }
 

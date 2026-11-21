@@ -3,6 +3,7 @@ package com.firestar.ai.service;
 import com.firestar.ai.entity.KbDoc;
 import com.firestar.exception.BizException;
 
+import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -325,5 +326,24 @@ public final class KbTreeRules {
             return List.of();
         }
         return new ArrayList<>(all.subList(offset, Math.min(all.size(), offset + limit)));
+    }
+
+    /**
+     * 已发布文档是否留有「保存过草稿但未重新发布」的修改（后端唯一权威口径）。
+     *
+     * <p>判定：{@code status=PUBLISHED && updatedAt > publishedAt}。publish 时把
+     * updatedAt 与 publishedAt 设成同一个 now，save 只刷 updatedAt 不动 publishedAt，
+     * 因此「发布后又有保存」严格满足该不等式；仅 rename/move 也会刷 updatedAt，
+     * 这两个操作同样排除了检索重切片，标记为「有未发布修改」语义一致。</p>
+     *
+     * <p>老数据缺 publishedAt / updatedAt 时保守返回 false，不误报。</p>
+     */
+    public static boolean hasUnpublishedEdits(KbDoc d) {
+        if (d == null || !"PUBLISHED".equals(d.getStatus())) {
+            return false;
+        }
+        LocalDateTime published = d.getPublishedAt();
+        LocalDateTime updated = d.getUpdatedAt();
+        return published != null && updated != null && updated.isAfter(published);
     }
 }
