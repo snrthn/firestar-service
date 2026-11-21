@@ -19,6 +19,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.Collections;
 
 /**
  * AI 会话编排与落库（设计 §8）。会话 / 消息 / 工具调用全落自有库，不依赖扣子 7 天日志。
@@ -157,6 +159,67 @@ public class AiChatService {
 
     /** 续聊时回灌的历史消息条数上限（防超长上下文拖爆 token 预算） */
     public static final int HISTORY_LIMIT = 20;
+
+    // ===== 会话内工作记忆：工具结果结构化回灌 =====
+    /** 工作记忆最多回灌最近多少次工具调用（按 id 倒序取，再翻正为时间升序） */
+    public static final int WORKING_MEMORY_LIMIT = 8;
+    /** 单条工具结果摘要上限字符数（结果 JSON 可能很大，全量回灌会撑爆上下文） */
+    private static final int WM_RESULT_CHARS = 400;
+    /** 工作记忆整块上限字符数（二次兜底，防止工具数量×单条长度仍超预算） */
+    private static final int WM_TOTAL_CHARS = 3200;
+
+    /**
+     * 会话内工作记忆：把该会话最近 {@link #WORKING_MEMORY_LIMIT} 次<b>成功</b>工具调用
+     * （工具名 + 参数摘要 + 结果摘要）拼成一段结构化文本，供续聊时回灌给模型。
+     *
+     * <p>背景：此前续聊只回灌 user/assistant 纯文本，tool 行刻意不回灌（OpenAI 要求
+     * assistant(tool_calls) 与 tool 结果严格配对，裸拼 tool 消息会被 400 拒）。代价是模型
+     * "记不住自己上一轮查到了什么"，多步任务里会重复查询或答非所问。这里不回灌原始 tool
+     * 消息，而是把脱敏后的结果摘要作为<b>纯文本事实</b>注入 system 指令，规避配对约束、
+     * 跨供应商通用（Coze / OpenAI / Anthropic 都吃 system 文本）。</p>
+     *
+     * <p>数据安全：result_json 落库前已经 {@code EgressMasker} 脱敏，这里只做二次截断，
+     * 不引入新的数据出域面。体积控制：单条截断 + 总量截断双保险，无调用返回 null。</p>
+     */
+    public String workingMemoryOf(Long convId) {
+        if (convId == null) {
+            return null;
+        }
+        List<AiToolCall> recent = toolCallMapper.selectList(new LambdaQueryWrapper<AiToolCall>()
+                .eq(AiToolCall::getConversationId, convId)
+                .eq(AiToolCall::getIsError, 0)
+                .orderByDesc(AiToolCall::getId)
+                .last("LIMIT " + WORKING_MEMORY_LIMIT));
+        if (recent == null || recent.isEmpty()) {
+            return null;
+        }
+        Collections.reverse(recent); // 倒序取最近 N 条，翻正为时间升序，读起来是"先查A再查B"
+        StringBuilder sb = new StringBuilder("以下是本会话此前的工具查询结果（已脱敏，可直接作为事实引用；"
+                + "若用户问题已变化请重新查询，勿照搬旧数据）：\n");
+        for (AiToolCall tc : recent) {
+            String line = "- " + safe(tc.getToolName()) + "(" + brief(tc.getArgumentsJson(), 120) + ") → "
+                    + brief(tc.getResultJson(), WM_RESULT_CHARS) + "\n";
+            if (sb.length() + line.length() > WM_TOTAL_CHARS) {
+                sb.append("（更早的记录已省略）\n");
+                break;
+            }
+            sb.append(line);
+        }
+        return sb.toString();
+    }
+
+    /** 结果/参数摘要：压缩空白 + 截断，避免换行破坏 system 文本结构 */
+    private static String brief(String s, int maxChars) {
+        if (s == null || s.isBlank()) {
+            return "—";
+        }
+        String oneLine = s.replaceAll("\\s+", " ");
+        return oneLine.length() <= maxChars ? oneLine : oneLine.substring(0, maxChars) + "…";
+    }
+
+    private static String safe(String s) {
+        return s == null || s.isBlank() ? "unknown_tool" : s;
+    }
 
     /** 归属校验（越权 404，与「会话不存在」不可区分，同 getLatestDraft 口径） */
     private AiConversation requireOwned(Long convId, Long currentUserId) {

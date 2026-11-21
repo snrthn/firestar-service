@@ -24,14 +24,17 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
  * OpenAI 兼容供应商实现（百炼 / DeepSeek 等，设计 §4.2）。
  *
  * <p>与 Coze 不同，OpenAI 系在请求里直接带 {@code tools} 字段、模型回 {@code tool_calls}，
- * 本类在阶段二补齐<b>工具调用本地聚合循环</b>：流式聚合 tool_calls（按 index 拼接 name+arguments）
- * → 本地经 {@link ToolExecutor} 执行 → 结果以 tool role 消息回传 → 续生成（最多 5 轮防挂起）。
+ * 本类补齐<b>工具调用本地聚合循环</b>：流式聚合 tool_calls（按 index 拼接 name+arguments）
+ * → 本地经 {@link ToolExecutor} 执行 → 结果以 tool role 消息回传 → 续轮按上一步结果决定下一步。
+ * 受控多步链路由 {@link ToolLoopPolicy} 约束：最多 4 轮工具 + 1 轮总结，重复调用检测防死循环；
+ * 权限闸在每步 ToolExecutor.execute 内按 requiredPerm 复核，放开续轮不绕过权限。
  * 工具声明由 ToolRegistry 提供（与扣子侧同一份 schema），无需在供应商控制台手动注册。</p>
  */
 public class OpenAIProvider implements ChatProvider {
@@ -76,14 +79,18 @@ public class OpenAIProvider implements ChatProvider {
         }
         List<ToolSpec> tools = req.tools() == null ? List.of() : req.tools();
 
-        int maxRounds = 5;
+        // 受控多步工具链：MAX_TOOL_ROUNDS 轮工具调用 + 1 轮纯总结。
+        // 放开续轮 tools 让模型能按上一步结果决定下一步（查项目→查发货→核销），
+        // 但受步数预算 + 重复调用检测双护栏约束（见 ToolLoopPolicy）。
+        int maxRounds = ToolLoopPolicy.MAX_TOOL_ROUNDS + 1;
+        Set<String> seenCalls = ToolLoopPolicy.newSeen();
+        boolean stalled = false; // 上一轮全是重复调用 → 本轮起不再下发 tools，逼模型总结
         for (int round = 0; round < maxRounds; round++) {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("model", model == null ? "qwen-max" : model);
             payload.put("stream", true);
             payload.put("messages", messages);
-            // 首轮带 tools；续轮（已执行过工具）不带，让模型基于结果直接总结，避免再次触发
-            if (round == 0 && !tools.isEmpty()) {
+            if (ToolLoopPolicy.shouldOfferTools(round, !tools.isEmpty()) && !stalled) {
                 payload.put("tools", toOpenAiTools(tools));
                 payload.put("tool_choice", "auto");
             }
@@ -106,6 +113,21 @@ public class OpenAIProvider implements ChatProvider {
                 onChunk.accept(ChatChunk.done());
                 return;
             }
+            // 总结轮（工具预算已耗尽）或停滞态还硬要调工具：不再执行，避免超出预算 / 空转烧 token。
+            // 此时模型已收到此前所有结果，直接 done 收尾（前端不会挂起）。
+            boolean toolsOfferedThisRound = ToolLoopPolicy.shouldOfferTools(round, !tools.isEmpty()) && !stalled;
+            if (!toolsOfferedThisRound) {
+                onChunk.accept(ChatChunk.done());
+                return;
+            }
+            // 重复调用检测：本轮若全是此前出现过的 (工具名+参数)，置 stalled，下一轮不再下发 tools；
+            // 本轮调用照常全部执行（assistant(tool_calls) 与 tool result 必须一一配对，不能跳过）。
+            List<String> sigs = new ArrayList<>();
+            for (ToolExec t : r.toolCalls) {
+                sigs.add(ToolLoopPolicy.signature(t.name, t.arguments));
+            }
+            stalled = !ToolLoopPolicy.hasFreshCalls(sigs, seenCalls);
+            ToolLoopPolicy.markSeen(sigs, seenCalls);
             // 有 tool_calls：本地执行，把 assistant(tool_calls) + tool(result) 加入 messages，续轮总结
             Map<String, Object> assistantMsg = new LinkedHashMap<>();
             assistantMsg.put("role", "assistant");

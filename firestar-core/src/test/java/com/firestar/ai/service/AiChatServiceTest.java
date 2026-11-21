@@ -16,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -149,6 +150,59 @@ class AiChatServiceTest {
         assertEquals(2, history.size(), "历史为本轮之前的 user/assistant 文本");
         verify(msgMapper).insert(any(AiMessage.class));
         verify(convMapper).updateById(any(AiConversation.class));
+    }
+
+    // ===== 会话内工作记忆（工具结果结构化回灌）=====
+
+    @Test
+    void workingMemoryOf_nullConv_returnsNull() {
+        assertEquals(null, service.workingMemoryOf(null));
+        org.mockito.Mockito.verifyNoInteractions(toolCallMapper);
+    }
+
+    @Test
+    void workingMemoryOf_noToolCalls_returnsNull() {
+        when(toolCallMapper.selectList(any())).thenReturn(List.of());
+        assertEquals(null, service.workingMemoryOf(10L));
+    }
+
+    @Test
+    void workingMemoryOf_queriesOnlySuccessfulCalls_limitedAndChronological() {
+        AiToolCall older = new AiToolCall();
+        older.setToolName("search_projects");
+        older.setArgumentsJson("{\"kw\":\"A\"}");
+        older.setResultJson("[{\"id\":1}]");
+        AiToolCall newer = new AiToolCall();
+        newer.setToolName("query_shipment_detail");
+        newer.setArgumentsJson("{\"id\":9}");
+        newer.setResultJson("{\"no\":\"S1\"}");
+        // mapper 返回的是"按 id 倒序"的结果（production 用 orderByDesc + LIMIT）
+        when(toolCallMapper.selectList(any())).thenReturn(new java.util.ArrayList<>(List.of(newer, older)));
+
+        String wm = service.workingMemoryOf(10L);
+
+        assertTrue(wm.contains("已脱敏"), "带出域声明，提示模型可作事实引用");
+        assertTrue(wm.contains("search_projects") && wm.contains("query_shipment_detail"));
+        assertTrue(wm.indexOf("search_projects") < wm.indexOf("query_shipment_detail"),
+                "倒序查询后翻正为时间升序：先查的排前面");
+        // 注：isError=0 / LIMIT / ORDER BY id DESC 的 SQL 约束由 workingMemoryOf 内的
+        // LambdaQueryWrapper 保证，靠源码落盘核对；此处不调 getSqlSegment()——纯 Mockito
+        // 环境未初始化 MyBatis-Plus lambda cache，调它会抛 "can not find lambda cache"。
+        verify(toolCallMapper).selectList(any());
+    }
+
+    @Test
+    void workingMemoryOf_truncatesLargeResult() {
+        AiToolCall tc = new AiToolCall();
+        tc.setToolName("search_invoices");
+        tc.setArgumentsJson("{}");
+        tc.setResultJson("X".repeat(5000));
+        when(toolCallMapper.selectList(any())).thenReturn(List.of(tc));
+
+        String wm = service.workingMemoryOf(10L);
+
+        assertTrue(wm.contains("…"), "超长结果被截断并加省略号");
+        assertTrue(wm.length() < 1000, "单条截断后整块远小于上限，实际=" + wm.length());
     }
 
     @Test

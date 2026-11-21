@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -45,7 +46,8 @@ import java.util.function.Consumer;
  * 不填则用默认值 maxTokens=4096 / anthropicVersion=2023-06-01。</p>
  *
  * <p>逐帧下发文本增量（含 thinking 模型的 thinking_delta），tool_use 按 index 聚合后本地执行，
- * 结果以 tool_result 回传续轮，最多 5 轮防挂起；draft_ 前缀工具额外下发草稿帧。</p>
+ * 结果以 tool_result 回传续轮形成受控多步链（{@link ToolLoopPolicy}：4 工具轮 + 1 总结轮 +
+ * 重复调用检测）；draft_ 前缀工具额外下发草稿帧。权限闸在每步 ToolExecutor 内复核。</p>
  */
 public class AnthropicProvider implements ChatProvider {
 
@@ -115,9 +117,12 @@ public class AnthropicProvider implements ChatProvider {
         }
         List<ToolSpec> tools = req.tools() == null ? List.of() : req.tools();
 
-        int rounds = 0;
-        while (rounds < MAX_ROUNDS) {
-            rounds++;
+        // 受控多步工具链：与 OpenAIProvider 共用 ToolLoopPolicy（4 工具轮 + 1 总结轮 + 重复检测）。
+        // round 从 0 计，与 OpenAIProvider 完全同构，避免 1-based 换算歧义。
+        Set<String> seenCalls = ToolLoopPolicy.newSeen();
+        boolean stalled = false; // 上一轮全是重复调用 → 本轮起不再下发 tools，逼模型总结
+        for (int round = 0; round < MAX_ROUNDS; round++) {
+            boolean toolsOfferedThisRound = ToolLoopPolicy.shouldOfferTools(round, !tools.isEmpty()) && !stalled;
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("model", model == null || model.isBlank() ? "claude-sonnet-4-6" : model);
             payload.put("max_tokens", maxTokens);
@@ -126,8 +131,7 @@ public class AnthropicProvider implements ChatProvider {
                 payload.put("system", system.toString());
             }
             payload.put("messages", messages);
-            // 首轮带 tools；续轮（已执行过工具）不带，让模型基于结果直接总结，避免再次触发
-            if (rounds == 1 && !tools.isEmpty()) {
+            if (toolsOfferedThisRound) {
                 payload.put("tools", toAnthropicTools(tools));
             }
             String body = objectMapper.writeValueAsString(payload);
@@ -151,6 +155,19 @@ public class AnthropicProvider implements ChatProvider {
                 onChunk.accept(ChatChunk.done());
                 return;
             }
+            // 总结轮 / 停滞态还硬要调工具：不再执行，直接 done 收尾，避免超预算空转
+            if (!toolsOfferedThisRound) {
+                onChunk.accept(ChatChunk.done());
+                return;
+            }
+            // 重复调用检测（与 OpenAIProvider 同口径）：本轮调用照常全部执行以保持
+            // tool_use / tool_result 配对；全是重复则下一轮停发 tools 逼模型总结。
+            List<String> sigs = new ArrayList<>();
+            for (ToolUse tu : r.toolUses.values()) {
+                sigs.add(ToolLoopPolicy.signature(tu.name, tu.arguments(objectMapper)));
+            }
+            stalled = !ToolLoopPolicy.hasFreshCalls(sigs, seenCalls);
+            ToolLoopPolicy.markSeen(sigs, seenCalls);
 
             // 把本轮 assistant 的 content block（文本 + tool_use）原样回传，保持工具调用上下文
             List<Map<String, Object>> assistantContent = new ArrayList<>();

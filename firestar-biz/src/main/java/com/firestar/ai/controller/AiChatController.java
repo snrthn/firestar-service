@@ -166,6 +166,16 @@ public class AiChatController {
                 if (systemInstruction == null) {
                     systemInstruction = aiProperties.getChatSystemInstruction();
                 }
+                // 会话内工作记忆：续聊时把本会话此前的工具查询结果摘要拼进同一条 system 消息。
+                // 必须拼接而非新增第二条 system——CozeProvider 用 reduce 只取最后一条 system，
+                // 新增会被丢弃；Anthropic 收集全部 system 拼到顶层，单条同样工作。
+                // 只在续聊（conversationId 非空）时注入；归属已在 continueConversation 校验。
+                if (req.conversationId() != null) {
+                    String workingMemory = chatService.workingMemoryOf(req.conversationId());
+                    if (workingMemory != null && !workingMemory.isBlank()) {
+                        systemInstruction = systemInstruction + "\n\n【会话内工作记忆】\n" + workingMemory;
+                    }
+                }
                 messages.add(ChatMessage.of("system", systemInstruction));
                 // 续聊：回灌该会话最近的 user/assistant 文本历史（最多 HISTORY_LIMIT 条），
                 // 让模型能接着此前话题聊；tool 行不回灌（供应商要求与 assistant(tool_calls) 严格配对）。
