@@ -1,12 +1,19 @@
 package com.firestar.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.MasterDataNoUtil;
+import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.dto.GoodsOptionVO;
 import com.firestar.entity.Goods;
+import com.firestar.exception.BizException;
 import com.firestar.mapper.GoodsMapper;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -64,5 +71,42 @@ public class GoodsController {
             return vo;
         }).toList();
         return Result.success(list);
+    }
+
+    /** 货物档案分页列表（V218 项目页档案管理抽屉）。 */
+    @GetMapping("/list")
+    @RequirePerm("goods:manage")
+    public Result<IPage<Goods>> list(@RequestParam(defaultValue = "1") Integer pageNum,
+                                     @RequestParam(defaultValue = "10") Integer pageSize,
+                                     @RequestParam(required = false) String keyword) {
+        LambdaQueryWrapper<Goods> q = new LambdaQueryWrapper<Goods>();
+        if (StringUtils.hasText(keyword)) {
+            q.and(w -> w.like(Goods::getGoodsName, keyword.trim())
+                    .or().like(Goods::getGoodsNo, keyword.trim()));
+        }
+        q.orderByDesc(Goods::getCreatedAt);
+        return Result.success(goodsMapper.selectPage(new Page<>(pageNum, pageSize), q));
+    }
+
+    /** 货物档案新增 / 编辑。 */
+    @PostMapping("/save")
+    @RequirePerm("goods:manage")
+    public Result<Goods> save(@RequestBody Goods req) {
+        if (!StringUtils.hasText(req.getGoodsName())) {
+            throw new BizException("货物名称不能为空");
+        }
+        req.setGoodsName(req.getGoodsName().trim());
+        if (req.getId() != null) {
+            goodsMapper.updateById(req);
+            return Result.success(goodsMapper.selectById(req.getId()));
+        }
+        if (req.getStatus() == null || req.getStatus().isBlank()) req.setStatus("ENABLED");
+        Goods exists = goodsMapper.selectOne(new LambdaQueryWrapper<Goods>()
+                .eq(Goods::getGoodsName, req.getGoodsName()).last("LIMIT 1"));
+        if (exists != null) throw new BizException("货物名称已存在：" + req.getGoodsName());
+        goodsMapper.insert(req);
+        req.setGoodsNo(MasterDataNoUtil.goodsNo(req.getId()));
+        goodsMapper.updateById(req);
+        return Result.success(req);
     }
 }

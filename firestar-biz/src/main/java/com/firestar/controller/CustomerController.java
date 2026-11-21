@@ -1,12 +1,19 @@
 package com.firestar.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.firestar.common.MasterDataNoUtil;
+import com.firestar.common.RequirePerm;
 import com.firestar.common.Result;
 import com.firestar.dto.CustomerOptionVO;
 import com.firestar.entity.Customer;
+import com.firestar.exception.BizException;
 import com.firestar.mapper.CustomerMapper;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -65,5 +72,45 @@ public class CustomerController {
             return vo;
         }).toList();
         return Result.success(list);
+    }
+
+    /** 客户档案分页列表（V218 项目页档案管理抽屉）。 */
+    @GetMapping("/list")
+    @RequirePerm("customer:manage")
+    public Result<IPage<Customer>> list(@RequestParam(defaultValue = "1") Integer pageNum,
+                                        @RequestParam(defaultValue = "10") Integer pageSize,
+                                        @RequestParam(required = false) String keyword) {
+        LambdaQueryWrapper<Customer> q = new LambdaQueryWrapper<Customer>();
+        if (StringUtils.hasText(keyword)) {
+            String k = keyword.trim();
+            q.and(w -> w.like(Customer::getCustomerName, k)
+                    .or().like(Customer::getCustomerNo, k)
+                    .or().like(Customer::getContactPhone, k));
+        }
+        q.orderByDesc(Customer::getCreatedAt);
+        return Result.success(customerMapper.selectPage(new Page<>(pageNum, pageSize), q));
+    }
+
+    /** 客户档案新增 / 编辑（有 id 更新，无 id 建档并生成编号）。 */
+    @PostMapping("/save")
+    @RequirePerm("customer:manage")
+    public Result<Customer> save(@RequestBody Customer req) {
+        if (!StringUtils.hasText(req.getCustomerName())) {
+            throw new BizException("客户名称不能为空");
+        }
+        req.setCustomerName(req.getCustomerName().trim());
+        if (req.getId() != null) {
+            // 编辑：不动编号 / 状态由前端带
+            customerMapper.updateById(req);
+            return Result.success(customerMapper.selectById(req.getId()));
+        }
+        if (req.getStatus() == null || req.getStatus().isBlank()) req.setStatus("ENABLED");
+        Customer exists = customerMapper.selectOne(new LambdaQueryWrapper<Customer>()
+                .eq(Customer::getCustomerName, req.getCustomerName()).last("LIMIT 1"));
+        if (exists != null) throw new BizException("客户名称已存在：" + req.getCustomerName());
+        customerMapper.insert(req);
+        req.setCustomerNo(MasterDataNoUtil.customerNo(req.getId()));
+        customerMapper.updateById(req);
+        return Result.success(req);
     }
 }

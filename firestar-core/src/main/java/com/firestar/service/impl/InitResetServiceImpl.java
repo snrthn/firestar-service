@@ -274,8 +274,13 @@ public class InitResetServiceImpl implements InitResetService {
     }
 
     private void deleteFiles() {
+        // V218：导入原始文件是审计物证（biz_type='import'），两种重置都必须保留——
+        // sys_import_batch 不在 fin_% 清理范围，若这里删了文件就成「批次在、文件没」的断链，
+        // 错误行回执也无法从原始文件还原。故 LOCAL 记录按 biz_type 排除 import。
         List<FileStorage> files = fileStorageMapper.selectList(
-                new LambdaQueryWrapper<FileStorage>().eq(FileStorage::getStorageType, "LOCAL"));
+                new LambdaQueryWrapper<FileStorage>()
+                        .eq(FileStorage::getStorageType, "LOCAL")
+                        .ne(FileStorage::getBizType, "import"));
         for (FileStorage f : files) {
             if (f.getStoragePath() != null && !f.getStoragePath().isBlank()) {
                 try {
@@ -286,7 +291,9 @@ public class InitResetServiceImpl implements InitResetService {
             }
         }
         fileStorageMapper.delete(
-                new LambdaQueryWrapper<FileStorage>().eq(FileStorage::getStorageType, "LOCAL"));
+                new LambdaQueryWrapper<FileStorage>()
+                        .eq(FileStorage::getStorageType, "LOCAL")
+                        .ne(FileStorage::getBizType, "import"));
     }
 
     private void deletePhysicalFilesOnly() {
@@ -295,6 +302,8 @@ public class InitResetServiceImpl implements InitResetService {
         File[] children = dir.listFiles();
         if (children == null) return;
         for (File c : children) {
+            // V218：保留 import/ 目录（导入原始文件，审计物证，full reset 也不删）
+            if (c.isDirectory() && "import".equals(c.getName())) continue;
             try {
                 deleteRecursively(c);
             } catch (Exception ignored) {

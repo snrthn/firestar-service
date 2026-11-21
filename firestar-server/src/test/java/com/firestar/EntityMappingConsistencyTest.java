@@ -61,7 +61,10 @@ class EntityMappingConsistencyTest {
      */
     private static final Set<String> IGNORED_COLUMNS = new HashSet<>(Arrays.asList(
             "id", "tenant_id", "created_by", "created_at", "updated_by", "updated_at",
-            "version", "ext", "is_deleted", "deleted_at", "deleted_by"));
+            "version", "ext", "is_deleted", "deleted_at", "deleted_by",
+            // V218: sys_import_batch 的生成列 active_key = IF(active_flag=1,import_key,NULL)，
+            // 由 DB 自动计算供唯一索引用，实体不映射（同 id/version 属 DB 管理列）。
+            "active_key"));
 
     @Autowired
     private DataSource dataSource;
@@ -303,7 +306,9 @@ class EntityMappingConsistencyTest {
             // 实体同在 com.firestar.ai.entity，与 AiPromptConfig 一样刻意不继承 BaseEntity
             "sys_kb_doc=com.firestar.ai.entity.KbDoc",
             "sys_kb_chunk=com.firestar.ai.entity.KbChunk",
-            "sys_kb_attachment=com.firestar.ai.entity.KbAttachment"};
+            "sys_kb_attachment=com.firestar.ai.entity.KbAttachment",
+            // V218 新增：历史数据导入批次摘要（审计一条，无逻辑删，含 JSON ext）
+            "sys_import_batch=ImportBatch"};
 
     /** 表名 → 实体类。支持简单类名与全限定名两种写法 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {

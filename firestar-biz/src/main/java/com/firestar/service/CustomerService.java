@@ -3,6 +3,7 @@ package com.firestar.service;
 import com.firestar.dto.CustomerOptionVO;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 客户主数据服务（AI 工具 search_customers 的支撑）。
@@ -26,4 +27,15 @@ public interface CustomerService {
      * @return 客户瘦 VO 列表
      */
     List<CustomerOptionVO> search(String keyword, Integer limit);
+
+    /**
+     * 按名称建档 / 同名 merge 空字段（V218 导入用）。
+     *
+     * @param name       客户名称（必填，trim 后精确匹配）
+     * @param fields     其他字段（key 为 Customer 属性名，值可空）
+     * @param mergeEmpty true=同名已存在时只补空字段（不覆盖已有值）；false=不 merge
+     * @param source     建档来源备注（如「历史数据导入」）
+     * @return 客户 ID
+     */
+    Long upsert(String name, Map<String, String> fields, boolean mergeEmpty, String source);
 }

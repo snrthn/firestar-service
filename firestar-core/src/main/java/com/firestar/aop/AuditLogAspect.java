@@ -2,6 +2,7 @@ package com.firestar.aop;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.firestar.annotation.Auditable;
+import com.firestar.common.ImportContext;
 import com.firestar.common.IpUtil;
 import com.firestar.config.GenericEntityLoader;
 import com.firestar.entity.AuditLog;
@@ -76,6 +77,11 @@ public class AuditLogAspect {
 
     @Around("@annotation(auditable)")
     public Object around(ProceedingJoinPoint pjp, Auditable auditable) throws Throwable {
+        // 导入线程：方案 v3 审计降级——单次导入只留一条批次摘要，跳过所有实体审计。
+        // ImportContext 只作用于 importExecutor 线程，正常业务线程不受影响。
+        if (ImportContext.isActive()) {
+            return pjp.proceed();
+        }
         // 解析目标方法（CGLIB/JDK 代理下拿到 impl 方法，保证拿到真实参数名）
         MethodSignature ms = (MethodSignature) pjp.getSignature();
         Method targetMethod = AopUtils.getMostSpecificMethod(ms.getMethod(), pjp.getTarget().getClass());

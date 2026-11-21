@@ -58,8 +58,9 @@ public class DatabaseCheckService {
      *            V208 只给 sys_kb_doc 加 parent_id/node_type/sort_no/path 四列（树形结构，
      *            方案 A 节点同构），**不新增表**，tableCount 仍为 51，别误 +1。
      *            V217 新增 ai_message_feedback（AI 回答赞踩），51→52。
+     *            V218 新增 sys_import_batch（导入批次摘要表），52→53。
      */
-    public static final int EXPECTED_TABLE_COUNT = 52;
+    public static final int EXPECTED_TABLE_COUNT = 53;
 
     /**
      * 种子数据条数基线（与 readSeedData 一一对应）。
@@ -71,13 +72,15 @@ public class DatabaseCheckService {
      */
     // V206：新增字典类型 kb_attachment_role，35→36；本迁移不建表，EXPECTED_TABLE_COUNT 仍为 48。
     // V214：新增字典类型 ai_model_type（chat/embedding/rerank/tts 模型类型下拉）→ 36→37。
-    public static final long EXPECTED_DICT_TYPE_COUNT = 37L;
+    // V218：新增字典类型 import_batch_status / import_phase / import_source → 37→40。
+    public static final long EXPECTED_DICT_TYPE_COUNT = 40L;
     // V206：file_type 删 3 加 2、file_biz_type 加 kb_doc、kb_attachment_role 加 4 项 → 150→154。
     // V209：@Auditable(targetType="KB_DOC") 补 audit_target_type 字典 1 项 → 154→155。
     // V210：@Auditable(targetType="KB_ATTACHMENT") 补 audit_target_type 字典 1 项 → 155→156。
     // V211：ai_provider 字典新增 Anthropic 原生供应商 1 项 → 156→157。
     // V214：ai_model_type 新增 4 项（chat/embedding/rerank/tts）+ ai_provider 新增 dashscope 1 项 → 157→162。
-    public static final long EXPECTED_DICT_DATA_COUNT = 162L;
+    // V218：import_batch_status 9 + import_phase 6 + import_source 2 = 17 项 → 162→179。
+    public static final long EXPECTED_DICT_DATA_COUNT = 179L;
     public static final long EXPECTED_CONFIG_COUNT = 14L;
     // V2 种子 7 个基础角色；V213 新增 ROLE_OPS_ADMIN(运维管理员) + ROLE_TEST(测试账号) → 7+2=9。
     public static final long EXPECTED_ROLE_COUNT = 9L;

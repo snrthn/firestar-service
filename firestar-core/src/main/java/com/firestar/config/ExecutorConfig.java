@@ -25,6 +25,9 @@ public class ExecutorConfig {
     /** 知识库向量化专用线程池 bean 名（发布后异步生成 embedding，不阻塞发布主流程）。 */
     public static final String KB_VECTORIZE_EXECUTOR = "kbVectorizeExecutor";
 
+    /** 历史数据导入专用线程池 bean 名（v3 方案：异步流水线，单 key 串行靠 DB 唯一索引）。 */
+    public static final String IMPORT_EXECUTOR = "importExecutor";
+
     @Bean(name = LOG_WRITE_EXECUTOR)
     public Executor logWriteExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -53,6 +56,28 @@ public class ExecutorConfig {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * 历史数据导入线程池（方案 v3 §1.4）：core=2 / max=4、队列 200、AbortPolicy。
+     *
+     * <p>单批 ≤2000 行秒级完成，队列不会长期堆积；打满时 submit 直接返回
+     * 「稍后重试」（由 ImportService 捕获 RejectedExecutionException 转 429/503），
+     * 不用 CallerRuns（避免占住上传请求线程）。同 key 串行靠 DB 唯一索引 uk_active，
+     * 不靠线程池排队。线程名前缀便于日志定位；shutdown 时等待在跑批次收尾。</p>
+     */
+    @Bean(name = IMPORT_EXECUTOR)
+    public Executor importExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("import-task-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
         executor.initialize();
         return executor;
     }
