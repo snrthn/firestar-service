@@ -166,9 +166,21 @@ public class AiChatController {
                     }
                 }
                 messages.add(ChatMessage.of("user", req.message()));
+                // 第一道权限闸：按当前用户权限裁剪下发的工具清单——模型看不见的工具就调不了。
+                // 第二道闸在 ToolExecutor.execute() 执行前按 requiredPerm 再校验一次，防绕过。
+                List<String> authorities = new ArrayList<>();
+                var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                if (auth != null && auth.getAuthorities() != null) {
+                    for (var a : auth.getAuthorities()) {
+                        if (a != null && a.getAuthority() != null) {
+                            authorities.add(a.getAuthority());
+                        }
+                    }
+                }
                 TurnRequest tr = new TurnRequest(extId,
                         messages,
-                        toolRegistry.all(), null, username, isAdmin);
+                        toolRegistry.allVisible(isAdmin, new java.util.HashSet<>(authorities)),
+                        null, username, isAdmin);
                 providerManager.streamWithFallback(tr, chunk -> {
                     try {
                         switch (chunk.type()) {

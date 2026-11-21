@@ -12,13 +12,19 @@ import com.firestar.ai.kb.KbRetriever;
 import com.firestar.ai.kb.KbSearchContext;
 import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
+import com.firestar.ai.spi.ToolSpec;
 import com.firestar.config.JwtAuthenticationFilter;
 import com.firestar.dto.StatsQuery;
+import com.firestar.service.FileService;
 import com.firestar.service.InvoiceService;
+import com.firestar.service.LogService;
+import com.firestar.service.OrgService;
+import com.firestar.service.ProcessDefService;
 import com.firestar.service.ProjectService;
 import com.firestar.service.ReceivableService;
 import com.firestar.service.ReturnService;
 import com.firestar.service.ShipmentService;
+import com.firestar.service.UserService;
 import com.firestar.service.WriteOffService;
 import com.firestar.dto.ShipmentCreateReq;
 import com.firestar.dto.ShipmentDraftPreview;
@@ -31,6 +37,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -66,13 +73,20 @@ public class ToolExecutor {
     private final ObjectMapper objectMapper;
     private final KbRetriever kbRetriever;
     private final KbEgressPolicy kbEgressPolicy;
+    private final OrgService orgService;
+    private final UserService userService;
+    private final LogService logService;
+    private final ProcessDefService processDefService;
+    private final FileService fileService;
 
     public ToolExecutor(ProjectService projectService, ShipmentService shipmentService,
                         ReturnService returnService, ReceivableService receivableService,
                         CustomerService customerService, WriteOffService writeOffService,
                         InvoiceService invoiceService, StatsService statsService, ToolRegistry registry,
                         EgressMasker egressMasker, ObjectMapper objectMapper,
-                        KbRetriever kbRetriever, KbEgressPolicy kbEgressPolicy) {
+                        KbRetriever kbRetriever, KbEgressPolicy kbEgressPolicy,
+                        OrgService orgService, UserService userService, LogService logService,
+                        ProcessDefService processDefService, FileService fileService) {
         this.projectService = projectService;
         this.shipmentService = shipmentService;
         this.returnService = returnService;
@@ -86,22 +100,24 @@ public class ToolExecutor {
         this.objectMapper = objectMapper;
         this.kbRetriever = kbRetriever;
         this.kbEgressPolicy = kbEgressPolicy;
+        this.orgService = orgService;
+        this.userService = userService;
+        this.logService = logService;
+        this.processDefService = processDefService;
+        this.fileService = fileService;
     }
 
     public ToolResult execute(ToolCall call, String username, boolean isAdmin) {
-        if (!registry.isRegistered(call.name())) {
+        ToolSpec spec = registry.get(call.name());
+        if (spec == null) {
             return new ToolResult(call.id(), call.name(), "{\"error\":\"未知工具，已拒绝执行\"}", true);
         }
-        // 财务台账权限闸（与 Web @RequirePerm 同口径）：核销/发票仅对应财务权限可查，杜绝经 AI 越权爬数。
-        // 必须放在 switch 之前做早返回——switch 表达式内不允许 return。
-        if (!financePermAllowed(call.name(), isAdmin)) {
-            String deny = switch (call.name()) {
-                case "search_writeoffs" ->
-                        "{\"error\":\"无权限：核销台账仅财务权限（writeoff:manage）可查\"}";
-                case "search_invoices" ->
-                        "{\"error\":\"无权限：发票查询仅财务权限（invoice:manage）可查\"}";
-                default -> "{\"error\":\"无权限\"}";
-            };
+        // 统一权限闸：每个工具在 ToolRegistry 声明 requiredPerm（与 Web @RequirePerm 同口径）。
+        // 非管理员必须持有 PERM:<code> 才能执行；ADMIN 放行。这是执行前的第二道闸
+        // （第一道是 AiChatController 下发时按 allVisible 裁剪），防扣子回调/伪造 tool_calls 绕过。
+        // 必须放在 switch 之前早返回——switch 表达式内不允许 return。
+        if (spec.requiredPerm() != null && !hasPerm(spec.requiredPerm(), isAdmin)) {
+            String deny = "{\"error\":\"无权限：需要 " + spec.requiredPerm() + " 权限\"}";
             return new ToolResult(call.id(), call.name(), deny, true);
         }
         try {
@@ -236,6 +252,45 @@ public class ToolExecutor {
                             .collect(java.util.stream.Collectors.toList());
                     yield json(toKnowledgeResult(allowed));
                 }
+                // ===== 组织 / 人员 / 日志 / 流程 / 文件（路线 2 新增；权限已在 execute 开头按 requiredPerm 统一校验）=====
+                case "query_orgs" -> json(orgService.listTree());
+                case "query_users" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 100);
+                    yield json(userService.pageUsers(pn, ps, strArg(args, "username"),
+                            strArg(args, "nickname"), strArg(args, "status"),
+                            longArg(args, "deptId") == 0L ? null : longArg(args, "deptId")).getRecords());
+                }
+                case "query_login_logs" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    yield json(logService.pageLoginLogs(pn, ps, strArg(args, "username"),
+                            strArg(args, "status"), parseDateTime(strArg(args, "startTime")),
+                            parseDateTime(strArg(args, "endTime"))).getRecords());
+                }
+                case "query_operation_logs" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    yield json(logService.pageAuditLogs(pn, ps, strArg(args, "operator"),
+                            strArg(args, "targetType"), strArg(args, "operationType"),
+                            parseDateTime(strArg(args, "startTime")),
+                            parseDateTime(strArg(args, "endTime"))).getRecords());
+                }
+                case "query_process_defs" -> json(processDefService.list());
+                case "search_files" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    yield json(fileService.list(pn, ps, strArg(args, "bizType"),
+                            longArg(args, "bizId") == 0L ? null : longArg(args, "bizId"),
+                            strArg(args, "fileType"), strArg(args, "keyword")).getRecords());
+                }
+                case "query_file_download_logs" -> {
+                    int pn = intArg(args, "pageNum", 1);
+                    int ps = Math.min(intArg(args, "pageSize", 20), 50);
+                    yield json(fileService.downloadLogs(
+                            longArg(args, "fileId") == 0L ? null : longArg(args, "fileId"),
+                            pn, ps, strArg(args, "keyword")).getRecords());
+                }
                 default -> "{\"error\":\"未实现的工具\"}";
             };
 
@@ -358,9 +413,25 @@ public class ToolExecutor {
         return out;
     }
 
+    /** 解析 yyyy-MM-dd[ HH:mm[:ss]]，空或格式错误返回 null（供日志工具的时间区间入参） */
+    private LocalDateTime parseDateTime(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        String v = s.trim();
+        try {
+            if (v.length() == 10) {
+                return LocalDate.parse(v).atStartOfDay();
+            }
+            return LocalDateTime.parse(v.replace(' ', 'T'));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     /**
      * 权限闸：与 Web {@code @RequirePerm} 同口径——ROLE_ADMIN 放行，否则需持 PERM:&lt;code&gt;。
-     * 用于 search_writeoffs / search_invoices 等敏感财务台账，杜绝经 AI 越权爬数。
+     * 由 execute 开头对工具的 requiredPerm 统一调用，杜绝经 AI 越权爬数。
      */
     private boolean hasPerm(String permCode, boolean isAdmin) {
         if (isAdmin) {
@@ -368,17 +439,5 @@ public class ToolExecutor {
         }
         String need = JwtAuthenticationFilter.PERM_AUTHORITY_PREFIX + permCode;
         return currentAuthorities().contains(need);
-    }
-
-    /**
-     * 财务台账工具是否放行：仅 search_writeoffs / search_invoices 需要财务权限，
-     * 其余工具不受此闸限制。配合 execute 内 switch 前的早返回使用（switch 表达式内不允许 return）。
-     */
-    private boolean financePermAllowed(String toolName, boolean isAdmin) {
-        return switch (toolName) {
-            case "search_writeoffs" -> hasPerm("writeoff:manage", isAdmin);
-            case "search_invoices" -> hasPerm("invoice:manage", isAdmin);
-            default -> true;
-        };
     }
 }

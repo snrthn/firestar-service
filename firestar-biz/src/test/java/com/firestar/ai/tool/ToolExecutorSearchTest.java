@@ -9,18 +9,24 @@ import com.firestar.ai.kb.KbEgressPolicy;
 import com.firestar.ai.kb.KbRetriever;
 import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
+import com.firestar.ai.spi.ToolSpec;
 import com.firestar.dto.CustomerOptionVO;
 import com.firestar.dto.InvoiceVO;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.dto.ReturnVO;
 import com.firestar.dto.WriteOffLedgerVO;
 import com.firestar.service.CustomerService;
+import com.firestar.service.FileService;
 import com.firestar.service.InvoiceService;
+import com.firestar.service.LogService;
+import com.firestar.service.OrgService;
+import com.firestar.service.ProcessDefService;
 import com.firestar.service.ProjectService;
 import com.firestar.service.ReceivableService;
 import com.firestar.service.ReturnService;
 import com.firestar.service.ShipmentService;
 import com.firestar.service.StatsService;
+import com.firestar.service.UserService;
 import com.firestar.service.WriteOffService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +39,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,12 +72,18 @@ class ToolExecutorSearchTest {
     @Mock private WriteOffService writeOffService;
     @Mock private InvoiceService invoiceService;
     @Mock private StatsService statsService;
-    @Mock private ToolRegistry registry;
     @Mock private EgressMasker egressMasker;
     @Mock private KbRetriever kbRetriever;
     @Mock private KbEgressPolicy kbEgressPolicy;
+    @Mock private OrgService orgService;
+    @Mock private UserService userService;
+    @Mock private LogService logService;
+    @Mock private ProcessDefService processDefService;
+    @Mock private FileService fileService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    // 用真实 ToolRegistry：权限码就是生产配置，测试直接验证「注册即带正确闸门」，不用 mock 猜
+    private final ToolRegistry registry = new ToolRegistry();
     private ToolExecutor executor;
 
     @BeforeEach
@@ -82,13 +95,11 @@ class ToolExecutorSearchTest {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("staff", null,
                         List.of(new SimpleGrantedAuthority("ROLE_STAFF"))));
-        // lenient：unknownTool 测试会覆盖 isRegistered("bogus_tool")，且未注册分支不走到 mask，
-        // 严格 stubbing 会判其余通用 stub "多余"，故放宽为 lenient。
-        lenient().when(registry.isRegistered(anyString())).thenReturn(true);
         lenient().when(egressMasker.mask(anyString())).thenAnswer(inv -> inv.getArgument(0));
         executor = new ToolExecutor(projectService, shipmentService, returnService,
                 receivableService, customerService, writeOffService, invoiceService,
-                statsService, registry, egressMasker, objectMapper, kbRetriever, kbEgressPolicy);
+                statsService, registry, egressMasker, objectMapper, kbRetriever, kbEgressPolicy,
+                orgService, userService, logService, processDefService, fileService);
     }
 
     private ToolResult run(String name, String argsJson) {
@@ -133,7 +144,7 @@ class ToolExecutorSearchTest {
         when(receivableService.page(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(page);
 
-        ToolResult r = run("search_receivables", "{\"projectId\":5,\"status\":\"UNPAID\"}");
+        ToolResult r = runAsAdmin("search_receivables", "{\"projectId\":5,\"status\":\"UNPAID\"}");
 
         assertFalse(r.isError());
         JsonNode arr = readArray(r.contentJson());
@@ -151,7 +162,7 @@ class ToolExecutorSearchTest {
         when(returnService.page(any(), anyBoolean(), any(), any(), any(), any(),
                 any(), any(), any(), any(), any())).thenReturn(page);
 
-        ToolResult r = run("search_returns", "{\"returnNo\":\"R-9\",\"dateFrom\":\"2026-01-01\"}");
+        ToolResult r = runAsAdmin("search_returns", "{\"returnNo\":\"R-9\",\"dateFrom\":\"2026-01-01\"}");
 
         assertFalse(r.isError());
         JsonNode arr = readArray(r.contentJson());
@@ -207,10 +218,57 @@ class ToolExecutorSearchTest {
     /** 未注册工具被白名单拒绝（防越权工具调用） */
     @Test
     void unknownTool_isRejected() {
-        when(registry.isRegistered("bogus_tool")).thenReturn(false);
         ToolResult r = run("bogus_tool", "{}");
         assertTrue(r.isError());
         assertTrue(r.contentJson().contains("未知工具"));
+    }
+
+    /** 每个已注册工具都声明了权限语义：requiredPerm 要么 null（登录即可），要么非空权限码，不能空串 */
+    @Test
+    void everyTool_hasValidPermDeclaration() {
+        for (ToolSpec spec : registry.all()) {
+            assertTrue(spec.requiredPerm() == null || !spec.requiredPerm().isBlank(),
+                    "工具 " + spec.name() + " 的 requiredPerm 不能是空串");
+        }
+    }
+
+    /** 权限码与 Web @RequirePerm 同口径：核销/发票/看板/知识库等敏感工具必须有非空权限码 */
+    @Test
+    void sensitiveTools_declareRequiredPerm() {
+        assertEquals("writeoff:manage", registry.get("search_writeoffs").requiredPerm());
+        assertEquals("invoice:manage", registry.get("search_invoices").requiredPerm());
+        assertEquals("dashboard:view", registry.get("stats_overview").requiredPerm());
+        assertEquals("ai:kb:view", registry.get("search_knowledge").requiredPerm());
+        assertEquals("rbac:user", registry.get("query_users").requiredPerm());
+        assertEquals("org:manage", registry.get("query_orgs").requiredPerm());
+        assertEquals("log:view", registry.get("query_login_logs").requiredPerm());
+        assertEquals("process:view", registry.get("query_process_defs").requiredPerm());
+        assertEquals("file:view", registry.get("query_file_download_logs").requiredPerm());
+    }
+
+    /** 下发裁剪：无权限用户看不到需授权工具；管理员全可见；登录即可工具人人可见 */
+    @Test
+    void allVisible_filtersByPerm() {
+        var none = registry.allVisible(false, Set.of());
+        assertTrue(none.stream().anyMatch(t -> t.name().equals("search_customers"))); // null 权限码
+        assertTrue(none.stream().noneMatch(t -> t.name().equals("query_users")));     // 需 rbac:user
+
+        var withRbac = registry.allVisible(false, Set.of("PERM:rbac:user"));
+        assertTrue(withRbac.stream().anyMatch(t -> t.name().equals("query_users")));
+        assertTrue(withRbac.stream().noneMatch(t -> t.name().equals("query_orgs")));  // 需 org:manage
+
+        assertEquals(registry.all().size(), registry.allVisible(true, Set.of()).size()); // 管理员全量
+    }
+
+    /** 新工具无权限时被执行闸拒绝（双闸的第二道） */
+    @Test
+    void newTools_withoutPerm_areRejected() {
+        assertTrue(run("query_users", "{}").contentJson().contains("无权限"));
+        assertTrue(run("query_orgs", "{}").contentJson().contains("无权限"));
+        assertTrue(run("query_login_logs", "{}").contentJson().contains("无权限"));
+        assertTrue(run("query_operation_logs", "{}").contentJson().contains("无权限"));
+        assertTrue(run("query_process_defs", "{}").contentJson().contains("无权限"));
+        assertTrue(run("query_file_download_logs", "{}").contentJson().contains("无权限"));
     }
 
     private JsonNode readArray(String json) {
