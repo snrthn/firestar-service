@@ -49,7 +49,7 @@ public final class ExcelTemplateUtil {
                 if (ex != null && !ex.isEmpty()) sample.createCell(i).setCellValue(ex);
             }
             // 按内容撑开：autoSizeColumn 对中文按单宽算、空示例列会偏窄，补一层最小宽度兜底
-            autoSizeColumns(data, columns.size() - 1);
+            ExcelColumnWidth.autoSize(data, columns.size() - 1);
 
             writeNotesSheet(wb, columns, notes, false);
             wb.write(out);
@@ -100,7 +100,7 @@ public final class ExcelTemplateUtil {
             // 隐藏列（列索引从 0 开始）
             sheet.setColumnHidden(batchCol, true);
             sheet.setColumnHidden(rowCol, true);
-            autoSizeColumns(sheet, errCol);
+            ExcelColumnWidth.autoSize(sheet, errCol);
 
             if (wb.getSheet("填写说明") == null) {
                 writeNotesSheet(wb, columns, "修正说明：改完错误行后原样重新上传，系统自动识别为修正批次。", true);
@@ -108,54 +108,6 @@ public final class ExcelTemplateUtil {
             wb.write(out);
             return out.toByteArray();
         }
-    }
-
-    /**
-     * 按内容撑开列宽：POI autoSizeColumn 对中文按单字符估算、且空示例列会算得很窄，
-     * 这里补一层「最长显示宽度 + 留白」的最小值，保证表头与示例不挤在一起。
-     * 列宽单位为 1/256 字符宽，POI 单列上限 255 字符（255 * 256）。
-     */
-    private static void autoSizeColumns(Sheet sheet, int lastCol) {
-        for (int c = 0; c <= lastCol; c++) {
-            sheet.autoSizeColumn(c);
-            int maxDisplay = 0;
-            for (int r = 0; r <= sheet.getLastRowNum(); r++) {
-                Row row = sheet.getRow(r);
-                if (row == null) continue;
-                Cell cell = row.getCell(c);
-                if (cell == null) continue;
-                String v = cell.toString();
-                if (v == null || v.isEmpty()) continue;
-                maxDisplay = Math.max(maxDisplay, displayWidth(v));
-            }
-            // 表头带 " *" 也算进去；+4 字符留白，避免刚好贴边
-            int minWidth = Math.min((maxDisplay + 4) * 256, 255 * 256);
-            if (sheet.getColumnWidth(c) < minWidth) sheet.setColumnWidth(c, minWidth);
-        }
-    }
-
-    /** 显示宽度：中文/全角按 2 个西文字符宽算，ASCII 按 1。 */
-    private static int displayWidth(String s) {
-        int w = 0;
-        for (int i = 0; i < s.length(); i++) {
-            w += isWideChar(s.charAt(i)) ? 2 : 1;
-        }
-        return w;
-    }
-
-    /**
-     * 宽字符判断（CJK / 全角 / 韩文），不依赖 JDK 19+ 的 Character.isWideFullWidth。
-     * 项目编译目标为 Java 17，用 Unicode 区块范围比较，兼容 Java 8/11/17/21。
-     */
-    private static boolean isWideChar(char c) {
-        return (c >= '\u1100' && c <= '\u115F')   // Hangul Jamo
-                || (c >= '\u2E80' && c <= '\uA4CF')   // CJK 部首 + 统一表意文字（含扩展 A）
-                || (c >= '\uAC00' && c <= '\uD7A3')   // Hangul 音节
-                || (c >= '\uF900' && c <= '\uFAFF')   // CJK 兼容表意文字
-                || (c >= '\uFE10' && c <= '\uFE19')   // 竖排标点
-                || (c >= '\uFE30' && c <= '\uFE6F')   // CJK 兼容形式（全角标点）
-                || (c >= '\uFF00' && c <= '\uFF60')   // 全角 ASCII 形式
-                || (c >= '\uFFE0' && c <= '\uFFE6');  // 全角符号
     }
 
     private static Integer findHeaderIndex(Sheet sheet, String title) {

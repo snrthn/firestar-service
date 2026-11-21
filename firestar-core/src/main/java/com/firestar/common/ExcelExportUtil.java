@@ -11,17 +11,28 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
 import java.util.List;
 
 /**
- * 通用 Excel(.xlsx) 导出工具（任务2：业务数据页导出）。
+ * 通用 Excel(.xlsx) 导出工具（业务数据页导出）。
  *
  * <p>设计：纯 POI，不依赖任何业务对象。调用方传入「数据行 List」+「列定义 List<Column>」，
  * 列定义声明 标题 与 对应 VO 的属性名（驼峰），工具内部用 hutool 反射取值，
- * 数值走 numeric cell、其余走文本，写出 xlsx 字节数组交给 Controller 以 ResponseEntity 下发。</p>
+ * 数值走 numeric cell、时间走「与页面一致的格式化文本」、其余走文本，
+ * 写出 xlsx 字节数组交给 Controller 以 ResponseEntity 下发。</p>
  *
- * <p>复用现有分页查询即可拿全量：如 {@code service.page(u, admin, 1, Integer.MAX_VALUE, 同筛选).getRecords()}，
- * 这样审计/字典翻译/权限过滤逻辑全部复用，无需为导出另写查询。</p>
+ * <p>时间格式约定（2026-11-22 虎哥：导出时间必须与页面一致）：
+ * LocalDateTime → {@code yyyy-MM-dd HH:mm:ss}、LocalDate → {@code yyyy-MM-dd}、
+ * LocalTime → {@code HH:mm:ss}、java.util.Date → {@code yyyy-MM-dd HH:mm:ss}。
+ * 与前端 {@code utils/datetime.ts} 的 formatDateTime / formatDate 完全对齐，
+ * 避免出现 {@code 2026-11-01T01:31:42} 这种 ISO 原始串。</p>
  */
 public final class ExcelExportUtil {
 
@@ -36,13 +47,18 @@ public final class ExcelExportUtil {
         }
     }
 
+    private static final DateTimeFormatter DATE_TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter FILE_STAMP_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+
     private ExcelExportUtil() {
     }
 
     public static byte[] export(List<?> data, List<Column> columns) throws IOException {
         try (Workbook wb = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            Sheet sheet = wb.createSheet("export");
+            Sheet sheet = wb.createSheet("数据");
 
             // 表头
             CellStyle headerStyle = headerStyle(wb);
@@ -65,14 +81,28 @@ public final class ExcelExportUtil {
                 }
             }
 
-            // 列宽自适应（中文按 2 倍估算）
-            for (int i = 0; i < columns.size(); i++) {
-                sheet.autoSizeColumn(i);
-            }
+            // 列宽按内容撑开（中文双宽估算，与导入模板同一套逻辑）
+            ExcelColumnWidth.autoSize(sheet, columns.size() - 1);
 
             wb.write(out);
             return out.toByteArray();
         }
+    }
+
+    /**
+     * 生成导出附件的 Content-Disposition 头：{@code 中文名_yyyyMMdd_HHmmss.xlsx}。
+     *
+     * <p>中文名走 RFC 5987 的 {@code filename*=UTF-8''...}，同时保留一个 ASCII 的
+     * {@code filename=} 兜底（老浏览器 / 部分代理只认后者）。</p>
+     *
+     * @param baseName 中文业务名，如「收款管理」
+     */
+    public static String contentDisposition(String baseName) {
+        String stamp = LocalDateTime.now().format(FILE_STAMP_FMT);
+        String fileName = baseName + "_" + stamp + ".xlsx";
+        String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+        String asciiFallback = "export_" + stamp + ".xlsx";
+        return "attachment; filename=\"" + asciiFallback + "\"; filename*=UTF-8''" + encoded;
     }
 
     private static void writeCell(Cell c, Object val) {
@@ -82,6 +112,14 @@ public final class ExcelExportUtil {
             c.setCellValue(n.doubleValue());
         } else if (val instanceof Boolean b) {
             c.setCellValue(b);
+        } else if (val instanceof LocalDateTime dt) {
+            c.setCellValue(dt.format(DATE_TIME_FMT));
+        } else if (val instanceof LocalDate d) {
+            c.setCellValue(d.format(DATE_FMT));
+        } else if (val instanceof LocalTime t) {
+            c.setCellValue(t.format(TIME_FMT));
+        } else if (val instanceof Date d) {
+            c.setCellValue(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(d));
         } else {
             c.setCellValue(val.toString());
         }

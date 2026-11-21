@@ -169,7 +169,7 @@ public class ReturnController {
         ).getRecords();
         byte[] xlsx = ExcelExportUtil.export(list, RETURN_EXPORT_COLUMNS);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"return_export.xlsx\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ExcelExportUtil.contentDisposition("退货管理"))
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(xlsx);
     }

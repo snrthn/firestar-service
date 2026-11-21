@@ -177,7 +177,7 @@ public class InvoiceController {
         ).getRecords();
         byte[] xlsx = ExcelExportUtil.export(list, INVOICE_EXPORT_COLUMNS);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoice_export.xlsx\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ExcelExportUtil.contentDisposition("发票管理"))
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(xlsx);
     }

@@ -125,7 +125,7 @@ public class WriteOffController {
         ).getRecords();
         byte[] xlsx = ExcelExportUtil.export(list, WRITEOFF_EXPORT_COLUMNS);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"writeoff_export.xlsx\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ExcelExportUtil.contentDisposition("核销管理"))
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(xlsx);
     }

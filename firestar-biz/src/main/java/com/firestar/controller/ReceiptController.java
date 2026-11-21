@@ -176,7 +176,7 @@ public class ReceiptController {
         ).getRecords();
         byte[] xlsx = ExcelExportUtil.export(list, RECEIPT_EXPORT_COLUMNS);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"receipt_export.xlsx\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ExcelExportUtil.contentDisposition("收款管理"))
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(xlsx);
     }

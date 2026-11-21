@@ -103,7 +103,7 @@ public class ShipmentController {
         ).getRecords();
         byte[] xlsx = ExcelExportUtil.export(list, SHIPMENT_EXPORT_COLUMNS);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"shipment_export.xlsx\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ExcelExportUtil.contentDisposition("发货管理"))
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(xlsx);
     }
