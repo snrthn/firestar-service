@@ -56,4 +56,15 @@ class DsmlTokenFilterTest {
         assertEquals("A。\nB。\nC。", filter("A。<|dsml|> invoke x></|dsml|>\nB。"
                 + "<|DSML|> calls> y </|DSML|>\nC。"));
     }
+
+    @Test
+    void realRequest_callsAndInvokeWithoutParameterStrip() {
+        // 请求 9c476e37 的真实落库 content：开标签带 calls>/invoke>，闭合只有
+        // </|DSML|> invoke> 与 </|DSML|> calls>，没有 parameter 行。
+        String dsml = "<|DSML|> calls>\n<|DSML|> invoke name=\"search_files\">\n\n"
+                + "</|DSML|> invoke>\n</|DSML|> calls>";
+        // DSML 块被整块剥离；尾部残留的前缀空行是模型原文自带的，不算过滤器漏网
+        assertEquals("我来查询文件列表，并查看系统返回的文件总数。\n\n",
+                filter("我来查询文件列表，并查看系统返回的文件总数。\n\n" + dsml));
+    }
 }

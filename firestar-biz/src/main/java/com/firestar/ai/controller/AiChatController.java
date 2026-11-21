@@ -103,8 +103,6 @@ public class AiChatController {
             // 每次聊天请求一个 requestId：随 meta 帧下发、随 assistant 消息落库，供前端复制与排障
             String requestId = UUID.randomUUID().toString();
             StringBuilder sb = new StringBuilder();
-            // 思考过程聚合（reasoning 帧），流结束后随 assistant 消息落库（仅展示，不回灌上下文）
-            StringBuilder reasoningSb = new StringBuilder();
             // DSML 伪工具调用过滤器：模型把 tool call 写成 <|DSML|> 文本时整块剥离，
             // 跨帧标记缓冲，下游 sb（落库内容）与 SSE token 帧同为清洗后文本。
             DsmlTokenFilter dsmlFilter = new DsmlTokenFilter(text -> {
@@ -113,6 +111,19 @@ public class AiChatController {
                     // JSON 编码下发：SseEmitter 不补空格，前端按 SSE 规范剥 data: 后一个空格，
                     // 裸文本前导空格会被吞（英文粘连）；JSON 同时规避换行拆多 data 行。
                     emitter.send(SseEmitter.event().name("token")
+                            .data(objectMapper.writeValueAsString(text)));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            // reasoning 通道独立过滤：DeepSeek 也会把 DSML 伪调用写进思考文本，此前该通道
+            // 原样 append + 下发 + 落库，前端展开「已深度思考」即见 <|DSML|> 乱文。
+            // 必须独立实例——两个通道的跨帧缓冲状态不能共用。
+            StringBuilder reasoningSb = new StringBuilder();
+            DsmlTokenFilter reasoningDsmlFilter = new DsmlTokenFilter(text -> {
+                reasoningSb.append(text);
+                try {
+                    emitter.send(SseEmitter.event().name("reasoning")
                             .data(objectMapper.writeValueAsString(text)));
                 } catch (Exception e) {
                     throw new RuntimeException(e);
@@ -189,10 +200,8 @@ public class AiChatController {
                                 dsmlFilter.accept(chunk.text());
                             }
                             case "reasoning" -> {
-                                // 思考过程独立通道：只透传给前端渲染（不拼正文）；同时聚合落库供历史回放
-                                reasoningSb.append(chunk.text());
-                                emitter.send(SseEmitter.event().name("reasoning")
-                                        .data(objectMapper.writeValueAsString(chunk.text())));
+                                // 思考过程独立通道：经独立 DSML filter 清洗（跨帧安全）后再透传 + 落库
+                                reasoningDsmlFilter.accept(chunk.text());
                             }
                             case "fallback" -> emitter.send(SseEmitter.event().name("fallback")
                                     .data(objectMapper.writeValueAsString(
@@ -224,8 +233,9 @@ public class AiChatController {
                         throw new RuntimeException(e);
                     }
                 });
-                // 冲刷 DSML filter 尾部缓冲（最后一段正常文本），再进行落库与收尾
+                // 冲刷两个 DSML filter 的尾部缓冲（最后一段正常文本），再进行落库与收尾
                 dsmlFilter.finish();
+                reasoningDsmlFilter.finish();
                 Long assistantMessageId = chatService.appendAssistantMessage(convIdBox[0], sb.toString(),
                         reasoningSb.length() > 0 ? reasoningSb.toString() : null,
                         provider, System.currentTimeMillis() - start, requestId);
