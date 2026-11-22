@@ -117,8 +117,13 @@ stages:
                 #    -Dsurefire.failIfNoSpecifiedTests=false（bin/test.sh 里同款兜底）。
                 # =====================================================================
                 echo "[info] Running unit tests only (excluding integration tests that require MySQL)..."
+                # 2026-11-22 补：把新加的纯 Mockito 单测纳入门禁——
+                #   InitStatusExposureTest：匿名/鉴权状态端点裁剪契约（P0 回归护栏）
+                #   InitResetChallengeTest：重置验证码防爆破 5 条（生成/5 次作废/IP 绑定/缺密码/确认词）
+                # 两者都不连库，能在无 MySQL 的构建容器里稳定跑。
+                # 注意：DataScopeIsolationTest 是 @SpringBootTest 需 MySQL，归 it_stage，不进本白名单。
                 mvn -B test \
-                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,DatabaseCheckSeedBaselineGuardTest,GlobalExceptionHandlerTest,LoginRateLimitFilterTest' \
+                  -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,DatabaseCheckSeedBaselineGuardTest,GlobalExceptionHandlerTest,LoginRateLimitFilterTest,InitStatusExposureTest,InitResetChallengeTest' \
                   -Dsurefire.failIfNoSpecifiedTests=false \
                   -Dmaven.test.failure.ignore=false
       build_job:
