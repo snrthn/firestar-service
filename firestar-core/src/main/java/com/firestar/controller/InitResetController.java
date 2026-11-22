@@ -68,6 +68,20 @@ public class InitResetController {
         return Result.success(initResetService.precheck());
     }
 
+    /**
+     * 重置页状态（登录即可访问，不裁剪）。
+     *
+     * <p>【为什么必须单独开一个口】{@code GET /system/init/status} 是匿名端点，
+     * 初始化完成后会被裁剪成只回 {@code initialized:true}（防探测 trialMode /
+     * 管理员是否存在）。而重置页需要 trialMode / canReset / adminExists 才能渲染状态卡
+     * 与按钮可用性——直接复用匿名端点会导致 canReset 恒 false、按钮永久 disabled。
+     * 这里返回完整状态，仅在「已认证」前提下暴露，不破坏匿名收口。</p>
+     */
+    @GetMapping("/reset/status")
+    public Result<InitStatusVO> resetStatus() {
+        return Result.success(initResetService.getResetStatus());
+    }
+
     /** 轻度重置（保留系统配置，仅清业务数据 + Flowable 运行时/历史 + 上传文件） */
     @RequirePerm("system:reset")
     @PostMapping("/reset/light")

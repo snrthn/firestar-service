@@ -27,6 +27,12 @@ public interface InitResetService {
     /** 检查初始化与试运行状态 */
     InitStatusVO getStatus();
 
+    /**
+     * 重置页的完整状态（鉴权后可达，不做匿名信息裁剪）。
+     * 与 {@link #getStatus()} 的区别仅在调用入口的鉴权与是否回显 lastReset* 字段。
+     */
+    InitStatusVO getResetStatus();
+
     /** 执行初始化安装向导（仅未初始化时可调用） */
     InitStatusVO init(InitRequest req);
 

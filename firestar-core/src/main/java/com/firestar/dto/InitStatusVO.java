@@ -15,4 +15,10 @@ public class InitStatusVO {
     private boolean trialMode;
     private boolean canReset;
     private boolean adminExists;
+
+    /** 上次重置时间（仅重置页的鉴权端点回显，匿名端点恒为 null） */
+    private String lastResetTime;
+
+    /** 上次重置操作人（仅重置页的鉴权端点回显，匿名端点恒为 null） */
+    private String lastResetBy;
 }

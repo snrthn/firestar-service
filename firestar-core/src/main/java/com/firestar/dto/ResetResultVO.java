@@ -19,4 +19,11 @@ public class ResetResultVO {
     private String message;
     private String resetType;
     private List<String> clearedTables;
+
+    /**
+     * 是否需要重新执行初始化向导（true = 完整重置后系统回到未初始化态）。
+     * 前端据此登出当前会话并跳 /install —— 完整重置会 drop 掉 sys_user，
+     * 当前 token 下一请求即 401，停留原页只会看到一连串报错。
+     */
+    private Boolean requireReinstall;
 }

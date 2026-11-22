@@ -77,6 +77,7 @@ public class AuthServiceImpl implements AuthService {
     private final ApplicationEventPublisher eventPublisher;
     private final LogService logService;
     private final LoginProtectService loginProtectService;
+    private final ConfigService configService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public AuthServiceImpl(UserMapper userMapper, UserRoleMapper userRoleMapper,
@@ -87,6 +88,7 @@ public class AuthServiceImpl implements AuthService {
                            JwtUtil jwtUtil, JwtProperties jwtProperties,
                            LogService logService,
                            LoginProtectService loginProtectService,
+                           ConfigService configService,
                            ApplicationEventPublisher eventPublisher) {
         this.userMapper = userMapper;
         this.userRoleMapper = userRoleMapper;
@@ -101,6 +103,21 @@ public class AuthServiceImpl implements AuthService {
         this.eventPublisher = eventPublisher;
         this.logService = logService;
         this.loginProtectService = loginProtectService;
+        this.configService = configService;
+    }
+
+    /**
+     * 全局强制改密开关（sys_config.force_change_password，缺省视为 true）。
+     *
+     * <p>与用户级 {@code sys_user.force_change_password} 取「与」：管理员在「参数设置」里
+     * 把该开关置 false 后，即便历史用户的字段仍为 1 也不再强制改密。
+     * 此前 init() 会写入这个配置键却没有任何消费方（僵尸配置），语义与需求 15.4 不一致；
+     * 这里补上真实读取点，让「全局开关」名副其实。配置表无此行时按 true 兜底，
+     * 保持与 V2 种子默认值一致，不改变既有行为。</p>
+     */
+    private boolean forceChangePasswordEnabled() {
+        String v = configService.getConfigValue("force_change_password");
+        return v == null || !"false".equalsIgnoreCase(v);
     }
 
     @Override
@@ -168,7 +185,8 @@ public class AuthServiceImpl implements AuthService {
         resp.setExpiresIn(jwtProperties.getExpiration());
         resp.setUsername(user.getUsername());
         resp.setNickname(user.getNickname());
-        resp.setForceChangePassword(user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
+        resp.setForceChangePassword(forceChangePasswordEnabled()
+                && user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
         resp.setRoles(roleCodes);
         return resp;
     }
@@ -224,7 +242,8 @@ public class AuthServiceImpl implements AuthService {
         vo.setUsername(user.getUsername());
         vo.setNickname(user.getNickname());
         vo.setStatus(user.getStatus());
-        vo.setForceChangePassword(user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
+        vo.setForceChangePassword(forceChangePasswordEnabled()
+                && user.getForceChangePassword() != null && user.getForceChangePassword() == 1);
         vo.setRoles(roles);
         vo.setPermissions(permissions);
         // 个人中心卡片展示用的本人可见字段（V 新增）

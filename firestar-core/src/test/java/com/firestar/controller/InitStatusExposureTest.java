@@ -7,7 +7,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
@@ -53,5 +55,48 @@ class InitStatusExposureTest {
 
         assertFalse(vo.isInitialized());
         assertTrue(vo.isTrialMode(), "安装向导阶段仍需回显 trialMode 供前端判断");
+    }
+
+    /**
+     * 匿名裁剪必须连 lastReset* 一起抹掉：重置历史（谁在什么时候清过库）
+     * 属运维敏感信息，匿名端点不得顺带泄露。
+     */
+    @Test
+    void initialized_anonymousEndpoint_doesNotLeakResetHistory() {
+        InitStatusVO full = new InitStatusVO();
+        full.setInitialized(true);
+        full.setLastResetTime("2026-11-22 22:00:00.0");
+        full.setLastResetBy("admin");
+        when(initResetService.getStatus()).thenReturn(full);
+
+        InitResetController controller = new InitResetController(initResetService);
+        InitStatusVO vo = controller.status().getData();
+
+        assertNull(vo.getLastResetTime(), "匿名端点不得回显 lastResetTime");
+        assertNull(vo.getLastResetBy(), "匿名端点不得回显 lastResetBy");
+    }
+
+    /**
+     * 重置页状态端点必须回完整状态（不裁剪）。
+     * 此前前端误用匿名端点，canReset 恒 false → 两个重置按钮永久 disabled。
+     */
+    @Test
+    void resetStatus_returnsUncroppedStatus() {
+        InitStatusVO full = new InitStatusVO();
+        full.setInitialized(true);
+        full.setTrialMode(true);
+        full.setCanReset(true);
+        full.setAdminExists(true);
+        full.setLastResetTime("2026-11-22 22:00:00.0");
+        full.setLastResetBy("admin");
+        when(initResetService.getResetStatus()).thenReturn(full);
+
+        InitResetController controller = new InitResetController(initResetService);
+        InitStatusVO vo = controller.resetStatus().getData();
+
+        assertTrue(vo.isTrialMode(), "重置页必须拿到 trialMode");
+        assertTrue(vo.isCanReset(), "重置页必须拿到 canReset，否则按钮永久 disabled");
+        assertTrue(vo.isAdminExists());
+        assertEquals("admin", vo.getLastResetBy());
     }
 }
