@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * 扣子（Coze）供应商实现（设计 §4.2）。
  *
@@ -30,6 +33,8 @@ import java.util.function.Consumer;
  * 扣子继续生成最终文本。因此本类的 streamChat 只负责转发扣子 /v3/chat 的 SSE 文本增量。</p>
  */
 public class CozeProvider implements ChatProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(CozeProvider.class);
 
     private final String baseUrl;
     private final String botId;
@@ -97,10 +102,19 @@ public class CozeProvider implements ChatProvider {
         // 扣子 chat API 不接受外部 system 覆盖（Bot 提示词固化在控制台），
         // 故将 FireStar 的系统指令以「用户角色前导指令」注入，尽力而为地约束工具调用行为。
         // 策略文本来自 FireStar（AiProperties），切到 OpenAI/DeepSeek 时改以真正 system 消息执行，行为一致。
+        // 【输出格式规范】单独成段：实测扣子侧模型输出「无换行的内联伪 Markdown」（如 "###1.标题正文连写"、
+        // "-列表项不换行"，679 字 0 换行 9 个 ##），前端 Markdown 渲染器无从下手，整段糊成一坨。
+        // 真正的人设级约束仍应配置在扣子控制台 Bot 的人设里（优先级高于用户消息注入），此处是尽力而为的一层。
         List<Object> additional = new ArrayList<>();
         if (systemInstr != null && !systemInstr.isBlank()) {
             additional.add(Map.of("role", "user", "content",
-                    "[系统指令-请严格遵守且在回复中不要向用户提及] " + systemInstr, "content_type", "text"));
+                    "[系统指令-请严格遵守且在回复中不要向用户提及] " + systemInstr
+                            + "\n\n【输出格式规范】回答必须使用标准 Markdown 格式，严格遵守换行规则："
+                            + "1. 标题（#/##/###）、列表项（- 或 1.）必须独占一行，不得与正文连写在同一行；"
+                            + "2. 标记符号后必须紧跟一个空格（如 ### 标题、- 列表项、1. 条目）；"
+                            + "3. 段落之间用空行分隔；"
+                            + "4. 禁止输出没有换行的伪 Markdown。",
+                    "content_type", "text"));
         }
         additional.add(Map.of("role", "user", "content", userText, "content_type", "text"));
         String payload = objectMapper.writeValueAsString(Map.of(
@@ -138,7 +152,22 @@ public class CozeProvider implements ChatProvider {
         parseSse(resp.body(), onChunk);
     }
 
+    /** 一次流式响应的聚合状态：正文是否已产出、思考文本累计、增量计数（供结束诊断日志） */
+    static final class StreamState {
+        final StringBuilder reasoning = new StringBuilder();
+        boolean answerTokenEmitted;
+        /** type=answer 的正文增量条数 */
+        int answerDeltas;
+        /** reasoning_content 增量条数 */
+        int reasoningDeltas;
+        /** 被丢弃的非 answer 编排消息条数（verbose/function_call/follow_up 等） */
+        int droppedDeltas;
+        /** 结束时是否触发了「思考文本回退为正文」兜底 */
+        boolean fallbackUsed;
+    }
+
     private void parseSse(InputStream in, Consumer<ChatChunk> onChunk) throws Exception {
+        StreamState state = new StreamState();
         BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         StringBuilder data = new StringBuilder();
         String currentEvent = "";
@@ -151,18 +180,19 @@ public class CozeProvider implements ChatProvider {
                 data.append(line.substring(5).strip()).append("\n");
             } else if (line.isBlank()) {
                 if (data.length() > 0) {
-                    dispatch(currentEvent, data.toString(), onChunk);
+                    dispatch(currentEvent, data.toString(), onChunk, state);
                     data.setLength(0);
                     currentEvent = "";
                 }
             }
         }
         if (data.length() > 0) {
-            dispatch(currentEvent, data.toString(), onChunk);
+            dispatch(currentEvent, data.toString(), onChunk, state);
         }
     }
 
-    private void dispatch(String event, String dataBlock, Consumer<ChatChunk> onChunk) throws Exception {
+    /** 包内可见：供单测直接投喂 SSE 事件验证分发逻辑，不真正走网络 */
+    void dispatch(String event, String dataBlock, Consumer<ChatChunk> onChunk, StreamState state) throws Exception {
         for (String raw : dataBlock.split("\n")) {
             if (raw.isBlank()) {
                 continue;
@@ -178,19 +208,54 @@ public class CozeProvider implements ChatProvider {
                 if (node.has("content") && node.get("content").isTextual()) {
                     text = node.get("content").asText();
                 }
-                // 部分 Coze Bot（开启「深度思考」时）将正式回复放在 reasoning_content，
-                // content 字段保持空。此时回退读取 reasoning_content，避免前端只收到空内容
-                // （表现为「你好」之后只有前端硬编码的占位、没有真实回复）。
-                if (text.isEmpty() && node.has("reasoning_content") && node.get("reasoning_content").isTextual()) {
-                    text = node.get("reasoning_content").asText();
+                // 消息 type 过滤：answer 是面向用户的正式回复；verbose（编排节点说明）、
+                // function_call、tool_output、follow_up（建议追问）都是 Bot 内部信息，
+                // 混进正文气泡就是用户看到的「自言自语」。type 缺失时按 answer 处理（兼容旧行为）。
+                String msgType = node.has("type") && node.get("type").isTextual()
+                        ? node.get("type").asText() : "answer";
+                if (!"answer".equals(msgType)) {
+                    state.droppedDeltas++;
+                    continue;
                 }
-                // 过滤纯空白 token（Coze 首个 delta 常为 \n 之类分隔字节，非空但无信息量，
-                // 若原样下发会让前端气泡首行被空出）。仅当包含非空白字符时才下发。
                 if (!text.isBlank()) {
+                    state.answerTokenEmitted = true;
+                    state.answerDeltas++;
                     onChunk.accept(ChatChunk.token(text));
+                    continue;
+                }
+                // 深度思考增量：走独立 reasoning 通道（前端渲染进「已深度思考」折叠区、
+                // 落库到 reasoning_text，与 DeepSeek 行为一致）。旧版在这里把思考当正文
+                // token 下发，深度思考 Bot「先吐思考再吐回答」，正文气泡里全是内心戏——
+                // 这正是切换扣子后回答「自言自语」的直接来源。
+                if (node.has("reasoning_content") && node.get("reasoning_content").isTextual()) {
+                    String reasoning = node.get("reasoning_content").asText();
+                    if (!reasoning.isBlank()) {
+                        state.reasoning.append(reasoning);
+                        state.reasoningDeltas++;
+                        onChunk.accept(ChatChunk.reasoning(reasoning));
+                    }
                 }
             } else if ("conversation.message.completed".equals(event)
                     || "conversation.chat.completed".equals(event) || "done".equals(event)) {
+                // 旧行为兼容：部分深度思考 Bot 把正式回复整体放在 reasoning_content、
+                // content 恒空（表现为「你好」之后只有前端硬编码的占位）。此时全程没有
+                // 正文 token，把累计的思考文本回退为正文下发一次，避免正文区空白。
+                if (!state.answerTokenEmitted && !state.fallbackUsed && state.reasoning.length() > 0) {
+                    state.answerTokenEmitted = true;
+                    state.fallbackUsed = true;
+                    onChunk.accept(ChatChunk.token(state.reasoning.toString()));
+                }
+                // 诊断日志：只在流的最终 done 事件打一次（completed 事件每条 message 各有一个）。
+                // 出问题时可直接对照——
+                // answerDeltas=0 + reasoningDeltas>0 ⇒ 正文兜底回退（自言自语复现）；
+                // answerDeltas=0 + reasoningDeltas=0 ⇒ Bot 没产出任何面向用户的内容（多为插件/编排问题）。
+                if ("done".equals(event)) {
+                    log.info("[AI][Coze] 流结束: answerDeltas={}, reasoningDeltas={}, dropped={}, "
+                                    + "fallback={}, reasoningChars={}, reasoningPreview='{}'",
+                            state.answerDeltas, state.reasoningDeltas, state.droppedDeltas,
+                            state.fallbackUsed, state.reasoning.length(),
+                            preview(state.reasoning.toString()));
+                }
                 onChunk.accept(ChatChunk.done());
             } else if ("error".equals(event)
                     || (node.has("code") && node.get("code").asInt(0) != 0)) {
@@ -198,5 +263,13 @@ public class CozeProvider implements ChatProvider {
                 throw new IllegalStateException("扣子返回错误: " + msg);
             }
         }
+    }
+
+    /** 日志预览截断：只留首尾各 60 字符，避免思考长文本刷屏 */
+    private static String preview(String s) {
+        if (s.length() <= 120) {
+            return s;
+        }
+        return s.substring(0, 60) + "..." + s.substring(s.length() - 60);
     }
 }

@@ -263,19 +263,27 @@ public class AiChatController {
                 re.printStackTrace();
                 // 包装自 onChunk 内的 IO 异常
                 if (re.getCause() instanceof Exception cause) {
-                    fail(emitter, convIdBox[0], describe(cause));
+                    fail(emitter, convIdBox[0], describe(cause), sb.toString(),
+                            reasoningSb.length() > 0 ? reasoningSb.toString() : null,
+                            provider, start, requestId);
                 } else {
-                    fail(emitter, convIdBox[0], describe(re));
+                    fail(emitter, convIdBox[0], describe(re), sb.toString(),
+                            reasoningSb.length() > 0 ? reasoningSb.toString() : null,
+                            provider, start, requestId);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-                fail(emitter, convIdBox[0], describe(e));
+                fail(emitter, convIdBox[0], describe(e), sb.toString(),
+                        reasoningSb.length() > 0 ? reasoningSb.toString() : null,
+                        provider, start, requestId);
             }
         });
         return emitter;
     }
 
-    private void fail(SseEmitter emitter, Long convId, String msg) {
+    private void fail(SseEmitter emitter, Long convId, String msg,
+                      String partialContent, String partialReasoning,
+                      String provider, long startMs, String requestId) {
         // 先把错误以 SSE error 事件下发给前端（真实错误文案，如「扣子创建会话失败: ...」）。
         // 注意：必须用 emitter.complete() 干净收尾，不能用 completeWithError(...) —— 后者会让 Tomcat
         // 对异步请求发起 ERROR 重分发，重分发时 SecurityContext 已丢，/sse/ai/** 被当匿名
@@ -284,6 +292,22 @@ public class AiChatController {
         try {
             emitter.send(SseEmitter.event().name("error").data(sanitize(msg)));
         } catch (Exception ignored) {
+        }
+        // 异常同样进入会话持久化：用户消息在 startConversation / continueConversation 时已落库，
+        // 若 assistant 侧不落任何消息，历史回放时只有提问没有回应——上下文断层，用户无从知道
+        // 「这里出现过异常」，只会对着同一句话反复追问。中途异常时 partialContent 可能已积累
+        // 部分正文，一并保留（标注中断原因），已生成内容不丢失；reasoning 同理。
+        // convId 为 null 说明会话还没建起来（如无生效模型 / 越权），无从落库，只发错误帧。
+        if (convId != null) {
+            try {
+                String note = "【生成失败】" + sanitize(msg);
+                String content = (partialContent == null || partialContent.isBlank())
+                        ? note : partialContent + "\n\n" + note;
+                chatService.appendAssistantMessage(convId, content, partialReasoning,
+                        provider, System.currentTimeMillis() - startMs, requestId);
+            } catch (Exception ignored) {
+                // 落库失败不影响错误帧下发与连接收尾
+            }
         }
         try {
             emitter.complete();

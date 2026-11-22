@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>直接喂 mock SSE 流，验证 Anthropic 协议里最容易写错的三处：
  * <ol>
- *   <li>text_delta / thinking_delta 逐帧下发 token（流式，不缓冲）；</li>
+ *   <li>text_delta 逐帧下发 token；thinking_delta 走独立 reasoning 通道（不混正文）；</li>
  *   <li>tool_use 的 id/name 来自 content_block_start，input 由 input_json_delta 分片拼接；</li>
  *   <li>toAnthropicTools 产出 Anthropic 专属的 input_schema（非 OpenAI function 包装）。</li>
  * </ol>
@@ -69,8 +69,10 @@ class AnthropicProviderTest {
         assertEquals(2, chunks.size(), "两个增量帧应逐帧下发，不合并");
         assertEquals("token", chunks.get(0).type());
         assertEquals("你好", chunks.get(0).text());
+        // 扩展思考走独立通道：不进正文 token 流，也不拼 r.content（防污染续轮回传与落库正文）
+        assertEquals("reasoning", chunks.get(1).type());
         assertEquals("思考中", chunks.get(1).text());
-        assertEquals("你好思考中", r.content);
+        assertEquals("你好", r.content);
         assertTrue(r.toolUses.isEmpty());
     }
 

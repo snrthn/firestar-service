@@ -45,7 +45,8 @@ import java.util.function.Consumer;
  * 附加参数(JSON)可选：{@code {"maxTokens":8192,"anthropicVersion":"2023-06-01"}}，
  * 不填则用默认值 maxTokens=4096 / anthropicVersion=2023-06-01。</p>
  *
- * <p>逐帧下发文本增量（含 thinking 模型的 thinking_delta），tool_use 按 index 聚合后本地执行，
+ * <p>逐帧下发文本增量；thinking_delta（扩展思考）走独立 reasoning 通道（与 OpenAI/DeepSeek/
+ * Coze 同构，不混正文）；tool_use 按 index 聚合后本地执行，
  * 结果以 tool_result 回传续轮形成受控多步链（{@link ToolLoopPolicy}：4 工具轮 + 1 总结轮 +
  * 重复调用检测）；draft_ 前缀工具额外下发草稿帧。权限闸在每步 ToolExecutor 内复核。</p>
  */
@@ -303,11 +304,19 @@ public class AnthropicProvider implements ChatProvider {
                         break;
                     }
                     String dt = delta.path("type").asText();
-                    if ("text_delta".equals(dt) || "thinking_delta".equals(dt)) {
+                    if ("text_delta".equals(dt)) {
                         String t = delta.path("text").asText("");
                         if (!t.isEmpty()) {
                             r.content += t;
                             onChunk.accept(ChatChunk.token(t)); // 逐帧下发，保证流式
+                        }
+                    } else if ("thinking_delta".equals(dt)) {
+                        // 扩展思考（extended thinking）增量走独立 reasoning 通道：不拼 r.content
+                        // （否则思考串进续轮回传与落库正文），不占正文 token 流
+                        // （否则用户气泡里全是内心戏，与扣子「自言自语」同根同源）。
+                        String t = delta.path("text").asText("");
+                        if (!t.isEmpty()) {
+                            onChunk.accept(ChatChunk.reasoning(t));
                         }
                     } else if ("input_json_delta".equals(dt)) {
                         int idx = node.path("index").asInt(0);

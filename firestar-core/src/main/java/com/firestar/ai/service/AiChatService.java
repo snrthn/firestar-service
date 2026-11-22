@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -297,6 +298,9 @@ public class AiChatService {
         m.setContent(userText);
         msgMapper.insert(m);
         conv.setStatus(1);
+        // 刷新 updated_at：「最近会话」面板按 updatedAt 倒序（最新对话过的会话排最上）。
+        // 实体无自动填充，updateById 全字段写回会把查询时的旧值原样写回，续聊此前从不刷新。
+        conv.setUpdatedAt(LocalDateTime.now());
         convMapper.updateById(conv);
         return history;
     }
