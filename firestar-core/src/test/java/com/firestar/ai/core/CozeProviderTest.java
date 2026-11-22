@@ -94,12 +94,14 @@ class CozeProviderTest {
         p.dispatch("conversation.message.delta",
                 "{\"type\":\"answer\",\"content\":\"\",\"reasoning_content\":\"用户现在问当前待开票金额是多少，为获取待开票金额，我将调用开票统计工具，无需额外参数即可获取本月相关数据。\",\"role\":\"assistant\"}",
                 out::add, state);
-        // 第一轮流结束事件触发 reasoning→正文回退：独白必须被过滤器拦下
+        // 第一轮流结束事件触发 reasoning→正文回退：纯独白被整段摘除，不再回退（等续流正文）
         p.dispatch("conversation.chat.completed", "{\"code\":0}", out::add, state);
         List<ChatChunk> tokensAfterFallback = out.stream().filter(c -> "token".equals(c.type())).toList();
         assertTrue(tokensAfterFallback.isEmpty(),
                 "回退文本只有独白一句，过滤后正文应为空，实际: " + tokensAfterFallback);
-        assertTrue(state.answerTokenEmitted, "回退已发生，标记正文已产出");
+        // 2026-11-23 会话18 实锤后行为变化：reasoning 纯独白 → 摘除后为空 → 不回退、不置位，
+        // 等续流的正式回答（旧逻辑无脑置位会导致正文区先吐空标记）
+        assertTrue(!state.answerTokenEmitted, "纯独白 reasoning 摘除后为空，不应回退");
         assertTrue(state.fallbackUsed);
         // 端插件续流：正式回答正常透传
         p.dispatch("conversation.message.delta",
@@ -112,6 +114,24 @@ class CozeProviderTest {
         List<ChatChunk> reasoning = out.stream().filter(c -> "reasoning".equals(c.type())).toList();
         assertEquals(1, reasoning.size());
         assertTrue(reasoning.get(0).text().contains("我将调用开票统计工具"));
+    }
+
+    @Test
+    @DisplayName("reasoning 多句独白连发（「正在为你查询…」无「工具」字样）：fallback 摘除全部独白句，实质句保留回退（会话18/请求 f2ac5f45 实锤形态）")
+    void fallbackMultiSentenceNarrationStripped() throws Exception {
+        CozeProvider p = newProvider();
+        CozeProvider.StreamState state = new CozeProvider.StreamState();
+        List<ChatChunk> out = new ArrayList<>();
+        // 生产实测形态：多句独白，以「正在」开头、句内无「工具」二字（原词表拦不住）
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"\",\"reasoning_content\":\"正在为你查询用户「马占山」的系统账号信息，获取对应的用户ID以便后续统计其关联的项目和回款数据。正在为你统计马占山名下的全部项目清单及数量。这是回退应保留的实质内容。\",\"role\":\"assistant\"}",
+                out::add, state);
+        p.dispatch("conversation.chat.completed", "{\"code\":0}", out::add, state);
+        List<ChatChunk> tokens = out.stream().filter(c -> "token".equals(c.type())).toList();
+        assertEquals(1, tokens.size(), "多句独白摘除后实质句应作为回退正文");
+        assertEquals("这是回退应保留的实质内容。", tokens.get(0).text());
+        assertTrue(state.answerTokenEmitted);
+        assertTrue(state.fallbackUsed);
     }
 
     @Test

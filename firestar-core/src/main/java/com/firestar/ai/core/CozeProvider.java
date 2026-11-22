@@ -113,11 +113,34 @@ public class CozeProvider implements ChatProvider {
                 .map(ChatMessage::content)
                 .reduce((a, b) -> b)
                 .orElse(null);
+        // 最后一条 user = 本轮提问；其余 user/assistant = 数据库回灌的历史轮次。
+        // 【多轮记忆对齐】2026-11-23 实锤（生产请求 f2ac5f45 + 会话18）：扣子平台侧 conversation
+        // （auto_save_history=true 且 conversation_id 跨轮一致）经 /v1/conversation/message/list
+        // 实测返回 0 条消息——端插件模式下平台根本不保存历史，模型每轮失忆（"他发起的项目"指代不明）。
+        // DeepSeek/OpenAI/Anthropic 靠 Controller 回灌的 messages 历史维持上下文，唯独 CozeProvider
+        // 此前只取最后一条 user、丢弃历史 → 记忆断层。修复：历史消息按原顺序注入 additional_messages
+        // （官方 role 仅支持 user/assistant，恰好合法），记忆来源与其他供应商对齐（统一走数据库）。
         String userText = req.messages().stream()
                 .filter(m -> "user".equals(m.role()))
                 .reduce((a, b) -> b)
                 .map(ChatMessage::content)
                 .orElse("");
+        List<ChatMessage> historyTurns = new ArrayList<>();
+        boolean lastUserSeen = false;
+        List<ChatMessage> all = req.messages();
+        for (int i = all.size() - 1; i >= 0; i--) {
+            ChatMessage m = all.get(i);
+            if (!lastUserSeen) {
+                if ("user".equals(m.role())) {
+                    lastUserSeen = true; // 这是本轮提问，不算历史
+                }
+                continue;
+            }
+            if ("user".equals(m.role()) || "assistant".equals(m.role())) {
+                historyTurns.add(m);
+            }
+        }
+        java.util.Collections.reverse(historyTurns);
         // 扣子 chat API 不接受外部 system 覆盖（Bot 提示词固化在控制台），
         // 故将 FireStar 的系统指令以「用户角色前导指令」注入，尽力而为地约束工具调用行为。
         // 策略文本来自 FireStar（AiProperties），切到 OpenAI/DeepSeek 时改以真正 system 消息执行，行为一致。
@@ -135,6 +158,22 @@ public class CozeProvider implements ChatProvider {
                             + "3. 段落之间用空行分隔；"
                             + "4. 禁止输出没有换行的伪 Markdown。",
                     "content_type", "text"));
+        }
+        // 历史轮次逐条注入（在系统指令后、工具目录前），保持对话顺序。
+        // assistant 历史先过独白摘除，避免把上轮的「正在为你查询…」过程独白喂回去让模型模仿腔调；
+        // 摘除后为空则跳过该条（异常中断轮次没有实质正文）。
+        for (ChatMessage h : historyTurns) {
+            String c = h.content();
+            if (c == null || c.isBlank()) {
+                continue;
+            }
+            if ("assistant".equals(h.role())) {
+                c = AnswerPreambleFilter.stripProcessNarration(c);
+                if (c.isBlank()) {
+                    continue;
+                }
+            }
+            additional.add(Map.of("role", h.role(), "content", c, "content_type", "text"));
         }
         // 工具目录独立成条：不能挂在 systemInstr 里（系统指令为空时工具目录会一起消失）
         String catalog = toolCatalog(req.tools());
@@ -344,21 +383,19 @@ public class CozeProvider implements ChatProvider {
                 // content 恒空（表现为「你好」之后只有前端硬编码的占位）。此时全程没有
                 // 正文 token，把累计的思考文本回退为正文下发一次，避免正文区空白。
                 if (!state.answerTokenEmitted && !state.fallbackUsed && state.reasoning.length() > 0) {
-                    state.answerTokenEmitted = true;
                     state.fallbackUsed = true;
                     String fallbackText = state.reasoning.toString();
-                    log.info("[AI][Coze] 全程无正文，reasoning 回退为正文（先过首句独白过滤）: chars={}, preview='{}'",
-                            fallbackText.length(), preview(fallbackText));
-                    // 2026-11-23 请求 f2f881c9 实锤：端插件第一轮流只有 reasoning（独白）没有
-                    // answer delta，轮次完成事件触发本回退时独白直接进了正文——delta 链路上的
-                    // 过滤器根本没参与。回退文本必须过同一个 AnswerPreambleFilter：
-                    // 独白句在 reasoning 通道已完整保留，正文不重复输出。
-                    if (state.preambleFilter == null) {
-                        state.preambleFilter = new AnswerPreambleFilter(
-                                safe -> onChunk.accept(ChatChunk.token(safe)));
+                    // 2026-11-23 请求 f2ac5f45/会话18 实锤：端插件第一轮流只有 reasoning（多句独白
+                    // 连发，如"正在为你查询…。正在为你统计…。"），流式首句判定只删得了第一句，且
+                    // 独白常以「正在」开头、句内无「工具」二字，原词表拦不住。改用 stripProcessNarration
+                    // 整段逐句摘除：剩余非空才回退；全删光（纯独白 reasoning）不回退，等续流的正式回答。
+                    String cleaned = AnswerPreambleFilter.stripProcessNarration(fallbackText);
+                    log.info("[AI][Coze] reasoning 回退判定: chars={}, cleanedChars={}, preview='{}'",
+                            fallbackText.length(), cleaned.length(), preview(fallbackText));
+                    if (!cleaned.isBlank()) {
+                        state.answerTokenEmitted = true;
+                        onChunk.accept(ChatChunk.token(cleaned));
                     }
-                    state.preambleFilter.accept(fallbackText);
-                    state.preambleFilter.finish();
                 }
                 // 诊断日志：只在流的最终 done 事件打一次（completed 事件每条 message 各有一个）。
                 // 出问题时可直接对照——
