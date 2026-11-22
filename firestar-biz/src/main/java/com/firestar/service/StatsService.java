@@ -18,8 +18,8 @@ import com.firestar.dto.PlatformStatsVO;
  *   <li>口径契约以 docs/数据看板-指标体系设计.md 为准，核心红线：
  *       禁用 fin_receivable.written_off_amount / unwritten_off_amount（无写入方），
  *       回款额一律按 V65 的 received/unreceived 与 fin_write_off 核算；</li>
- *   <li>回款只认 approval_status='RECEIVED'；红字（doc_direction='RED'）与退款（receipt_type='REFUND'）金额取负；</li>
- *   <li>FIFO 账龄 / DSO / 应收周转率等由 L2 的 AgeingService 计算，本接口不含（ArSummaryVO 预留）。</li>
+ *   <li>回款只认 receipt_status='RECEIVED'；红字（doc_direction='RED'）与退款（receipt_type='REFUND'）金额取负；</li>
+ *   <li>FIFO 账龄 / DSO / 应收周转率由本实现的 ageing() 承担（L2，见 docs/数据看板-指标体系设计.md §6.6/§8）。</li>
  * </ul>
  */
 public interface StatsService {
