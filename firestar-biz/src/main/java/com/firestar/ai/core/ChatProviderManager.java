@@ -80,7 +80,8 @@ public class ChatProviderManager implements ApplicationRunner {
         this.dictDataMapper = dictDataMapper;
         // 构造器内初始化注册表：此时上方 final 字段均已赋值，lambda 捕获 this 运行时已完整。
         this.registry = Map.of(
-                "coze", c -> new CozeProvider(c.baseUrl(), c.botId(), c.apiKey(), this.objectMapper, this.httpClientFactory),
+                // 端插件工具执行：ToolExecutor 位于 biz，经 core 的 ToolExecutionPort 接口注入
+                "coze", c -> new CozeProvider(c.baseUrl(), c.botId(), c.apiKey(), this.objectMapper, this.toolExecutor, this.httpClientFactory),
                 "openai", c -> new OpenAIProvider(c.baseUrl(), c.apiKey(), c.model(), this.objectMapper, this.toolExecutor, this.httpClientFactory),
                 // DeepSeek 为 OpenAI 兼容协议，复用 OpenAIProvider 的 SSE 解析 + 工具调用循环，仅 name 不同
                 "deepseek", c -> new DeepSeekProvider(c.baseUrl(), c.apiKey(), c.model(), this.objectMapper, this.toolExecutor, this.httpClientFactory),

@@ -57,6 +57,34 @@ class CozeProviderTest {
     }
 
     @Test
+    @DisplayName("扣子 answer 首句过程独白被过滤，reasoning 里的同一句保留，正式回答不受影响")
+    void answerPreambleDroppedButReasoningKept() throws Exception {
+        CozeProvider p = newProvider();
+        CozeProvider.StreamState state = new CozeProvider.StreamState();
+        List<ChatChunk> out = new ArrayList<>();
+        // 思考通道先输出过程独白（保留）
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"\",\"reasoning_content\":\"用户现在需要查询研发中心下面的部门数量，我将直接调用组织架构查询工具。\",\"role\":\"assistant\"}",
+                out::add, state);
+        // 正文首句重复了这句独白 + 正式回答（独白应被过滤）
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"用户现在需要查询研发中心下面的部门数量，我将直接调用组织架构查询工具完成本次查询。\",\"role\":\"assistant\"}",
+                out::add, state);
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"研发中心下属共有2个部门：产品部、技术部。\",\"role\":\"assistant\"}",
+                out::add, state);
+        // 流结束 flush
+        p.dispatch("conversation.chat.completed", "{\"code\":0}", out::add, state);
+
+        List<ChatChunk> tokens = out.stream().filter(c -> "token".equals(c.type())).toList();
+        assertEquals(1, tokens.size(), "正文只剩正式回答一句");
+        assertEquals("研发中心下属共有2个部门：产品部、技术部。", tokens.get(0).text());
+        List<ChatChunk> reasoning = out.stream().filter(c -> "reasoning".equals(c.type())).toList();
+        assertEquals(1, reasoning.size(), "reasoning 里的过程独白保留");
+        assertTrue(reasoning.get(0).text().contains("我将直接调用组织架构查询工具"));
+    }
+
+    @Test
     @DisplayName("深度思考增量走 reasoning 独立通道，不混进正文（自言自语根因修复）")
     void reasoningContentStreamsAsReasoningChunk() throws Exception {
         CozeProvider p = newProvider();

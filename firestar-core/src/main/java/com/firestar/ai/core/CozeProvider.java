@@ -3,6 +3,10 @@ package com.firestar.ai.core;
 import com.firestar.ai.spi.ChatChunk;
 import com.firestar.ai.spi.ChatMessage;
 import com.firestar.ai.spi.ChatProvider;
+import com.firestar.ai.spi.ToolCall;
+import com.firestar.ai.spi.ToolExecutionPort;
+import com.firestar.ai.spi.ToolResult;
+import com.firestar.ai.spi.ToolSpec;
 import com.firestar.ai.spi.TurnRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,14 +15,17 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -27,10 +34,13 @@ import org.slf4j.LoggerFactory;
 /**
  * 扣子（Coze）供应商实现（设计 §4.2）。
  *
- * <p>只干一件事：吃 messages，吐 token 流。工具调用由扣子侧「自定义插件」触发——
- * 扣子在会话中需要工具时会<b>异步回调</b>我方 {@code /ai/coze/plugin} 端点（见 AiPluginController），
- * 该端点经 HMAC 校验后以当前登录用户身份执行 {@code ToolExecutor} 并把结果回给扣子，
- * 扣子继续生成最终文本。因此本类的 streamChat 只负责转发扣子 /v3/chat 的 SSE 文本增量。</p>
+ * <p>只干一件事：吃 messages，吐 token 流。<b>端插件</b>链路：Bot 控制台把 FireStar 工具定义成
+ * 「端插件」（客户端执行型），对话触发时扣子 SSE 推 {@code conversation.chat.requires_action}，
+ * 本类在本地经 {@link ToolExecutionPort} 执行工具（与 OpenAI/DeepSeek 完全同一执行器与权限闸），
+ * 再调 {@code /v3/chat/submit_tool_outputs} 提交结果，扣子据此生成最终文本。
+ * 这样不需要公网可达的插件回调地址——所有请求都是我方主动出网。</p>
+ *
+ * <p>老的服务端插件回调链路见 AiPluginController，本期端插件与之并存、互不干扰。</p>
  */
 public class CozeProvider implements ChatProvider {
 
@@ -40,15 +50,24 @@ public class CozeProvider implements ChatProvider {
     private final String botId;
     private final String pat;
     private final ObjectMapper objectMapper;
+    /** core 侧端口，biz 的 ToolExecutor 实现；null 时工具调用降级为错误结果 */
+    private final ToolExecutionPort toolExecutor;
     private final HttpClient http;
 
     public CozeProvider(String baseUrl, String botId, String pat, ObjectMapper objectMapper,
-                        HttpClientFactory httpClientFactory) {
+                        ToolExecutionPort toolExecutor, HttpClientFactory httpClientFactory) {
         this.baseUrl = baseUrl;
         this.botId = botId;
         this.pat = pat;
         this.objectMapper = objectMapper;
+        this.toolExecutor = toolExecutor;
         this.http = httpClientFactory.newClient(Duration.ofSeconds(10));
+    }
+
+    /** 无工具执行器的兼容构造（纯 SSE 解析单测/历史装配用），工具调用一律返回错误结果 */
+    public CozeProvider(String baseUrl, String botId, String pat, ObjectMapper objectMapper,
+                        HttpClientFactory httpClientFactory) {
+        this(baseUrl, botId, pat, objectMapper, null, httpClientFactory);
     }
 
     @Override
@@ -104,7 +123,8 @@ public class CozeProvider implements ChatProvider {
         // 策略文本来自 FireStar（AiProperties），切到 OpenAI/DeepSeek 时改以真正 system 消息执行，行为一致。
         // 【输出格式规范】单独成段：实测扣子侧模型输出「无换行的内联伪 Markdown」（如 "###1.标题正文连写"、
         // "-列表项不换行"，679 字 0 换行 9 个 ##），前端 Markdown 渲染器无从下手，整段糊成一坨。
-        // 真正的人设级约束仍应配置在扣子控制台 Bot 的人设里（优先级高于用户消息注入），此处是尽力而为的一层。
+        // 【端插件工具清单】注入当前用户可见工具名 + 参数 schema：扣子 Bot 的端插件定义在控制台，
+        // 但模型需要知道何时调、怎么填参数；与 OpenAI 的 tools 数组等价（尽力而为的文本注入）。
         List<Object> additional = new ArrayList<>();
         if (systemInstr != null && !systemInstr.isBlank()) {
             additional.add(Map.of("role", "user", "content",
@@ -116,12 +136,18 @@ public class CozeProvider implements ChatProvider {
                             + "4. 禁止输出没有换行的伪 Markdown。",
                     "content_type", "text"));
         }
+        // 工具目录独立成条：不能挂在 systemInstr 里（系统指令为空时工具目录会一起消失）
+        String catalog = toolCatalog(req.tools());
+        if (!catalog.isBlank()) {
+            additional.add(Map.of("role", "user", "content", catalog, "content_type", "text"));
+        }
         additional.add(Map.of("role", "user", "content", userText, "content_type", "text"));
         String payload = objectMapper.writeValueAsString(Map.of(
                 "bot_id", botIdValue(),
                 "conversation_id", req.conversationId(),
                 "user_id", "firestar-" + req.conversationId(),
                 "stream", true,
+                // 端插件 submit_tool_outputs 官方要求 auto_save_history=true，否则 5000 错误
                 "auto_save_history", true,
                 "additional_messages", additional
         ));
@@ -149,10 +175,24 @@ public class CozeProvider implements ChatProvider {
             }
             throw new IllegalStateException("扣子返回非 SSE 响应(Content-Type=" + contentType + "): " + body);
         }
-        parseSse(resp.body(), onChunk);
+        parseSse(resp.body(), new StreamState(), new ToolContext(req, onChunk));
     }
 
-    /** 一次流式响应的聚合状态：正文是否已产出、思考文本累计、增量计数（供结束诊断日志） */
+    /** 把当前用户可见工具拼成文本目录，随系统指令一起注入（模型据此知道端插件怎么调）。 */
+    private String toolCatalog(List<ToolSpec> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("\n\n【可用工具端插件】当且仅当需要系统数据时调用下列工具，"
+                + "工具名和参数名必须完全一致；不需要系统数据时禁止调用：\n");
+        for (ToolSpec s : tools) {
+            sb.append("- ").append(s.name()).append(": ").append(s.description()).append('\n');
+        }
+        sb.append("调用端插件后请等待系统返回的工具结果，再基于结果回答，禁止编造。");
+        return sb.toString();
+    }
+
+    /** 一次流式响应的聚合状态：正文是否已产出、思考文本累计、增量计数、待处理的端插件事件 */
     static final class StreamState {
         final StringBuilder reasoning = new StringBuilder();
         boolean answerTokenEmitted;
@@ -164,10 +204,37 @@ public class CozeProvider implements ChatProvider {
         int droppedDeltas;
         /** 结束时是否触发了「思考文本回退为正文」兜底 */
         boolean fallbackUsed;
+        /** 端插件请求事件（流尾统一处理，避免过早 done） */
+        String pendingAction;
+        /**
+         * 扣子 answer 首句过程独白过滤器（跨帧）。懒初始化：首次遇到 answer token 时
+         * 用当前 onChunk 构造。只作用于扣子，其他 provider 不涉及。
+         */
+        AnswerPreambleFilter preambleFilter;
     }
 
-    private void parseSse(InputStream in, Consumer<ChatChunk> onChunk) throws Exception {
-        StreamState state = new StreamState();
+    /** 一次对话的端插件执行上下文（跨多次 SSE 流共享：用户身份、工具白名单、步数预算） */
+    static final class ToolContext {
+        final TurnRequest req;
+        final Consumer<ChatChunk> onChunk;
+        final Set<String> seenCalls = ToolLoopPolicy.newSeen();
+        int round;
+        /** 步数耗尽/重复调用停滞：后续端插件请求只提交错误结果，不再继续生成 */
+        boolean exhausted;
+
+        ToolContext(TurnRequest req, Consumer<ChatChunk> onChunk) {
+            this.req = req;
+            this.onChunk = onChunk;
+        }
+    }
+
+    /** 端插件工具调用解析结果 */
+    record ToolInvocation(String id, String name, String arguments) {}
+
+    /** 一次提交的输出项 */
+    record ToolOutput(String toolCallId, String output) {}
+
+    private void parseSse(InputStream in, StreamState state, ToolContext ctx) throws Exception {
         BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         StringBuilder data = new StringBuilder();
         String currentEvent = "";
@@ -180,15 +247,38 @@ public class CozeProvider implements ChatProvider {
                 data.append(line.substring(5).strip()).append("\n");
             } else if (line.isBlank()) {
                 if (data.length() > 0) {
-                    dispatch(currentEvent, data.toString(), onChunk, state);
+                    handleEvent(currentEvent, data.toString(), state, ctx);
                     data.setLength(0);
                     currentEvent = "";
                 }
             }
         }
         if (data.length() > 0) {
-            dispatch(currentEvent, data.toString(), onChunk, state);
+            handleEvent(currentEvent, data.toString(), state, ctx);
         }
+        // 端插件请求：当前流到此为止，先执行工具并提交结果，再读后续流
+        if (state.pendingAction != null) {
+            String action = state.pendingAction;
+            state.pendingAction = null;
+            handleRequiresAction(action, state, ctx);
+        }
+    }
+
+    private void handleEvent(String event, String dataBlock, StreamState state, ToolContext ctx) throws Exception {
+        if ("conversation.chat.requires_action".equals(event)) {
+            state.pendingAction = dataBlock;
+            return;
+        }
+        // 端插件请求流里的 done 必须吞掉：此时对话并未真正结束，
+        // 提交工具结果后扣子还会继续吐 token，提前 done 会让前端停止接收。
+        Consumer<ChatChunk> sink = state.pendingAction != null
+                ? chunk -> {
+                    if (!"done".equals(chunk.type())) {
+                        ctx.onChunk.accept(chunk);
+                    }
+                }
+                : ctx.onChunk;
+        dispatch(event, dataBlock, sink, state);
     }
 
     /** 包内可见：供单测直接投喂 SSE 事件验证分发逻辑，不真正走网络 */
@@ -220,7 +310,15 @@ public class CozeProvider implements ChatProvider {
                 if (!text.isBlank()) {
                     state.answerTokenEmitted = true;
                     state.answerDeltas++;
-                    onChunk.accept(ChatChunk.token(text));
+                    // 扣子专属：首句过程独白（「用户现在要查…我将调用…工具」）在 reasoning
+                    // 通道已完整保留，正文这句是重复输出，过滤掉；其余正文原样透传。
+                    // 用 onChunk 捕获当前 sink（端插件续流轮次里 sink 会吞中间 done），
+                    // 保证过滤器输出仍走同一条下游链路。
+                    if (state.preambleFilter == null) {
+                        state.preambleFilter = new AnswerPreambleFilter(
+                                safe -> onChunk.accept(ChatChunk.token(safe)));
+                    }
+                    state.preambleFilter.accept(text);
                     continue;
                 }
                 // 深度思考增量：走独立 reasoning 通道（前端渲染进「已深度思考」折叠区、
@@ -237,6 +335,11 @@ public class CozeProvider implements ChatProvider {
                 }
             } else if ("conversation.message.completed".equals(event)
                     || "conversation.chat.completed".equals(event) || "done".equals(event)) {
+                // 首句独白过滤器 flush：把缓冲区残留正文吐出后再考虑 done，
+                // 避免「正常短回复（无句末标点）被一直憋在缓冲里」导致正文区空白。
+                if (state.preambleFilter != null) {
+                    state.preambleFilter.finish();
+                }
                 // 旧行为兼容：部分深度思考 Bot 把正式回复整体放在 reasoning_content、
                 // content 恒空（表现为「你好」之后只有前端硬编码的占位）。此时全程没有
                 // 正文 token，把累计的思考文本回退为正文下发一次，避免正文区空白。
@@ -263,6 +366,152 @@ public class CozeProvider implements ChatProvider {
                 throw new IllegalStateException("扣子返回错误: " + msg);
             }
         }
+    }
+
+    /**
+     * 端插件请求：解析 tool_calls → 本地执行 → 提交结果 → 递归读扣子后续流。
+     * 事件结构（官方 /v3/chat SSE）：
+     * {"id":"chat_id","conversation_id":"...","required_action":{
+     *   "type":"submit_tool_outputs","submit_tool_outputs":{"
+     *     tool_calls":[{"id":"...","type":"function","function":{"name":"...","arguments":"{}"}}]}}}}
+     */
+    private void handleRequiresAction(String actionBlock, StreamState state, ToolContext ctx) throws Exception {
+        JsonNode root = objectMapper.readTree(actionBlock.strip());
+        JsonNode data = root.has("data") && root.get("data").isObject() ? root.get("data") : root;
+        String chatId = data.path("id").asText(null);
+        String convId = data.path("conversation_id").asText(ctx.req.conversationId());
+        List<ToolInvocation> calls = parseToolCalls(data);
+        log.info("[AI][Coze] 端插件请求: chatId={}, round={}, calls={}", chatId, ctx.round, calls.size());
+        if (chatId == null || chatId.isBlank()) {
+            log.warn("[AI][Coze] requires_action 缺少 chat id，忽略本次工具请求");
+            ctx.onChunk.accept(ChatChunk.done());
+            return;
+        }
+        List<ToolOutput> outputs = new ArrayList<>();
+        if (ctx.exhausted || !ToolLoopPolicy.shouldOfferTools(ctx.round, true)) {
+            // tool_call_id 必须对应真实调用，扣子才能把结果匹配回本次工具请求
+            if (calls.isEmpty()) {
+                outputs.add(new ToolOutput("", "{\"error\":\"工具调用轮数已达上限，请基于已有结果总结回答\"}"));
+            } else {
+                for (ToolInvocation inv : calls) {
+                    outputs.add(new ToolOutput(inv.id(), "{\"error\":\"工具调用轮数已达上限，请基于已有结果总结回答\"}"));
+                }
+            }
+            // 非流式提交只为结束本轮对话，不再递归读流
+            submitToolOutputs(convId, chatId, false, outputs);
+            ctx.onChunk.accept(ChatChunk.done());
+            return;
+        }
+        List<String> sigs = new ArrayList<>();
+        for (ToolInvocation inv : calls) {
+            sigs.add(ToolLoopPolicy.signature(inv.name(), inv.arguments()));
+        }
+        for (ToolInvocation inv : calls) {
+            String args = inv.arguments() == null || inv.arguments().isBlank() ? "{}" : inv.arguments();
+            ToolCall call = new ToolCall(inv.id(), inv.name(), args);
+            ToolResult tr;
+            if (!toolAllowed(ctx.req, inv.name())) {
+                tr = new ToolResult(inv.id(), inv.name(), "{\"error\":\"工具不在当前用户可见清单，已拒绝执行\"}", true);
+            } else if (toolExecutor == null) {
+                tr = new ToolResult(inv.id(), inv.name(), "{\"error\":\"工具执行器未装配\"}", true);
+            } else {
+                long start = System.currentTimeMillis();
+                tr = toolExecutor.execute(call, ctx.req.username(), ctx.req.isAdmin());
+                ChatChunk audit = ToolAuditFrame.of(start, call, tr, objectMapper);
+                if (audit != null) {
+                    ctx.onChunk.accept(audit);
+                }
+                if (inv.name() != null && inv.name().startsWith("draft_")) {
+                    try {
+                        String draft = objectMapper.writeValueAsString(Map.of(
+                                "toolName", inv.name(), "argsJson", args,
+                                "resultJson", tr == null ? "" : tr.contentJson()));
+                        ctx.onChunk.accept(ChatChunk.draft(draft));
+                    } catch (Exception ignored) {
+                        // 草稿事件失败不阻塞主流程
+                    }
+                }
+            }
+            outputs.add(new ToolOutput(inv.id(), tr == null ? "{}" : tr.contentJson()));
+        }
+        // 全是重复调用 → 下一轮不再执行工具，逼模型基于已有结果总结（同 OpenAI 护栏）
+        boolean fresh = ToolLoopPolicy.hasFreshCalls(sigs, ctx.seenCalls);
+        ToolLoopPolicy.markSeen(sigs, ctx.seenCalls);
+        ctx.exhausted = !fresh && !calls.isEmpty();
+        if (outputs.isEmpty()) {
+            outputs.add(new ToolOutput("", "{\"error\":\"未解析到可执行的工具调用\"}"));
+        }
+        HttpResponse<InputStream> next = submitToolOutputs(convId, chatId, true, outputs);
+        String contentType = next.headers().firstValue("Content-Type").orElse("");
+        if (next.statusCode() != 200 || !contentType.contains("text/event-stream")) {
+            String body = new String(next.body().readAllBytes(), StandardCharsets.UTF_8);
+            throw new IllegalStateException("扣子提交工具结果失败 HTTP " + next.statusCode()
+                    + " Content-Type=" + contentType + ": " + body);
+        }
+        ctx.round++;
+        // 递归读提交后的新流：token 走同一 onChunk，最终 done 由新流发出
+        parseSse(next.body(), state, ctx);
+    }
+
+    /** 从 requires_action 的 data 节点解析工具调用（包内可见，供单测直接投喂官方样例） */
+    static List<ToolInvocation> parseToolCalls(JsonNode data) {
+        List<ToolInvocation> out = new ArrayList<>();
+        JsonNode arr = data.path("required_action").path("submit_tool_outputs").path("tool_calls");
+        if (!arr.isArray()) {
+            arr = data.path("tool_calls"); // 兼容简化结构
+        }
+        if (!arr.isArray()) {
+            return out;
+        }
+        for (JsonNode tc : arr) {
+            String id = tc.path("id").asText(null);
+            String name = tc.path("function").path("name").asText(null);
+            String args = tc.path("function").path("arguments").asText("{}");
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            out.add(new ToolInvocation(id, name, args));
+        }
+        return out;
+    }
+
+    private boolean toolAllowed(TurnRequest req, String name) {
+        if (name == null || req.tools() == null) {
+            return false;
+        }
+        for (ToolSpec spec : req.tools()) {
+            if (name.equals(spec.name())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 构造 POST /v3/chat/submit_tool_outputs 请求（包内可见，供单测断言 payload） */
+    HttpRequest buildSubmitRequest(String convId, String chatId, boolean stream, List<ToolOutput> outputs) throws Exception {
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (ToolOutput o : outputs) {
+            items.add(Map.of("tool_call_id", o.toolCallId() == null ? "" : o.toolCallId(),
+                    "output", o.output() == null ? "" : o.output()));
+        }
+        String body = objectMapper.writeValueAsString(Map.of("stream", stream, "tool_outputs", items));
+        String url = baseUrl.replaceAll("/$", "") + "/v3/chat/submit_tool_outputs?conversation_id="
+                + URLEncoder.encode(convId == null ? "" : convId, StandardCharsets.UTF_8)
+                + "&chat_id=" + URLEncoder.encode(chatId == null ? "" : chatId, StandardCharsets.UTF_8);
+        return HttpRequest.newBuilder().uri(URI.create(url))
+                .header("Authorization", "Bearer " + pat)
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofMinutes(5))
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build();
+    }
+
+    private HttpResponse<InputStream> submitToolOutputs(String convId, String chatId, boolean stream,
+                                                        List<ToolOutput> outputs) throws Exception {
+        HttpRequest req = buildSubmitRequest(convId, chatId, stream, outputs);
+        HttpResponse<InputStream> resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+        log.info("[AI][Coze] 提交工具结果: chatId={}, outputs={}, status={}", chatId, outputs.size(), resp.statusCode());
+        return resp;
     }
 
     /** 日志预览截断：只留首尾各 60 字符，避免思考长文本刷屏 */

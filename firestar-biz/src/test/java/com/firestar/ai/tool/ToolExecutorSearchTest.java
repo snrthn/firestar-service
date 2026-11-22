@@ -12,6 +12,7 @@ import com.firestar.ai.spi.ToolResult;
 import com.firestar.ai.spi.ToolSpec;
 import com.firestar.dto.CustomerOptionVO;
 import com.firestar.dto.InvoiceVO;
+import com.firestar.dto.OrgVO;
 import com.firestar.dto.ReceivableVO;
 import com.firestar.dto.ReturnVO;
 import com.firestar.dto.WriteOffLedgerVO;
@@ -269,6 +270,36 @@ class ToolExecutorSearchTest {
         assertTrue(run("query_operation_logs", "{}").contentJson().contains("无权限"));
         assertTrue(run("query_process_defs", "{}").contentJson().contains("无权限"));
         assertTrue(run("query_file_download_logs", "{}").contentJson().contains("无权限"));
+    }
+
+    /** query_orgs：单字段 text 契约——组织树拍成缩进文本，扣子 schema 只需一个 string 字段 */
+    @Test
+    void query_orgs_returnsSingleTextField() throws Exception {
+        OrgVO child = new OrgVO();
+        child.setId(2L);
+        child.setOrgName("研发部");
+        child.setLeaderName("李四");
+        child.setStatus("ENABLED");
+
+        OrgVO root = new OrgVO();
+        root.setId(1L);
+        root.setOrgName("总部");
+        root.setLeaderName("杨虎宁");
+        root.setStatus("ENABLED");
+        root.setChildren(List.of(child));
+
+        when(orgService.listTree()).thenReturn(List.of(root));
+
+        ToolResult result = runAsAdmin("query_orgs", "{}");
+        assertFalse(result.isError(), "管理员执行 query_orgs 不该报错");
+        JsonNode node = objectMapper.readTree(result.contentJson());
+        assertTrue(node.has("text"), "必须是单字段 text 契约");
+        assertEquals(1, node.size(), "只允许 text 一个字段，杜绝嵌套结构漂移");
+        String text = node.get("text").asText();
+        assertTrue(text.contains("总部"), "文本须含部门名");
+        assertTrue(text.contains("研发部"), "文本须含子部门名");
+        assertTrue(text.contains("杨虎宁") && text.contains("李四"), "文本须含负责人姓名");
+        assertTrue(text.contains("1.1"), "文本须体现层级编号");
     }
 
     private JsonNode readArray(String json) {

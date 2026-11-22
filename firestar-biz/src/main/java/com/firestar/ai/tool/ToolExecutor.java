@@ -14,6 +14,7 @@ import com.firestar.ai.spi.ToolCall;
 import com.firestar.ai.spi.ToolResult;
 import com.firestar.ai.spi.ToolSpec;
 import com.firestar.config.JwtAuthenticationFilter;
+import com.firestar.dto.OrgVO;
 import com.firestar.dto.StatsQuery;
 import com.firestar.service.FileService;
 import com.firestar.service.InvoiceService;
@@ -41,7 +42,9 @@ import java.time.LocalDateTime;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -58,7 +61,7 @@ import java.util.Set;
  * 不碰任何裸 @RequestParam 过滤的直查端点，杜绝越权爬数。</p>
  */
 @Service
-public class ToolExecutor {
+public class ToolExecutor implements com.firestar.ai.spi.ToolExecutionPort {
 
     private final ProjectService projectService;
     private final ShipmentService shipmentService;
@@ -107,6 +110,7 @@ public class ToolExecutor {
         this.fileService = fileService;
     }
 
+    @Override
     public ToolResult execute(ToolCall call, String username, boolean isAdmin) {
         ToolSpec spec = registry.get(call.name());
         if (spec == null) {
@@ -253,7 +257,10 @@ public class ToolExecutor {
                     yield json(toKnowledgeResult(allowed));
                 }
                 // ===== 组织 / 人员 / 日志 / 流程 / 文件（路线 2 新增；权限已在 execute 开头按 requiredPerm 统一校验）=====
-                case "query_orgs" -> json(orgService.listTree());
+                // 单字段 text 契约：组织树拍成缩进文本，扣子端插件输出参数只需配一个 string 字段；
+                // OrgVO 内部字段增减/改名不再波及扣子 schema（避免双份手工 schema 漂移）。
+                // 返回对象而非裸文本：submit_tool_outputs.output 必须是 JSON 对象，扣子才能按 schema 提字段。
+                case "query_orgs" -> json(Map.of("text", formatOrgTree(orgService.listTree())));
                 case "query_users" -> {
                     int pn = intArg(args, "pageNum", 1);
                     int ps = Math.min(intArg(args, "pageSize", 20), 100);
@@ -324,6 +331,42 @@ public class ToolExecutor {
 
     private String json(Object o) throws Exception {
         return objectMapper.writeValueAsString(o);
+    }
+
+    /**
+     * 组织架构树 → 人类可读的缩进文本，作为 query_orgs 的 text 字段值。
+     * 目的：把「扣子输出参数 schema」收敛到单一 string 字段，OrgVO 字段演变不再需要同步改扣子。
+     * 保留信息：层级（缩进 + 编号）、部门名、部门 ID、负责人姓名、停用标记。
+     */
+    private String formatOrgTree(List<OrgVO> roots) {
+        if (roots == null || roots.isEmpty()) {
+            return "（当前无组织架构数据）";
+        }
+        StringBuilder sb = new StringBuilder();
+        appendOrgNodes(sb, roots, "", 0);
+        return sb.toString();
+    }
+
+    /** 递归拼节点：depth 决定缩进层数，numberPath 形如 1.2.3。 */
+    private void appendOrgNodes(StringBuilder sb, List<OrgVO> nodes, String numberPath, int depth) {
+        if (nodes == null || nodes.isEmpty()) {
+            return;
+        }
+        String indent = "  ".repeat(depth);
+        int idx = 1;
+        for (OrgVO n : nodes) {
+            String num = numberPath.isEmpty() ? String.valueOf(idx) : numberPath + "." + idx;
+            String name = n.getOrgName() == null ? "(未命名部门)" : n.getOrgName();
+            String leader = n.getLeaderName() == null || n.getLeaderName().isBlank()
+                    ? "无" : n.getLeaderName();
+            String disabled = "DISABLED".equalsIgnoreCase(n.getStatus()) ? "（已停用）" : "";
+            sb.append(indent).append(num).append(". ").append(name)
+                    .append("（ID:").append(n.getId() == null ? "-" : n.getId())
+                    .append("，负责人:").append(leader).append("）")
+                    .append(disabled).append("\n");
+            appendOrgNodes(sb, n.getChildren(), num, depth + 1);
+            idx++;
+        }
     }
 
     /** 从工具入参构造 StatsQuery（L2 看板解读）。过滤条件缺省即全局聚合，与 StatsController 语义一致。 */
