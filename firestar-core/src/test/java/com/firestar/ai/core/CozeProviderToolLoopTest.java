@@ -110,7 +110,9 @@ class CozeProviderToolLoopTest {
         assertTrue(submit.path("stream").asBoolean(false));
         JsonNode out = submit.path("tool_outputs").path(0);
         assertEquals("tc-1", out.path("tool_call_id").asText());
-        assertEquals("{\"负责人\":\"杨虎宁\"}", out.path("output").asText());
+        // 统一 text 契约：原始结果被包成 {"text": ...}，扣子侧只需配一个 text 字段
+        JsonNode outputNode = mapper.readTree(out.path("output").asText());
+        assertEquals("{\"负责人\":\"杨虎宁\"}", outputNode.path("text").asText());
 
         List<ChatChunk> tokens = chunks.stream().filter(c -> "token".equals(c.type())).toList();
         assertEquals(1, tokens.size());
@@ -138,7 +140,37 @@ class CozeProviderToolLoopTest {
         assertTrue(executed.isEmpty(), "白名单外工具不得执行");
         assertEquals(1, submits.size());
         assertTrue(submits.get(0).path("tool_outputs").path(0).path("output").asText().contains("拒绝执行"));
+        assertEquals("text", mapper.readTree(submits.get(0).path("tool_outputs").path(0).path("output").asText()).fieldNames().next());
         assertEquals(1, chunks.stream().filter(c -> "done".equals(c.type())).count());
+    }
+
+    @Test
+    @DisplayName("submit 输出统一 text 契约：对象/数组/纯文本都包成单字段 text")
+    void wrapOutputIntoSingleTextField() throws Exception {
+        // 普通对象 → 包成 {"text": <原对象字符串>}
+        JsonNode obj = mapper.readTree(CozeProvider.wrapToolOutputForCoze("{\"id\":1,\"name\":\"研发部\"}", mapper));
+        assertEquals(1, obj.size());
+        assertEquals("{\"id\":1,\"name\":\"研发部\"}", obj.path("text").asText());
+
+        // 数组结果 → 包成 text（扣子 schema 仍是单字段，不因根类型变化而瞎）
+        JsonNode arr = mapper.readTree(CozeProvider.wrapToolOutputForCoze("[{\"id\":1},{\"id\":2}]", mapper));
+        assertEquals(1, arr.size());
+        assertEquals("[{\"id\":1},{\"id\":2}]", arr.path("text").asText());
+
+        // 非 JSON 纯文本 → 包成 text
+        JsonNode txt = mapper.readTree(CozeProvider.wrapToolOutputForCoze("负责人是杨虎宁", mapper));
+        assertEquals("负责人是杨虎宁", txt.path("text").asText());
+
+        // null/空 → 安全兜底
+        JsonNode nil = mapper.readTree(CozeProvider.wrapToolOutputForCoze(null, mapper));
+        assertEquals("", nil.path("text").asText());
+    }
+
+    @Test
+    @DisplayName("已是 text 契约的结果原样透传，不双重包装（query_orgs 场景）")
+    void wrapOutputNoDoubleWrap() throws Exception {
+        String alreadyText = "{\"text\":\"1. 火星总部\\n  1.1 研发中心\"}";
+        assertEquals(alreadyText, CozeProvider.wrapToolOutputForCoze(alreadyText, mapper));
     }
 
     @Test

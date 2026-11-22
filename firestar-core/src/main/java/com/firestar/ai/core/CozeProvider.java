@@ -487,12 +487,35 @@ public class CozeProvider implements ChatProvider {
         return false;
     }
 
+    /**
+     * 端插件 submit 输出统一成单字段 text 契约（包内可见供单测）。
+     * 扣子按输出参数 schema 取值，schema 配错的工具结果会被当空丢弃——这是此前「只有组织架构能查」的根因。
+     * 统一包成 {"text": ...} 后，扣子侧所有工具的输出参数只需配同一个 text:string 字段，
+     * DTO 字段增删改不再波及扣子 schema。已是该结构的（query_orgs）原样透传，避免双重包装。
+     */
+    static String wrapToolOutputForCoze(String raw, ObjectMapper mapper) {
+        String s = raw == null ? "" : raw;
+        try {
+            JsonNode node = mapper.readTree(s);
+            if (node.isObject() && node.size() == 1 && node.has("text")) {
+                return s; // 已是单字段 text 契约，原样透传
+            }
+        } catch (Exception ignored) {
+            // 非 JSON 纯文本：走下方包装
+        }
+        try {
+            return mapper.writeValueAsString(java.util.Map.of("text", s));
+        } catch (Exception e) {
+            return "{\"text\":\"\"}";
+        }
+    }
+
     /** 构造 POST /v3/chat/submit_tool_outputs 请求（包内可见，供单测断言 payload） */
     HttpRequest buildSubmitRequest(String convId, String chatId, boolean stream, List<ToolOutput> outputs) throws Exception {
         List<Map<String, Object>> items = new ArrayList<>();
         for (ToolOutput o : outputs) {
             items.add(Map.of("tool_call_id", o.toolCallId() == null ? "" : o.toolCallId(),
-                    "output", o.output() == null ? "" : o.output()));
+                    "output", wrapToolOutputForCoze(o.output(), objectMapper)));
         }
         String body = objectMapper.writeValueAsString(Map.of("stream", stream, "tool_outputs", items));
         String url = baseUrl.replaceAll("/$", "") + "/v3/chat/submit_tool_outputs?conversation_id="
