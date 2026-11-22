@@ -14,6 +14,9 @@ public final class ImportContext {
 
     private static final ThreadLocal<Boolean> ACTIVE = ThreadLocal.withInitial(() -> false);
 
+    /** 当前导入批次的操作人 ID（供 Handler 调用的既有 Service 补审计字段用） */
+    private static final ThreadLocal<Long> OPERATOR = new ThreadLocal<>();
+
     private ImportContext() {
     }
 
@@ -27,8 +30,19 @@ public final class ImportContext {
         return Boolean.TRUE.equals(ACTIVE.get());
     }
 
+    /** 记录本批次导入人（runPipeline 拿到批次后调用） */
+    public static void setOperatorId(Long operatorId) {
+        OPERATOR.set(operatorId);
+    }
+
+    /** 当前批次导入人；非导入线程返回 null */
+    public static Long getOperatorId() {
+        return OPERATOR.get();
+    }
+
     /** 清除标记（必须在 finally 中调用） */
     public static void clear() {
         ACTIVE.remove();
+        OPERATOR.remove();
     }
 }

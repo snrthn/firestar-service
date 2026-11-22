@@ -203,6 +203,7 @@ public class ImportServiceImpl implements ImportService {
         ImportContext.enter();
         try {
             ImportBatch b = batchMapper.selectById(batchId);
+            ImportContext.setOperatorId(b == null ? null : b.getOperatorId());
             ImportHandler handler = requireHandler(b.getImportKey());
 
             // ---- PARSING ----

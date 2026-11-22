@@ -9,9 +9,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.HandlerMapping;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -24,7 +26,8 @@ import java.util.stream.Collectors;
  *
  * 规则：
  *   1. 白名单路径（同 SecurityConfig）直接放行，不做权限校验；
- *   2. 解析 handler 上的 @RequirePerm（方法优先于类）；无注解 → 视为公开接口，放行；
+ *   2. 解析 handler 上的 @RequirePerm（方法优先于类）；支持 {pathVar} 占位符，
+ *      用 URI 模板变量实时替换（如 import:{key} → import:invoice_opening）；无注解 → 放行；
  *   3. ROLE_ADMIN 超级管理员放行（保险网，ROLE_ADMIN 本就拥有全部权限点）；
  *   4. 所需权限点任一不在 authorities 中 → 返回 HTTP 200 + Result{code=403, message}，
  *      与项目「业务拒绝 HTTP 仍是 200、看 body.code」约定一致，前端响应拦截会弹出 message。
@@ -67,7 +70,7 @@ public class PermissionInterceptor implements HandlerInterceptor {
         }
 
         // 解析所需权限点
-        String[] required = resolveRequiredPerms(handler);
+        String[] required = resolveRequiredPerms(handler, request);
         if (required == null || required.length == 0) {
             // 未标注 @RequirePerm → 公开接口（只需 JWT，SecurityConfig 已保证认证）
             return true;
@@ -102,19 +105,34 @@ public class PermissionInterceptor implements HandlerInterceptor {
         return false;
     }
 
-    private String[] resolveRequiredPerms(Object handler) {
+    private String[] resolveRequiredPerms(Object handler, HttpServletRequest request) {
         if (!(handler instanceof HandlerMethod hm)) {
             return null;
         }
-        RequirePerm methodAnn = hm.getMethod().getAnnotation(RequirePerm.class);
-        if (methodAnn != null) {
-            return methodAnn.value();
+        RequirePerm ann = hm.getMethod().getAnnotation(RequirePerm.class);
+        if (ann == null) {
+            ann = hm.getMethod().getDeclaringClass().getAnnotation(RequirePerm.class);
         }
-        RequirePerm classAnn = hm.getMethod().getDeclaringClass().getAnnotation(RequirePerm.class);
-        if (classAnn != null) {
-            return classAnn.value();
+        if (ann == null) {
+            return null;
         }
-        return null;
+        String[] values = ann.value();
+
+        // 路径变量替换：@RequirePerm("import:{key}") + /import/{key}/submit → import:invoice_opening
+        // 变量由 HandlerMapping 在映射阶段写入 request attribute，此处尚未移除。
+        Object rawVars = request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        if (!(rawVars instanceof Map<?, ?> vars) || vars.isEmpty()) {
+            return values;
+        }
+        String[] resolved = new String[values.length];
+        for (int i = 0; i < values.length; i++) {
+            String v = values[i];
+            for (Map.Entry<?, ?> e : vars.entrySet()) {
+                v = v.replace("{" + e.getKey() + "}", String.valueOf(e.getValue()));
+            }
+            resolved[i] = v;
+        }
+        return resolved;
     }
 
     private boolean isWhitelisted(String path) {

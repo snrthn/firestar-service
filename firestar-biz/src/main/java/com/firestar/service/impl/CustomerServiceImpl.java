@@ -1,6 +1,7 @@
 package com.firestar.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.firestar.common.ImportContext;
 import com.firestar.common.MasterDataNoUtil;
 import com.firestar.dto.CustomerOptionVO;
 import com.firestar.entity.Customer;
@@ -76,6 +77,7 @@ public class CustomerServiceImpl implements CustomerService {
         }
         Customer created = new Customer();
         created.setCustomerName(cleanName);
+        created.setCreatedBy(ImportContext.getOperatorId());
         created.setStatus("ENABLED");
         created.setRemark(source == null ? "导入建档" : source);
         for (Map.Entry<String, String> e : fields.entrySet()) {

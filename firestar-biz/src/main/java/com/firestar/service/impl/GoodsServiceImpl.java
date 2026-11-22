@@ -1,6 +1,7 @@
 package com.firestar.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.firestar.common.ImportContext;
 import com.firestar.common.MasterDataNoUtil;
 import com.firestar.entity.Goods;
 import com.firestar.mapper.GoodsMapper;
@@ -45,6 +46,7 @@ public class GoodsServiceImpl implements GoodsService {
         }
         Goods created = new Goods();
         created.setGoodsName(cleanName);
+        created.setCreatedBy(ImportContext.getOperatorId());
         created.setStatus("ENABLED");
         created.setRemark(source == null ? "导入建档" : source);
         for (Map.Entry<String, String> e : fields.entrySet()) {

@@ -65,10 +65,12 @@ public class ImportController {
      * @param parentBatchNo  修正重传时指向原失败批次号（可空）
      */
     @PostMapping("/{key}/submit")
+    @RequirePerm("import:{key}")
     public Result<Map<String, Object>> submit(@PathVariable String key,
                                               @RequestParam("file") MultipartFile file,
                                               @RequestParam(required = false) String parentBatchNo) {
-        // 类型级权限：import:{key}（类级 import:view 已过，这里再收一层）
+        // 类型级权限 import:{key} 由 PermissionInterceptor 解析 @RequirePerm 的路径变量校验；
+        // 这里只保留 key 存在性校验（非法 key 给友好提示，而不是 403）
         importService.requireHandler(key);
         Long operatorId = DataScopeHelper.currentUserId(userMapper);
         FileVO vo = fileService.upload(file, "import", null, null, null, false);

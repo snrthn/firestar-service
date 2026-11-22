@@ -83,14 +83,14 @@ public final class ExcelReadUtil {
             // title → 列下标
             Map<String, Integer> titleToIdx = new LinkedHashMap<>();
             for (int i = 0; i < header.getLastCellNum(); i++) {
-                String t = cellText(header.getCell(i), fmt).trim();
+                String t = normalizeTitle(cellText(header.getCell(i), fmt));
                 if (!t.isEmpty()) {
                     titleToIdx.putIfAbsent(t, i);
                 }
             }
             // 校验列定义的表头都存在
             for (ImportColumnDef col : columns) {
-                if (!titleToIdx.containsKey(col.getTitle())) {
+                if (!titleToIdx.containsKey(normalizeTitle(col.getTitle()))) {
                     throw new IllegalArgumentException("Excel 缺少必需表头：「" + col.getTitle() + "」");
                 }
             }
@@ -111,7 +111,7 @@ public final class ExcelReadUtil {
                 }
                 Map<String, String> record = new HashMap<>();
                 for (ImportColumnDef col : columns) {
-                    Integer idx = titleToIdx.get(col.getTitle());
+                    Integer idx = titleToIdx.get(normalizeTitle(col.getTitle()));
                     record.put(col.getField(), idx == null ? "" : cellText(row.getCell(idx), fmt).trim());
                 }
                 // 隐藏列：只取首行的 parentBatchNo（同一修正文件所有行都应相同）
@@ -128,6 +128,16 @@ public final class ExcelReadUtil {
             }
         }
         return result;
+    }
+
+    /**
+     * 表头归一化：模板对必填列渲染为「标题 *」，解析时去掉星号标记再匹配，
+     * 与 ExcelTemplateUtil.findHeaderIndex 的规则保持一致。
+     * 用户手工去掉星号的文件同样能识别。
+     */
+    private static String normalizeTitle(String t) {
+        if (t == null) return "";
+        return t.replace(" *", "").replace("＊", "").trim();
     }
 
     /** 单元格文本（数值/日期/布尔统一走 DataFormatter 保真） */
