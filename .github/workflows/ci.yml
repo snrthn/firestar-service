@@ -1,0 +1,270 @@
+# =====================================================================
+# firestar-service CI/CD（GitHub Actions 版）
+#
+# 定位：云效流水线「火星财务-服务端」(5315759) 的等价翻译，供接手者在
+#       GitHub 侧复用同一套质量门禁。对应关系（云效 → 本文件）：
+#
+#   云效 stage/job                        → GitHub job
+#   ------------------------------------------------------------
+#   代码扫描与单元测试 (mvn 纯单测)        → unit-test
+#   Java 构建 (clean package + staging)    → build
+#   集成测试 it_source_job (git archive)   → 不需要：GitHub runner
+#                                            checkout 即干净源码，
+#                                            且自带 MySQL service 容器
+#   集成测试 it_run_job (ECS firestar_test)→ integration-test
+#   主机组部署 (VMDeploy + deploy.sh)      → deploy
+#   运维启停 (ops_stage)                   → 不迁移：直接 ECS 上
+#                                            bash bin/stop.sh / start.sh
+#
+# 门禁语义对齐：
+#   - 云效 condition: succeed() 串行门禁     → GitHub needs 链
+#   - 云效 RUN_IT=false 时 it_run 秒退 SUCCESS → integration-test 被 skip，
+#     deploy 的 if 用 always() + needs 判断显式放行 skip（与云效语义一致：
+#     单测/构建真失败时 deploy 仍会被拦，只有 IT 被显式跳过才放行）
+#   - 云效 FirstBatchPause（首批暂停人工确认）→ environment: production
+#     需在仓库 Settings → Environments → production 配置 Required reviewers
+#
+# 接手者必配（仓库 Settings → Secrets and variables → Actions）：
+#   IT_DB_PASSWORD      集成测试 MySQL root 密码（service 容器自建，随意新设）
+#   ECS_SSH_HOST        生产 ECS 地址
+#   ECS_SSH_USER        SSH 用户（云效 executeUser=root）
+#   ECS_SSH_KEY         SSH 私钥（对应用户在 ECS authorized_keys 中的公钥）
+#   ECS_SSH_PORT        SSH 端口（默认 22，可不配，job 里有默认值）
+#
+# 与云效的差异说明：
+#   - 云效 IT 在生产 ECS 上复用 3306 + firestar_test（受限于构建容器无 MySQL）；
+#     GitHub runner 可以起 MySQL service 容器，隔离性反而更好——
+#     测试库由 scripts/reset_test_db.sql DROP+CREATE，Flyway 全量重放，
+#     全程不接触任何真实环境。
+#   - 云效 push 自动触发 + RUN_IT 手动开关；这里 push 只跑单测+构建（快速反馈），
+#     集成测试与部署走 workflow_dispatch 手动触发（等价手动 RUN_IT=true）。
+#   - 云效 JavaP3CScan 规约扫描未迁移；如需等价能力可加
+#     pmd/p3c 或 spotbugs 步骤，不阻塞当前门禁。
+# =====================================================================
+name: firestar-service CI/CD
+
+on:
+  push:
+    branches: [main]
+    # 等价云效 sources.pathFilter：docs/README/.env 变更不触发
+    paths:
+      - 'firestar-core/**'
+      - 'firestar-biz/**'
+      - 'firestar-server/**'
+      - 'bin/**'
+      - 'scripts/**'
+      - 'pom.xml'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'firestar-core/**'
+      - 'firestar-biz/**'
+      - 'firestar-server/**'
+      - 'bin/**'
+      - 'scripts/**'
+      - 'pom.xml'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+    inputs:
+      run_it:
+        description: '执行全量集成测试（约 175 用例，等价云效 RUN_IT=true）'
+        type: boolean
+        default: true
+      deploy:
+        description: '门禁全绿后部署生产（还需 environment 审批）'
+        type: boolean
+        default: false
+
+# 同一分支只保留最新一轮，避免重复触发堆积
+concurrency:
+  group: firestar-service-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  # ------------------------------------------------------------
+  # 1) 纯单元测试（等价云效 test_job「代码扫描与单元测试」）
+  #    测试类清单与云效 run 块完全一致；-Dtest 作用于多模块 reactor，
+  #    必须带 failIfNoSpecifiedTests=false（core/biz 零匹配不判失败）。
+  # ------------------------------------------------------------
+  unit-test:
+    name: 单元测试（无需数据库）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Maven 单元测试
+        run: |
+          set -e
+          mvn -B test \
+            -Dtest='SmokeTest,AuthControllerStreamTest,AuditDictConsistencyTest,GlobalExceptionHandlerTest,LoginRateLimitFilterTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dmaven.test.failure.ignore=false
+
+      - name: 上传 surefire 报告（失败排查用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------
+  # 2) 构建打包（等价云效 build_job）
+  #    staging 结构 = jar + bin/，与云效上传的制品完全一致，
+  #    deploy 侧沿用云效同款解压命令（--strip-components=1）。
+  # ------------------------------------------------------------
+  build:
+    name: Java 构建打包
+    needs: unit-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: 打包并整理 staging
+        run: |
+          set -e
+          mvn -B clean package -DskipTests
+          rm -rf staging && mkdir -p staging
+          cp firestar-server/target/firestar-server-*.jar staging/
+          cp -r bin staging/bin
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestar-service-${{ github.run_number }}
+          path: staging/
+          retention-days: 7
+
+  # ------------------------------------------------------------
+  # 3) 集成测试（等价云效 it_run_job，RUN_IT 门禁）
+  #    仅 workflow_dispatch 且勾选 run_it 时执行；push 触发时整体 skip
+  #    （等价 RUN_IT=false 秒退 SUCCESS，不会拦住 deploy——见 deploy 的 if）。
+  #    MySQL 8 service 容器替代云效方案里的「复用生产 3306」：
+  #    runner 本机回环 + 独立容器，物理隔离，不存在误写生产库的可能。
+  # ------------------------------------------------------------
+  integration-test:
+    name: 集成测试（firestar_test，Flyway 全量重放）
+    needs: [unit-test, build]
+    if: github.event_name == 'workflow_dispatch' && inputs.run_it
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.IT_DB_PASSWORD || 'firestar_it_root' }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      # run-integration-tests.sh 的约定：凭据来自环境变量，绝不继承 DB_URL。
+      # TEST_DB_NAME 必须以 _test 结尾（脚本三重断言，防误删 dev/prod 库）。
+      DB_PASSWORD: ${{ secrets.IT_DB_PASSWORD || 'firestar_it_root' }}
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_PORT: 3306
+      TEST_DB_NAME: firestar_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      # ubuntu-latest 预装 mysql client（scripts/reset_test_db.sql 需要）
+      - name: 预检工具链
+        run: |
+          set -e
+          mysql --version
+          java -version
+
+      - name: 全量集成测试（重建空库 → Flyway 全量重放 → mvn test）
+        run: |
+          set -e
+          bash scripts/run-integration-tests.sh
+
+      - name: 上传集成测试日志（失败排查用）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: it-logs-${{ github.run_number }}
+          path: logs/it.log
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------
+  # 4) 生产部署（等价云效 deploy_job）
+  #    触发条件三重门禁：手动 dispatch + 勾选 deploy + 门禁全绿
+  #    （IT 被 skip 视为放行，与云效 RUN_IT=false 语义一致；
+  #     单测/构建/IT 真失败时 always() 也会被 needs 结果拦住）。
+  #    environment: production → 需在 Settings 配置 Required reviewers，
+  #    部署前 GitHub 会弹出人工审批，等价云效 FirstBatchPause。
+  #    服务器侧命令与云效 VMDeploy run 块逐字一致。
+  # ------------------------------------------------------------
+  deploy:
+    name: 部署生产 ECS
+    needs: [build, integration-test]
+    if: >-
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy == true &&
+      needs.build.result == 'success' &&
+      (needs.integration-test.result == 'success' || needs.integration-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: firestar-service-${{ github.run_number }}
+          path: staging/
+
+      - name: 打部署包（与云效制品同构：顶层 staging/ 目录）
+        run: tar czf package.tgz staging/
+
+      - name: 上传部署包到 ECS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_SSH_HOST }}
+          username: ${{ secrets.ECS_SSH_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_SSH_PORT || 22 }}
+          source: package.tgz
+          target: /home/admin/be-firestar/
+
+      - name: 解压并重启服务（命令与云效 VMDeploy 一致）
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ECS_SSH_HOST }}
+          username: ${{ secrets.ECS_SSH_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            mkdir -p /usr/local/server/java/firestar
+            tar zxvf /home/admin/be-firestar/package.tgz -C /usr/local/server/java/firestar --strip-components=1
+            bash /usr/local/server/java/firestar/bin/deploy.sh
+            echo "===== 部署后 liveness 探活 ====="
+            sleep 5
+            curl -s -o /dev/null -w "liveness HTTP %{http_code}\n" \
+              http://127.0.0.1:2025/actuator/health/liveness
