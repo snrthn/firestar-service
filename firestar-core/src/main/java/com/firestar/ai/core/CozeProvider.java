@@ -346,7 +346,19 @@ public class CozeProvider implements ChatProvider {
                 if (!state.answerTokenEmitted && !state.fallbackUsed && state.reasoning.length() > 0) {
                     state.answerTokenEmitted = true;
                     state.fallbackUsed = true;
-                    onChunk.accept(ChatChunk.token(state.reasoning.toString()));
+                    String fallbackText = state.reasoning.toString();
+                    log.info("[AI][Coze] 全程无正文，reasoning 回退为正文（先过首句独白过滤）: chars={}, preview='{}'",
+                            fallbackText.length(), preview(fallbackText));
+                    // 2026-11-23 请求 f2f881c9 实锤：端插件第一轮流只有 reasoning（独白）没有
+                    // answer delta，轮次完成事件触发本回退时独白直接进了正文——delta 链路上的
+                    // 过滤器根本没参与。回退文本必须过同一个 AnswerPreambleFilter：
+                    // 独白句在 reasoning 通道已完整保留，正文不重复输出。
+                    if (state.preambleFilter == null) {
+                        state.preambleFilter = new AnswerPreambleFilter(
+                                safe -> onChunk.accept(ChatChunk.token(safe)));
+                    }
+                    state.preambleFilter.accept(fallbackText);
+                    state.preambleFilter.finish();
                 }
                 // 诊断日志：只在流的最终 done 事件打一次（completed 事件每条 message 各有一个）。
                 // 出问题时可直接对照——

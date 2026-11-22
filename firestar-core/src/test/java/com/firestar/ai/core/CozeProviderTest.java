@@ -85,6 +85,36 @@ class CozeProviderTest {
     }
 
     @Test
+    @DisplayName("端插件首轮流只有 reasoning：fallback 回退正文时独白被过滤（请求 f2f881c9 根因修复）")
+    void fallbackReasoningToAnswerFiltersPreamble() throws Exception {
+        CozeProvider p = newProvider();
+        CozeProvider.StreamState state = new CozeProvider.StreamState();
+        List<ChatChunk> out = new ArrayList<>();
+        // 第一轮流（工具调用前）：只有 reasoning 独白，没有任何 answer delta
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"\",\"reasoning_content\":\"用户现在问当前待开票金额是多少，为获取待开票金额，我将调用开票统计工具，无需额外参数即可获取本月相关数据。\",\"role\":\"assistant\"}",
+                out::add, state);
+        // 第一轮流结束事件触发 reasoning→正文回退：独白必须被过滤器拦下
+        p.dispatch("conversation.chat.completed", "{\"code\":0}", out::add, state);
+        List<ChatChunk> tokensAfterFallback = out.stream().filter(c -> "token".equals(c.type())).toList();
+        assertTrue(tokensAfterFallback.isEmpty(),
+                "回退文本只有独白一句，过滤后正文应为空，实际: " + tokensAfterFallback);
+        assertTrue(state.answerTokenEmitted, "回退已发生，标记正文已产出");
+        assertTrue(state.fallbackUsed);
+        // 端插件续流：正式回答正常透传
+        p.dispatch("conversation.message.delta",
+                "{\"type\":\"answer\",\"content\":\"当前待开票金额为 618.0元。\",\"role\":\"assistant\"}",
+                out::add, state);
+        List<ChatChunk> tokens = out.stream().filter(c -> "token".equals(c.type())).toList();
+        assertEquals(1, tokens.size());
+        assertEquals("当前待开票金额为 618.0元。", tokens.get(0).text());
+        // reasoning 里的独白保留（用户展开「已深度思考」能看到）
+        List<ChatChunk> reasoning = out.stream().filter(c -> "reasoning".equals(c.type())).toList();
+        assertEquals(1, reasoning.size());
+        assertTrue(reasoning.get(0).text().contains("我将调用开票统计工具"));
+    }
+
+    @Test
     @DisplayName("深度思考增量走 reasoning 独立通道，不混进正文（自言自语根因修复）")
     void reasoningContentStreamsAsReasoningChunk() throws Exception {
         CozeProvider p = newProvider();

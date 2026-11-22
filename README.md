@@ -45,7 +45,7 @@ firestar-service/                       # git 仓库根，同时是 Maven reacto
 │   ├── pom.xml                         # 聚合 core + biz，产出唯一可执行 jar
 │   └── src/
 │       ├── main/resources/             # application.properties + application-{dev,test,pre,prod}.properties
-│       └── test/java/com/firestar/     # 23 个测试类（绝大多数 @SpringBootTest 集成测试需可达 it MySQL；standalone MockMvc 切片测试不连库）
+│       └── test/java/com/firestar/     # 23 个测试类（绝大多数 @SpringBootTest 集成测试需可达 it MySQL；standalone MockMvc 切片测试不连库）；全仓测试规模：core 45 + biz 11 + server 23 = 79 个测试类（截至 2026-11-23）
 ├── bin/                                # start.sh / stop.sh / deploy.sh（跨平台运维脚本）
 ├── docs/                               # 开发规范.md / 底座化指南.md / 云效率流水线配置.yaml / git-workflow.md
 ├── scripts/                            # check_module_boundaries.py（CI 守边界）/ reset_flyway.sql（dev 清历史）
@@ -217,5 +217,6 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 - **AI 助手增强**：Anthropic 供应商模板、模型配置排序、N-13 直连模式工具审计补齐、思考流存储、会话历史对接、记忆与多轮工具查询、回复内容支持操作、DSML 异常修复、Excel 导出列宽 / 格式调优。
 - **历史数据导入**：客户 / 货物导入模块（V219 导入权限），导出功能调优。
 - **系统重置增强**：新增鉴权重置状态端点 `GET /system/reset/status`、重置执行管理员密码校验、验证码防爆破（IP + 5 次上限 + 一次性）、`lightReset` 补 `ai_%` / `FLW_RU_%` 清理、`fullReset` OSS 键收集与流程定义重部署。
-- **测试与 CI**：server 测试类增至 23 个（新增 `DataScopeIsolationTest` 数据越权 4 例、`InitResetFlowTest`、`LoginBruteForceTest` 等）；云效 `-Dtest` 白名单扩到 8 类；`EXPECTED_DICT_DATA_COUNT` 基线 148 → 179（V206~V212 字典系列）。
+- **测试与 CI**：server 测试类增至 23 个（新增 `DataScopeIsolationTest` 数据越权 4 例、`InitResetFlowTest`、`LoginBruteForceTest` 等）；三模块合计 79 个测试类（core 45 / biz 11 / server 23），覆盖 KB 检索（RrfFusion / EsHybridRetriever / KbVectorizeListener 出域）、DSML、工具循环护栏（ToolLoopPolicy）、供应商（Anthropic / Coze 内联循环）等新能力；云效 `-Dtest` 白名单扩到 8 类；`EXPECTED_DICT_DATA_COUNT` 基线 148 → 179（V206~V212 字典系列）。
+- **测试追加（2026-11-23）**：`CozeProviderTest` 新增 fallbackReasoning→Answer 前导语过滤用例（配套 `CozeProvider` 适配 `AnswerPreambleFilter`，工作区待提交）。
 - **流水线**：加装集成测试步、构建部署脚本优化、环境配置文件梳理（`.env` 化，凭据不进版本库）。
