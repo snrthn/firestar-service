@@ -14,7 +14,7 @@
 
     <groupId>com.firestar</groupId>
     <artifactId>firestar-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>firestar-parent</name>
     <description>火星财务 - 多模块父工程（core 平台内核 / biz 火星业务 / server 应用入口）</description>
