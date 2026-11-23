@@ -20,7 +20,7 @@
 - **Spring Security 6** —— 安全框架（JWT + RBAC 双线权限模型，已落地）
 - **Flyway 10** —— 数据库迁移（core / biz 双 location）
 - **SpringDoc 2.6** —— 接口文档（OpenAPI3）
-- **MySQL 8** / **Redis 7** —— 主库 / 缓存（技术栈共享基础设施）
+- **MySQL 5.7.22** —— 主库（线上实际部署版本，`V207__kb_tables_menu_and_perm.sql` 注释显式标注；无 Redis 中间件，登录防爆破状态、JWT jti 黑名单全落 MySQL，省运维）
 - **Hutool 5.8** —— 工具库
 
 > 参考项目 be-media-man-system 实际跑的是 Spring Boot 2.7.18；本仓库按技术栈文档升级到 3.3.x。
