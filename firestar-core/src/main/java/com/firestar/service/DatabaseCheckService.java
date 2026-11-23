@@ -60,7 +60,7 @@ public class DatabaseCheckService {
      *            V217 新增 ai_message_feedback（AI 回答赞踩），51→52。
      *            V218 新增 sys_import_batch（导入批次摘要表），52→53。
      */
-    public static final int EXPECTED_TABLE_COUNT = 53;
+    public static final int EXPECTED_TABLE_COUNT = 55;
 
     /**
      * 种子数据条数基线（与 readSeedData 一一对应）。

@@ -37,15 +37,15 @@ firestar-service/                       # git 仓库根，同时是 Maven reacto
 │   └── src/main/
 │       ├── java/com/firestar/          # 用户/角色/字典/菜单/权限/租户/AI/知识库/工作流/组织/日志/通知/认证/文件/初始化重置
 │       └── resources/db/migration/core/   # 83 个平台侧 Flyway 迁移（含 V200+ 知识库/登录防爆破系列）
-├── firestar-biz/                       # 火星业务：119 个 .java
+├── firestar-biz/                       # 火星业务：130 个 .java
 │   └── src/main/
 │       ├── java/com/firestar/          # 项目/发货/退货/应收/发票/收款/核销/客户/物品/协议/导入 + 业务工具
-│       └── resources/db/migration/biz/    # 44 个业务侧 Flyway 迁移（含 V200 起新增，V219 导入权限）
+│       └── resources/db/migration/biz/    # 45 个业务侧 Flyway 迁移（含 V200 起新增，V220 合同变更）
 ├── firestar-server/                    # 应用入口：1 个 .java（FirestarApplication）
 │   ├── pom.xml                         # 聚合 core + biz，产出唯一可执行 jar
 │   └── src/
 │       ├── main/resources/             # application.properties + application-{dev,test,pre,prod}.properties
-│       └── test/java/com/firestar/     # 23 个测试类（绝大多数 @SpringBootTest 集成测试需可达 it MySQL；standalone MockMvc 切片测试不连库）；全仓测试规模：core 45 + biz 11 + server 23 = 79 个测试类（截至 2026-11-23）
+│       └── test/java/com/firestar/     # 23 个测试类（绝大多数 @SpringBootTest 集成测试需可达 it MySQL；standalone MockMvc 切片测试不连库）；全仓测试规模：core 45 + biz 12 + server 23 = 80 个测试类（截至 2026-11-24）
 ├── bin/                                # start.sh / stop.sh / deploy.sh（跨平台运维脚本）
 ├── docs/                               # 开发规范.md / 底座化指南.md / 云效率流水线配置.yaml / git-workflow.md
 ├── scripts/                            # check_module_boundaries.py（CI 守边界）/ reset_flyway.sql（dev 清历史）
@@ -65,7 +65,7 @@ spring.flyway.locations=classpath:db/migration/core,classpath:db/migration/biz
 ```
 
 - `firestar-core/src/main/resources/db/migration/core`（83 个，含 V200+ 登录防爆破 / 知识库系列）
-- `firestar-biz/src/main/resources/db/migration/biz`（44 个，含 V200 起新增，V219 导入权限）
+- `firestar-biz/src/main/resources/db/migration/biz`（45 个，含 V200 起新增，V219 导入权限 / V220 合同变更）
 - Flyway 按版本号全局排序，与所在目录无关；新增业务迁移用 **V200+**，避免与历史版本冲突。
 - `scripts/reset_flyway.sql` 仅 dev/test 用于清 `flyway_schema_history` 重跑全量，**prod 严禁**。
 - ⚠️ **迁移脚本禁止硬编码库名**：`information_schema` 探测一律用 `DATABASE()`。历史 `V27` / `V28` / `V75` 写死了 `table_schema = 'firestar'`，导致任何库名不叫 `firestar` 的新环境从空库初始化必然挂在 V75。已应用迁移不可改（checksum 铁律），**新迁移一律用 `DATABASE()`**。
@@ -87,7 +87,7 @@ bash bin/test.sh --help                         # 帮助
 `SPRING_PROFILES_ACTIVE` / JWT / AI_KEK / Coze 密钥 / OSS 凭据**均已无需手动注入**（15 个 `@SpringBootTest` 统一 `@ActiveProfiles("it")`，测试专用回退值都在 `application-it.properties`）。
 
 - 配置：`firestar-server/src/test/resources/application-it.properties`，只在 test classpath、不进生产 jar；15 个 `@SpringBootTest` 统一 `@ActiveProfiles("it")`。
-- schema + 种子由 Flyway 从空库全量重放自建（109 张表，与 dev 库一致），无需手工导 dump。
+- schema + 种子由 Flyway 从空库全量重放自建（111 张表，与 dev 库一致），无需手工导 dump。
 - 3 个测试专用补偿迁移（`src/test/resources/db/migration/it/V26.1` / `V27.1` / `V74.1`）补的是历史脚本硬编码库名跳过的 DDL，只在 it 的 `spring.flyway.locations` 里加载，生产四个 profile 零影响。
 - 期望值单一来源：`DatabaseCheckService` 的表数 / 种子数常量为 public，测试直接引用；`EntityMappingConsistencyTest` 的表清单按 `BUSINESS_TABLE_PREFIXES` 从 JDBC 元数据动态取，不再维护第二份白名单。
 - 云效构建容器无 MySQL，CI 仍只跑纯单测（`-Dtest` 白名单 8 类：`SmokeTest` / `AuthControllerStreamTest` / `AuditDictConsistencyTest` / `DatabaseCheckSeedBaselineGuardTest` / `GlobalExceptionHandlerTest` / `LoginRateLimitFilterTest` / `InitStatusExposureTest` / `InitResetChallengeTest`）；集成测试在带 MySQL 的本地 / 自建 CI 环境跑。其中 `AuditDictConsistencyTest` 静态扫描 `@Auditable` 注解 ↔ `sys_dict_data` 字典的双向差集，枚举漏补字典即 fail，不连库。
@@ -220,3 +220,10 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 - **测试与 CI**：server 测试类增至 23 个（新增 `DataScopeIsolationTest` 数据越权 4 例、`InitResetFlowTest`、`LoginBruteForceTest` 等）；三模块合计 79 个测试类（core 45 / biz 11 / server 23），覆盖 KB 检索（RrfFusion / EsHybridRetriever / KbVectorizeListener 出域）、DSML、工具循环护栏（ToolLoopPolicy）、供应商（Anthropic / Coze 内联循环）等新能力；云效 `-Dtest` 白名单扩到 8 类；`EXPECTED_DICT_DATA_COUNT` 基线 148 → 179（V206~V212 字典系列）。
 - **测试追加（2026-11-23）**：`CozeProviderTest` 新增 fallbackReasoning→Answer 前导语过滤用例（配套 `CozeProvider` 适配 `AnswerPreambleFilter`，工作区待提交）。
 - **流水线**：加装集成测试步、构建部署脚本优化、环境配置文件梳理（`.env` 化，凭据不进版本库）。
+
+### 2026-11-23 ~ 11-24（合同变更单 V220）
+
+- **立项合同变更单**：新增 `fin_project_change` / `fin_project_change_item` 两张表 + 独立 `project_change` 审批流程（V220，业务表基线 53 → 55），保留合同金额手填弹性，但把「改金额 / 增减明细」收进两级审批的受控动作。窗口 A（无下游单据）自由改；窗口 B（已发货 / 应收 / 开票 / 收款）金额不得低于已开票 / 已收款，明细增量 diff 保护 `shippedQty`（已发行不可删、数量不可减）。审批回调按业务独立入口分发，不改立项 / 签约状态。
+- **单价必填**：立项 `create` / `update` 与变更明细统一校验单价 > 0（前后端双闸）。
+- **测试与指标**：新增 `ProjectChangeTest`（10 个用例，覆盖窗口 A/B、增量 diff、单价必填、状态闸）；biz 测试类 11 → 12，全仓测试类 79 → 80；biz 迁移 44 → 45，biz 源码 119 → 130 个 .java。
+- **前端（firestar-manager）**：立项详情加「发起变更」按钮 + 变更弹窗（目标态编辑、自动算 diff）+ 变更历史；审批中心补 `change` 模块分发与变更单详情弹窗；变更明细输入框尺寸 / 删除图标与立项表单对齐。

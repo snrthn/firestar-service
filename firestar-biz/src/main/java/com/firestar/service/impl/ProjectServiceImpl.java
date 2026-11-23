@@ -136,6 +136,12 @@ public class ProjectServiceImpl implements ProjectService {
     private final CustomerMapper customerMapper;
     /** 货物主表（V71）：立项/编辑时按货物名 upsert，给看板提供可聚合的货物维度 */
     private final GoodsMapper goodsMapper;
+    /**
+     * 合同变更单（V220）：仅用于审批中心 bizKey=变更单 ID 时 enrich 业务标题。
+     * 用字段注入而非构造器，避免改动构造器签名波及既有单测（@InjectMocks 构造器注入）。
+     */
+    @Autowired(required = false)
+    private com.firestar.mapper.ProjectChangeMapper projectChangeMapper;
 
     @Autowired
     public ProjectServiceImpl(ProjectMapper mapper, ProcessDefMapper processDefMapper,
@@ -370,6 +376,12 @@ public class ProjectServiceImpl implements ProjectService {
             if (it.getQuantity() == null || it.getQuantity() <= 0) {
                 throw new IllegalArgumentException("货物「" + it.getItemName().trim() + "」合同数量必须大于 0");
             }
+            // V220（虎哥 2026-11-23 拍板项 1）：单价必填且 >0。
+            // 合同金额 = 明细合计，单价空会让合计失真、变更/发货/应收全链路算不平，
+            // 故从源头卡死（草稿阶段同样要求，避免"先空着后补"漏网）。
+            if (it.getUnitPrice() == null || it.getUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("货物「" + it.getItemName().trim() + "」单价必须大于 0");
+            }
             Item entity = new Item();
             entity.setProjectId(projectId);
             entity.setItemName(it.getItemName().trim());
@@ -378,11 +390,8 @@ public class ProjectServiceImpl implements ProjectService {
             entity.setUnit(it.getUnit());
             entity.setQuantity(it.getQuantity());
             entity.setShippedQty(0);
-            // 单价可空；行金额 = 数量 × 单价（均非空才计算）
             entity.setUnitPrice(it.getUnitPrice());
-            if (it.getUnitPrice() != null) {
-                entity.setTotalAmount(it.getUnitPrice().multiply(BigDecimal.valueOf(it.getQuantity())));
-            }
+            entity.setTotalAmount(it.getUnitPrice().multiply(BigDecimal.valueOf(it.getQuantity())));
             itemMapper.insert(entity);
         }
     }
@@ -1064,6 +1073,19 @@ public class ProjectServiceImpl implements ProjectService {
             }
             Project p = ro.getProjectId() == null ? null : mapper.selectById(ro.getProjectId());
             String title = ro.getReturnNo() == null ? "退货单" : ro.getReturnNo();
+            return p == null ? title : title + " · " + p.getProjectName();
+        }
+        if (ProjectChangeServiceImpl.CHANGE_PROCESS_CODE.equals(processCode)) {
+            if (projectChangeMapper == null) return null;
+            com.firestar.entity.ProjectChange ch;
+            try {
+                ch = projectChangeMapper.selectById(Long.parseLong(bizKey));
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            if (ch == null) return null;
+            Project p = ch.getProjectId() == null ? null : mapper.selectById(ch.getProjectId());
+            String title = ch.getChangeNo() == null ? "合同变更" : ch.getChangeNo();
             return p == null ? title : title + " · " + p.getProjectName();
         }
         Project p = safeSelectProject(bizKey);
