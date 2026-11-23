@@ -308,7 +308,9 @@ class EntityMappingConsistencyTest {
             "sys_kb_chunk=com.firestar.ai.entity.KbChunk",
             "sys_kb_attachment=com.firestar.ai.entity.KbAttachment",
             // V218 新增：历史数据导入批次摘要（审计一条，无逻辑删，含 JSON ext）
-            "sys_import_batch=ImportBatch"};
+            "sys_import_batch=ImportBatch",
+            // V220 新增：立项合同变更单主表 + 明细 diff 表（逻辑删实体，含 JSON ext）
+            "fin_project_change=ProjectChange", "fin_project_change_item=ProjectChangeItem"};
 
     /** 表名 → 实体类。支持简单类名与全限定名两种写法 */
     private static Class<?> classFor(String table) throws ClassNotFoundException {
