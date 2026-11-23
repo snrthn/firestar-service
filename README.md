@@ -6,7 +6,9 @@
 
 > ⚠️ **命名约定（务必分清）**：本 **git 仓库**名为 `firestar-service`；仓库内部是一个
 > **Maven 多模块 reactor**，其中唯一可执行的 **应用模块**名为 `firestar-server`
-> （产物 `firestar-server-0.0.1-SNAPSHOT.jar`）。改脚本 / CI / 文档时别把两者混为一谈。
+> （本地 mvn 产物 `firestar-server/target/firestar-server-<版本>-SNAPSHOT.jar` 带版本号；
+> 流水线打包时统一重命名/固定名为 `firestar-server.jar` 再部署，详见 CI/CD 段）。
+> 改脚本 / CI / 文档时别把两者混为一谈。
 > 这是**模块解耦（monorepo），不是微服务**：单一父工程、单一可执行 jar、同 JVM classpath 调用、
 > 共用一个库与一套 Flyway。
 
@@ -168,7 +170,7 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 | 后端地址（dev） | `http://localhost:2025` |
 | 端口 | `2025` |
 | git 仓库名 | `firestar-service` |
-| 应用模块 / 产物 | `firestar-server` / `firestar-server-0.0.1-SNAPSHOT.jar` |
+| 应用模块 / 产物 | `firestar-server` / 本地 `firestar-server-<版本>-SNAPSHOT.jar`，部署固定名 `firestar-server.jar` |
 | 默认 profile | `dev` |
 | 接口前缀 | 暂未配置统一前缀；前端 vite proxy 以 `/api` 转发并去前缀 |
 
@@ -178,6 +180,13 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 多模块后 jar 落在 `firestar-server/target/`，构建步会先归集到 `staging/`（jar + `bin/`）再上传，
 避免上传仓库根 `target/` 导致制品缺 jar。`bin/start.sh`、`stop.sh` 的 `APP_NAME` 已同步为 `firestar-server`。
 部署目标与 be-media-man-system **同台 ECS**，机器组复用；仅部署目录与端口（2025）不同。
+
+**固定 jar 名约定（2026-11-24 起）**：云效 `build_job` 与 GitHub Actions `build` 打包时，把
+`firestar-server-*.jar` 统一复制为 `staging/firestar-server.jar`（不带版本），匹配到多个 jar 直接 fail。
+这样部署目录恒为单一固定名 jar、覆盖式解压，版本号（0.0.1 → 0.1.0 → …）再变也不会多版本并存选错包——
+根治 2026-11-24「重启仍跑旧包、V220 未执行」事故。`deploy.sh` 归档所有历史带版本 jar 到 `old_jars/`，
+`start.sh` 优先固定名、带版本 jar 仅作本地 mvn 构建回退（目录优先级：根目录 > target）。
+注意：**本地开发未走流水线时无固定名 jar**，`start.sh` 走带版本回退属预期行为，not a bug。
 
 ## 分支约定
 
@@ -227,3 +236,5 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 - **单价必填**：立项 `create` / `update` 与变更明细统一校验单价 > 0（前后端双闸）。
 - **测试与指标**：新增 `ProjectChangeTest`（10 个用例，覆盖窗口 A/B、增量 diff、单价必填、状态闸）；biz 测试类 11 → 12，全仓测试类 79 → 80；biz 迁移 44 → 45，biz 源码 119 → 130 个 .java。
 - **前端（firestar-manager）**：立项详情加「发起变更」按钮 + 变更弹窗（目标态编辑、自动算 diff）+ 变更历史；审批中心补 `change` 模块分发与变更单详情弹窗；变更明细输入框尺寸 / 删除图标与立项表单对齐。
+- **部署脚本修复（多版本 jar 并存选错包）**：版本号从 `0.0.1` → `0.1.0` 后，部署目录新旧两个 jar 并存，`start.sh` 原「glob 第一个命中」按字典序选到旧包，导致 00:33 重启后仍跑旧代码、V220 未执行。三处修复：① `deploy.sh` 停旧后把「非最新 mtime」的 jar 归档到 `old_jars/`，只留一个候选，并把本次 jar 绝对路径登记到 `.env/expected_jar`；② `start.sh` 选 jar 改为 `ls -t | head -1`（按修改时间取最新）；③ `start.sh` 加版本一致性门禁——实选 jar 与 `expected_jar` 登记不符即 FATAL 拒绝启动，绝不静默跑错版本。生产已验证：V220 迁移成功、`project_change` 流程与 `project:change` 权限落地、进程指向 0.1.0。
+- **部署方案 A：固定 jar 名（根治版本号持续变化）**：上一修复仍把「版本号」当成要追踪的变量（依赖 mtime 恒新 + 每次 deploy 登记 expected_jar）。改为从源头解耦——云效 `build_job` 与 GitHub Actions `build` 打包时把 `firestar-server-*.jar` 统一复制为固定名 `staging/firestar-server.jar`（不匹配到恰好 1 个即 fail），部署目录恒为单一固定名 jar、覆盖式解压。配套：`deploy.sh` 归档所有历史带版本 jar 并把固定名登记进 `expected_jar`、`start.sh` 优先固定名（带版本 jar 仅本地 mvn 回退）。版本号 0.1.0 → 0.2.0 → … 怎么变都不再产生多 jar 并存，门禁/归档/mtime 假设全部退化为兜底。隔离场景实测 6 项通过（glob 匹配性、打包 1 个/多个防护、归档、固定名优先+门禁、本地回退、缺失 FATAL）。**注：ECS 侧脚本/流水线待下次发布同步**。

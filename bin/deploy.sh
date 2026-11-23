@@ -2,7 +2,8 @@
 #
 # firestar-service 生产部署脚本（适配云效「执行命令」步骤）
 # 部署目录约定: /usr/local/server/java/firestar
-#   云效「上传文件」保持相对结构 -> target/firestar-server-*.jar + bin/deploy.sh
+#   云效/GitHub 构建物 staging 结构 -> firestar-server.jar（固定名）+ bin/deploy.sh
+#   tar --strip-components=1 解压到 APP_HOME 后固定名 jar 落在根目录，历史带版本 jar 由本脚本归档
 # 凭据注入: DB_URL / DB_USERNAME / DB_PASSWORD 等运行时变量由云效 Secrets 以环境变量注入，
 #           并在部署时全量镜像到 .env/prod.env 持久化（供重启 / systemd / 宿主重启复用，不再依赖云效瞬时注入）
 # 云效执行命令: bash /usr/local/server/java/firestar/bin/deploy.sh
@@ -17,6 +18,7 @@ cd "$APP_HOME"
 # ---- 凭据来源：仅依赖云效流水线「主机部署」步骤注入的环境变量（私密变量，不落盘）----
 PORT="${DEPLOY_PORT:-2025}"
 PROFILE="${SPRING_PROFILE:-prod}"
+APP_NAME="firestar-server"
 
 # ---- Java 运行时：制品按 Java 17 编译，必须用 Java 17 运行 ----
 if [ -z "${JAVA_HOME:-}" ] || ! "$JAVA_HOME/bin/java" -version 2>&1 | grep -q '"17'; then
@@ -131,6 +133,30 @@ mv -f "$TMP_ENV" "$ENV_FILE"
 
 # ---- 停旧实例：复用 stop.sh ----
 bash "$SCRIPT_DIR/stop.sh"
+
+# ---- 归档历史带版本 jar：配合流水线「固定名」产物，根治多版本并存选错包 ----
+# 背景（2026-11-24 生产事故）：版本号从 0.0.1 → 0.1.0 后新旧两个带版本 jar 并存，
+#   start.sh 的 glob 取了字典序靠前的旧包，导致重启后仍跑旧代码、V220 未执行。
+# 【方案A】流水线打包时已固定名为 ${APP_NAME}.jar（不带版本），tar 覆盖式解压后
+#   $APP_HOME/${APP_NAME}.jar 恒为本次新包；任何 ${APP_NAME}-*.jar（带版本）都是
+#   历史残留，一律移入 old_jars/，杜绝并存。
+JARS=("$APP_HOME"/${APP_NAME}-*.jar)
+# nullglob 未开时无匹配会得到字面量，用 -f 过滤掉
+for j in "${JARS[@]}"; do
+  [ -f "$j" ] || continue
+  mkdir -p "$APP_HOME/old_jars"
+  mv -f "$j" "$APP_HOME/old_jars/" 2>/dev/null && echo "[deploy] 归档历史带版本 jar: $(basename "$j")" \
+    || echo "[deploy] 警告: 归档失败 $j" >&2
+done
+# 校验固定名产物存在（tar 解压本应产出；缺失说明流水线打包或解压异常）
+FINAL_JAR="$APP_HOME/${APP_NAME}.jar"
+if [ ! -f "$FINAL_JAR" ]; then
+  echo "[deploy][FATAL] 固定名产物 $FINAL_JAR 不存在，请检查流水线 staging/firestar-server.jar 打包与 tar 解压" >&2
+  exit 1
+fi
+# 登记本次实际要启动的 jar 绝对路径，供 start.sh 做版本一致性门禁校验
+printf '%s\n' "$FINAL_JAR" > "$APP_HOME/.env/expected_jar"
+echo "[deploy] 期望启动 jar: $FINAL_JAR"
 
 # ---- 启动：复用 start.sh（setsid 守护化 + liveness 探针门禁）----
 # 探针走 /actuator/health/liveness：只验进程存活+磁盘，不依赖 DB / 数据自检，

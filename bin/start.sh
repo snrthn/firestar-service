@@ -177,16 +177,33 @@ if [ "$OS" = "windows" ] && [ "${SPRING_PROFILE:-dev}" != "production" ]; then
     echo "[start] 未找到 mvn 命令，跳过自动构建，使用已有 jar" >&2
   fi
 fi
-# ---- 定位 jar：优先生产部署产物($APP_HOME 根目录)，回退本地 mvn 构建产物(target/ 或模块 target/) ----
-# 多模块后应用 jar 由 firestar-server 模块产出，位于 firestar-server/target/
-JAR=""
-for cand in "$APP_HOME"/${APP_NAME}-*.jar "$APP_HOME"/target/${APP_NAME}-*.jar "$APP_HOME"/firestar-server/target/${APP_NAME}-*.jar; do
-  if [ -f "$cand" ]; then JAR="$cand"; break; fi
-done
+# ---- 定位 jar ----
+# 【2026-11-24 方案A】流水线产物固定名为 ${APP_NAME}.jar（不带版本），覆盖式部署，
+#   版本号再变也只有一个固定名 jar；优先取它。带版本号的 ${APP_NAME}-*.jar 仅作为
+#   本地 mvn 构建产物 / 历史残留的回退，按 mtime 取最新。
+if [ -f "$APP_HOME/${APP_NAME}.jar" ]; then
+  JAR="$APP_HOME/${APP_NAME}.jar"
+else
+  for dir in "$APP_HOME" "$APP_HOME/target" "$APP_HOME/firestar-server/target"; do
+    _cand="$(ls -t "$dir"/${APP_NAME}-*.jar 2>/dev/null | head -1)"
+    if [ -n "$_cand" ] && [ -f "$_cand" ]; then JAR="$_cand"; break; fi
+  done
+fi
 if [ -z "$JAR" ]; then
-  echo "[start] 未找到 jar 包（已查 $APP_HOME/${APP_NAME}-*.jar、$APP_HOME/target/${APP_NAME}-*.jar、$APP_HOME/firestar-server/target/${APP_NAME}-*.jar）" >&2
+  echo "[start] 未找到 jar 包（已查 $APP_HOME/${APP_NAME}.jar、$APP_HOME/${APP_NAME}-*.jar、$APP_HOME/target/${APP_NAME}-*.jar、$APP_HOME/firestar-server/target/${APP_NAME}-*.jar）" >&2
   echo "[start] 请先部署产物，或本地用 'mvn package' 构建" >&2
   exit 1
+fi
+# 【版本一致性门禁】deploy.sh 每次部署会登记本次期望 jar 到 .env/expected_jar；
+# 若实选 jar 与登记不符（例如旧包被重新放回、mtime 更新抢先），立即拒绝启动，绝不静默跑错版本。
+EXPECTED_FILE="$APP_HOME/.env/expected_jar"
+if [ -f "$EXPECTED_FILE" ]; then
+  EXPECTED_JAR="$(tr -d '\r\n' < "$EXPECTED_FILE")"
+  if [ -n "$EXPECTED_JAR" ] && [ -f "$EXPECTED_JAR" ] && [ "$JAR" != "$EXPECTED_JAR" ]; then
+    echo "[start][FATAL] 版本一致性校验失败：拟启动 $JAR，但部署登记的是 $EXPECTED_JAR" >&2
+    echo "[start][FATAL] 拒绝启动，避免运行错误版本。请清理多余 jar 后重试。" >&2
+    exit 1
+  fi
 fi
 # Windows: jar 路径同样需转成 Windows 原生形式
 if [ "$OS" = "windows" ]; then

@@ -141,7 +141,16 @@ jobs:
           set -e
           mvn -B clean package -DskipTests
           rm -rf staging && mkdir -p staging
-          cp firestar-server/target/firestar-server-*.jar staging/
+          # 固定 jar 名为 firestar-server.jar（不带版本）：与云效流水线同构，
+          # 版本号再变部署目录也只有一个固定名产物，杜绝多版本并存选错包。
+          # 若构建出多个 jar（-sources/-javadoc）直接 fail，避免 glob 歧义。
+          _JARS=(firestar-server/target/firestar-server-*.jar)
+          if [ ${#_JARS[@]} -ne 1 ]; then
+            echo "[build] 期望恰好 1 个 firestar-server jar，实际 ${#_JARS[@]} 个" >&2
+            printf '  %s\n' "${_JARS[@]}" >&2
+            exit 1
+          fi
+          cp "${_JARS[0]}" staging/firestar-server.jar
           cp -r bin staging/bin
 
       - name: 上传构建产物
