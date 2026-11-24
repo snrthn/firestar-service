@@ -45,7 +45,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * 合同变更单回归（V220）。
+ * 项目变更单回归（V220）。
  *
  * <p>锁定四条核心契约：</p>
  * <ol>
@@ -160,6 +160,33 @@ class ProjectChangeTest {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
                 service.create(1L, req("补明细", null, addReq("安装费", 1, "0"))));
         assertTrue(ex.getMessage().contains("单价必须大于 0"));
+    }
+
+    @Test
+    @DisplayName("发起变更：窗口 B 下 MODIFY 数量低于已发量，提交时即拒绝（拦截前移）")
+    void create_windowB_rejectsModifyBelowShippedQty() {
+        Project p = approvedProject();
+        when(projectMapper.selectById(1L)).thenReturn(p);
+        when(itemMapper.selectCount(any())).thenReturn(2L); // 有下游单据 → 窗口 B
+        Item shipped = new Item();
+        shipped.setId(7L);
+        shipped.setProjectId(1L);
+        shipped.setItemName("空调");
+        shipped.setQuantity(10);
+        shipped.setShippedQty(3);
+        when(itemMapper.selectById(7L)).thenReturn(shipped);
+
+        ChangeItemReq modify = new ChangeItemReq();
+        modify.setOpType("MODIFY");
+        modify.setItemId(7L);
+        modify.setItemName("空调");
+        modify.setQuantity(2); // 低于已发 3
+        modify.setUnitPrice(new BigDecimal("1"));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                service.create(1L, req("压低数量", new BigDecimal("105"), modify)));
+        assertTrue(ex.getMessage().contains("不得低于已发数量"));
+        verifyNoInteractions(changeMapper); // 提交阶段就拒绝，不落变更单、不进审批
     }
 
     @Test

@@ -198,13 +198,20 @@ fi
 IT_CLASS_MAJOR=61   # Java 17
 stale_modules=""
 stale_clean=""
+# 【2026-11-24 加固】原实现只 find -print -quit 抽样第一个 class：JLS 把高版本 class
+#   混在中间时第一个恰好正常 → 漏检 → javac 读到 major=69 的 class 报
+#   「无法访问 X / 找不到类文件 / 找不到 setId(long)」（11:19 BUILD FAILURE 实锤）。
+#   改为扫描全部 class 取最高 major，只要有一个超标就清理整个模块。
 for itm in firestar-core firestar-biz firestar-server; do
   [ -d "$itm/target" ] || continue
-  sample=$(find "$itm/target/classes" "$itm/target/test-classes" -name '*.class' -print -quit 2>/dev/null || true)
-  if [ -z "$sample" ]; then continue; fi
-  major=$(od -An -tu1 -j6 -N2 "$sample" 2>/dev/null | awk 'NF { print $1 * 256 + $2; exit }' || true)
-  if [ -n "$major" ] && [ "$major" -gt "$IT_CLASS_MAJOR" ]; then
-    stale_modules="${stale_modules} ${itm}(major=${major})"
+  max_major=0
+  while IFS= read -r cls; do
+    [ -n "$cls" ] || continue
+    m=$(od -An -tu1 -j6 -N2 "$cls" 2>/dev/null | awk 'NF { print $1 * 256 + $2; exit }' || true)
+    if [ -n "$m" ] && [ "$m" -gt "$max_major" ]; then max_major="$m"; fi
+  done < <(find "$itm/target/classes" "$itm/target/test-classes" -name '*.class' -print 2>/dev/null)
+  if [ "$max_major" -gt "$IT_CLASS_MAJOR" ]; then
+    stale_modules="${stale_modules} ${itm}(maxMajor=${max_major})"
     stale_clean="${stale_clean} ${itm}"
   fi
 done
@@ -216,8 +223,15 @@ if [ -n "$stale_modules" ]; then
   echo "[it]    自动清理 classes/test-classes 并强制重编（不动 target 根下的 jar）..."
   for itm in ${stale_clean}; do
     find "$itm/target/classes" "$itm/target/test-classes" -type f -delete 2>/dev/null || true
+    # 【2026-11-24 加固】只删 class 不够：maven-status 里的 createdFiles.lst/inputFiles.lst
+    #   是 compiler plugin 的增量依据，残留时会判定「仅少数源文件变化」→ 只编译 12 个文件，
+    #   其余 test-classes 空着却不再编译 → 连锁「无法访问 / 找不到符号」。必须一并删除。
+    if [ -d "$itm/target/maven-status" ]; then
+      find "$itm/target/maven-status" -type f -delete 2>/dev/null || true
+      find "$itm/target/maven-status" -depth -type d -delete 2>/dev/null || true
+    fi
   done
-  echo "[it]    清理完成，Maven 将全量重编上述模块"
+  echo "[it]    清理完成（含 maven-status 增量元数据），Maven 将全量重编上述模块"
 fi
 
 if [ ${#MVN_ARGS[@]} -gt 0 ]; then

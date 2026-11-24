@@ -8,7 +8,7 @@ import com.firestar.dto.TimelineNodeVO;
 import java.util.Map;
 
 /**
- * 立项合同变更服务（V220）。
+ * 立项项目变更服务（V220）。
  *
  * <p>流程：立项详情发起变更（金额 / 明细增量 diff / 原因）→ 创建变更单即发起
  * project_change 两级审批（主管→经理）→ 末节点通过，applyChange 以增量 diff

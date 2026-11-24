@@ -47,7 +47,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 立项合同变更服务实现（V220）。
+ * 立项项目变更服务实现（V220）。
  *
  * <h3>为什么要有这张单</h3>
  * <p>立项合同金额手填，手滑多打 0（10 万填成 100 万）导致 90 万无明细支撑、发不出去也核不平。
@@ -146,6 +146,14 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
         // 判定窗口 A/B：是否存在下游单据（发货/应收/开票/收款）
         String window = detectWindow(p);
 
+        // 明细逐行校验前置于插单：窗口 B 数量不得低于已发量在提交阶段即拦截，
+        // 校验失败时不落变更单、不拉审批（而不是靠事务回滚兜底）
+        if (itemsChanged) {
+            for (ChangeItemReq it : req.getItems()) {
+                validateChangeItem(it, window, projectId);
+            }
+        }
+
         ProjectChange change = new ProjectChange();
         change.setProjectId(projectId);
         change.setChangeReason(req.getChangeReason().trim());
@@ -162,10 +170,9 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
         change.setChangeNo(generateChangeNo(change.getId()));
         changeMapper.updateById(change);
 
-        // 明细 diff 落库（逐行校验在这里先做，审批期不再变）
+        // 明细 diff 落库（校验已在插单前统一做完）
         if (itemsChanged) {
             for (ChangeItemReq it : req.getItems()) {
-                validateChangeItem(it, window);
                 ProjectChangeItem ci = new ProjectChangeItem();
                 ci.setChangeId(change.getId());
                 ci.setOpType(it.getOpType());
@@ -217,8 +224,14 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
         return (hasShipment || hasReceivable || hasInvoiced || hasCollected) ? "B" : "A";
     }
 
-    /** 明细 diff 行校验（发起时做一次，apply 时窗口 B 再校验一次） */
-    private void validateChangeItem(ChangeItemReq it, String window) {
+    /**
+     * 明细 diff 行校验（发起时做一次，apply 时窗口 B 再校验一次）。
+     *
+     * <p>窗口 B 的「数量不得低于已发量」在此前移到 create 提交时拦截（原来只在 apply 末节点
+     * 通过后校验，会出现审批走完才失败）；单价维持现状（仅 >0，不锁已发部分价格）。
+     * 校验原明细归属避免跨项目 itemId 绕过。</p>
+     */
+    private void validateChangeItem(ChangeItemReq it, String window, Long projectId) {
         String op = it.getOpType();
         if (!"ADD".equals(op) && !"MODIFY".equals(op) && !"DELETE".equals(op)) {
             throw new IllegalArgumentException("明细操作类型非法：" + op + "（须 ADD/MODIFY/DELETE）");
@@ -236,6 +249,19 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
         }
         if (("MODIFY".equals(op) || "DELETE".equals(op)) && it.getItemId() == null) {
             throw new IllegalArgumentException("MODIFY/DELETE 必须指定原明细行 ID（itemId）");
+        }
+        // 窗口 B：MODIFY 数量不得低于已发量（前移拦截）；DELETE 已发占用在 apply 时仍再校验一次
+        if ("B".equals(window) && "MODIFY".equals(op) && it.getItemId() != null) {
+            Item origin = itemMapper.selectById(it.getItemId());
+            if (origin == null || !Objects.equals(origin.getProjectId(), projectId)) {
+                throw new IllegalArgumentException("变更明细行不存在或不属于该项目：" + it.getItemId());
+            }
+            int shipped = origin.getShippedQty() == null ? 0 : origin.getShippedQty();
+            if (it.getQuantity() != null && it.getQuantity() < shipped) {
+                throw new IllegalArgumentException(String.format(
+                        "货物「%s」变更数量 %d 不得低于已发数量 %d",
+                        origin.getItemName(), it.getQuantity(), shipped));
+            }
         }
     }
 
@@ -301,7 +327,7 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
             return;
         }
         if (change.getProcessInstanceId() != null) {
-            engine.terminate(change.getProcessInstanceId(), "合同变更被退回：" + comment);
+            engine.terminate(change.getProcessInstanceId(), "项目变更被退回：" + comment);
         }
         change.setApprovalStatus("REJECTED");
         change.setExecuteStatus("CANCELLED");
@@ -327,7 +353,7 @@ public class ProjectChangeServiceImpl implements ProjectChangeService {
             throw new IllegalStateException("仅申请人可撤销变更单");
         }
         List<Long> approvedUserIds = engine.withdraw(change.getProcessInstanceId(), currentUsername(),
-                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "合同变更，变更单 id=" + change.getId());
+                WorkflowEngineService.WITHDRAW_REASON_PREFIX + "项目变更，变更单 id=" + change.getId());
         change.setApprovalStatus("CANCELLED");
         change.setExecuteStatus("CANCELLED");
         change.setUpdatedBy(currentUserId());

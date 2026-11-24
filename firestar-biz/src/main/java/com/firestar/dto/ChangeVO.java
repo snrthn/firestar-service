@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 合同变更单 VO（V220：列表/详情共用；detail 时 items / timeline 回填）。
+ * 项目变更单 VO（V220：列表/详情共用；detail 时 items / timeline 回填）。
  */
 @Getter
 @Setter

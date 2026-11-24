@@ -184,9 +184,16 @@ fi
 if [ -f "$APP_HOME/${APP_NAME}.jar" ]; then
   JAR="$APP_HOME/${APP_NAME}.jar"
 else
+  # ⚠️ 此处禁止用 `ls -t ... | head -1`：脚本开了 set -euo pipefail，
+  #   glob 不匹配时 ls 的退出码 2 会经 pipefail 触发 set -e 静默退出（2026-11-24 事故）。
+  #   改用纯 glob + -nt 比较，无管道、无退出码陷阱，语义相同（取 mtime 最新）。
   for dir in "$APP_HOME" "$APP_HOME/target" "$APP_HOME/firestar-server/target"; do
-    _cand="$(ls -t "$dir"/${APP_NAME}-*.jar 2>/dev/null | head -1)"
-    if [ -n "$_cand" ] && [ -f "$_cand" ]; then JAR="$_cand"; break; fi
+    _newest=""
+    for _f in "$dir"/${APP_NAME}-*.jar; do
+      [ -f "$_f" ] || continue
+      if [ -z "$_newest" ] || [ "$_f" -nt "$_newest" ]; then _newest="$_f"; fi
+    done
+    if [ -n "$_newest" ]; then JAR="$_newest"; break; fi
   done
 fi
 if [ -z "$JAR" ]; then

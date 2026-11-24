@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * 立项合同变更单（V220）。
+ * 立项项目变更单（V220）。
  *
  * <p>虎哥 2026-11-23 拍板：保留立项合同金额手填，但把「改金额 / 增减明细」收进一条
  * 独立的受控审批链（project_change，主管→经理）。审批期间项目主表与明细表不动，

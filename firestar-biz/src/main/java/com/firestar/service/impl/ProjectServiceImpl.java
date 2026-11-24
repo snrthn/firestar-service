@@ -137,7 +137,7 @@ public class ProjectServiceImpl implements ProjectService {
     /** 货物主表（V71）：立项/编辑时按货物名 upsert，给看板提供可聚合的货物维度 */
     private final GoodsMapper goodsMapper;
     /**
-     * 合同变更单（V220）：仅用于审批中心 bizKey=变更单 ID 时 enrich 业务标题。
+     * 项目变更单（V220）：仅用于审批中心 bizKey=变更单 ID 时 enrich 业务标题。
      * 用字段注入而非构造器，避免改动构造器签名波及既有单测（@InjectMocks 构造器注入）。
      */
     @Autowired(required = false)
@@ -1085,7 +1085,7 @@ public class ProjectServiceImpl implements ProjectService {
             }
             if (ch == null) return null;
             Project p = ch.getProjectId() == null ? null : mapper.selectById(ch.getProjectId());
-            String title = ch.getChangeNo() == null ? "合同变更" : ch.getChangeNo();
+            String title = ch.getChangeNo() == null ? "项目变更" : ch.getChangeNo();
             return p == null ? title : title + " · " + p.getProjectName();
         }
         Project p = safeSelectProject(bizKey);

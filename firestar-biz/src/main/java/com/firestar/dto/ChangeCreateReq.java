@@ -7,7 +7,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 发起合同变更请求（V220）。
+ * 发起项目变更请求（V220）。
  *
  * <p>接口：{@code POST /project/{projectId}/changes}，创建即发起 project_change 两级审批。</p>
  *

@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 合同变更接口（前端 /api/change/**，路由不带 /api，同其他 Controller 约定）。
+ * 项目变更接口（前端 /api/change/**，路由不带 /api，同其他 Controller 约定）。
  *
  * <p>V220：立项详情「发起变更」→ POST /change/project/{projectId} 创建并发起
  * project_change 两级审批（主管→经理）→ 审批中心回调 /change/task/{taskId}/complete，

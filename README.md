@@ -42,7 +42,7 @@ firestar-service/                       # git 仓库根，同时是 Maven reacto
 ├── firestar-biz/                       # 火星业务：130 个 .java
 │   └── src/main/
 │       ├── java/com/firestar/          # 项目/发货/退货/应收/发票/收款/核销/客户/物品/协议/导入 + 业务工具
-│       └── resources/db/migration/biz/    # 45 个业务侧 Flyway 迁移（含 V200 起新增，V220 合同变更）
+│       └── resources/db/migration/biz/    # 46 个业务侧 Flyway 迁移（含 V200 起新增，V220 项目变更 / V221 改名）
 ├── firestar-server/                    # 应用入口：1 个 .java（FirestarApplication）
 │   ├── pom.xml                         # 聚合 core + biz，产出唯一可执行 jar
 │   └── src/
@@ -67,7 +67,7 @@ spring.flyway.locations=classpath:db/migration/core,classpath:db/migration/biz
 ```
 
 - `firestar-core/src/main/resources/db/migration/core`（83 个，含 V200+ 登录防爆破 / 知识库系列）
-- `firestar-biz/src/main/resources/db/migration/biz`（45 个，含 V200 起新增，V219 导入权限 / V220 合同变更）
+- `firestar-biz/src/main/resources/db/migration/biz`（46 个，含 V200 起新增，V219 导入权限 / V220 项目变更 / V221 改名）
 - Flyway 按版本号全局排序，与所在目录无关；新增业务迁移用 **V200+**，避免与历史版本冲突。
 - `scripts/reset_flyway.sql` 仅 dev/test 用于清 `flyway_schema_history` 重跑全量，**prod 严禁**。
 - ⚠️ **迁移脚本禁止硬编码库名**：`information_schema` 探测一律用 `DATABASE()`。历史 `V27` / `V28` / `V75` 写死了 `table_schema = 'firestar'`，导致任何库名不叫 `firestar` 的新环境从空库初始化必然挂在 V75。已应用迁移不可改（checksum 铁律），**新迁移一律用 `DATABASE()`**。
@@ -154,11 +154,19 @@ bash bin/start.sh 2025 /actuator/health/liveness
 从源码直接跑（多模块 reactor，需指定应用模块）：
 
 ```bash
-export DB_PASSWORD=...
+# 无需 export 凭据：application-dev.properties 已用 spring.config.import 自动读取 .env/dev.env，
+# IDE（右键 FirestarApplication→Run）与 mvn spring-boot:run 都能直接起，工作目录须在 firestar-service/。
 mvn -o -pl firestar-server -am spring-boot:run
 mvn -o compile                                   # 仅编译校验全 reactor（不连库）
 mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯逻辑/切片测试（不连库）
 ```
+
+> **IDE 直接跑主类报 `${DB_URL}` / `Driver claims to not accept jdbcUrl`？** 根因是 IDE 不经
+> `bin/start.sh`、不会 `load_env`，导致 DB 占位符没被替换。`application-dev.properties` 的
+> `spring.config.import=optional:file:.env/dev.env[.properties]` 已兜住（仅 dev profile；
+> `[.properties]` 后缀是让 Spring 按 properties 解析 `.env` 扩展名）。前提是工作目录为
+> `firestar-service/`（IDE 默认即项目根，若手动改过 Working directory 需改回）。`bin/start.sh`
+> 方式不受影响：环境变量优先于配置文件，仍走原注入链。
 
 > `firestar-server` 的 `@SpringBootTest` 集成测试需**可达的 dev MySQL + `DB_PASSWORD`**，
 > 与 CI 环境一致；`firestar-core` / `firestar-biz` 的安全契约测试用 standalone MockMvc，不连库。
@@ -234,7 +242,10 @@ mvn -o -pl firestar-core,firestar-biz -am test   # 端点级安全契约等纯�
 
 - **立项合同变更单**：新增 `fin_project_change` / `fin_project_change_item` 两张表 + 独立 `project_change` 审批流程（V220，业务表基线 53 → 55），保留合同金额手填弹性，但把「改金额 / 增减明细」收进两级审批的受控动作。窗口 A（无下游单据）自由改；窗口 B（已发货 / 应收 / 开票 / 收款）金额不得低于已开票 / 已收款，明细增量 diff 保护 `shippedQty`（已发行不可删、数量不可减）。审批回调按业务独立入口分发，不改立项 / 签约状态。
 - **单价必填**：立项 `create` / `update` 与变更明细统一校验单价 > 0（前后端双闸）。
-- **测试与指标**：新增 `ProjectChangeTest`（10 个用例，覆盖窗口 A/B、增量 diff、单价必填、状态闸）；biz 测试类 11 → 12，全仓测试类 79 → 80；biz 迁移 44 → 45，biz 源码 119 → 130 个 .java。
+- **测试与指标**：新增 `ProjectChangeTest`（11 个用例，覆盖窗口 A/B、增量 diff、单价必填、状态闸、窗口 B 数量前移拦截）；biz 测试类 11 → 12，全仓测试类 79 → 80；biz 迁移 44 → 46（V220 建表 + V221 改名），biz 源码 119 → 130 个 .java。
 - **前端（firestar-manager）**：立项详情加「发起变更」按钮 + 变更弹窗（目标态编辑、自动算 diff）+ 变更历史；审批中心补 `change` 模块分发与变更单详情弹窗；变更明细输入框尺寸 / 删除图标与立项表单对齐。
 - **部署脚本修复（多版本 jar 并存选错包）**：版本号从 `0.0.1` → `0.1.0` 后，部署目录新旧两个 jar 并存，`start.sh` 原「glob 第一个命中」按字典序选到旧包，导致 00:33 重启后仍跑旧代码、V220 未执行。三处修复：① `deploy.sh` 停旧后把「非最新 mtime」的 jar 归档到 `old_jars/`，只留一个候选，并把本次 jar 绝对路径登记到 `.env/expected_jar`；② `start.sh` 选 jar 改为 `ls -t | head -1`（按修改时间取最新）；③ `start.sh` 加版本一致性门禁——实选 jar 与 `expected_jar` 登记不符即 FATAL 拒绝启动，绝不静默跑错版本。生产已验证：V220 迁移成功、`project_change` 流程与 `project:change` 权限落地、进程指向 0.1.0。
-- **部署方案 A：固定 jar 名（根治版本号持续变化）**：上一修复仍把「版本号」当成要追踪的变量（依赖 mtime 恒新 + 每次 deploy 登记 expected_jar）。改为从源头解耦——云效 `build_job` 与 GitHub Actions `build` 打包时把 `firestar-server-*.jar` 统一复制为固定名 `staging/firestar-server.jar`（不匹配到恰好 1 个即 fail），部署目录恒为单一固定名 jar、覆盖式解压。配套：`deploy.sh` 归档所有历史带版本 jar 并把固定名登记进 `expected_jar`、`start.sh` 优先固定名（带版本 jar 仅本地 mvn 回退）。版本号 0.1.0 → 0.2.0 → … 怎么变都不再产生多 jar 并存，门禁/归档/mtime 假设全部退化为兜底。隔离场景实测 6 项通过（glob 匹配性、打包 1 个/多个防护、归档、固定名优先+门禁、本地回退、缺失 FATAL）。**注：ECS 侧脚本/流水线待下次发布同步**。
+- **部署方案 A：固定 jar 名（根治版本号持续变化）**：上一修复仍把「版本号」当成要追踪的变量（依赖 mtime 恒新 + 每次 deploy 登记 expected_jar）。改为从源头解耦——云效 `build_job` 与 GitHub Actions `build` 打包时把 `firestar-server-*.jar` 统一复制为固定名 `staging/firestar-server.jar`（不匹配到恰好 1 个即 fail），部署目录恒为单一固定名 jar、覆盖式解压。配套：`deploy.sh` 归档所有历史带版本 jar 并把固定名登记进 `expected_jar`、`start.sh` 优先固定名（带版本 jar 仅本地 mvn 回退）。版本号 0.1.0 → 0.2.0 → … 怎么变都不再产生多 jar 并存，门禁/归档/mtime 假设全部退化为兜底。隔离场景实测 6 项通过（glob 匹配性、打包 1 个/多个防护、归档、固定名优先+门禁、本地回退、缺失 FATAL）。生产已验货：固定名 jar 单文件在跑、旧带版本 jar 进 `old_jars/`、新旧脚本同步、liveness 200、V220 成果完整。
+- **语义正名 + 校验前移（V221，2026-11-24 虎哥拍板）**：变更对象是立项单（含合同金额字段）、非独立合同实体，V220 虽用 `project_change` 流程 code 但展示层全叫「合同变更」有歧义。V221 幂等 UPDATE 把展示文案统一为「项目变更」（流程名 `项目变更审批`、权限/菜单名 `发起项目变更`、4 个 CHANGE_* 通知模板 title/content），**code/key/表名一律不动**；前端 7 文件 + 后端注释/审批兜底标题同步。另：窗口 B 的「数量不得低于已发量」从 apply 末节点前移到 create 提交时拦截（后端 `validateChangeItem` 查原明细 shippedQty + 前端 `handleSubmit` 同步），避免审批走完才在应用阶段失败；**单价维持现状**（仅 >0，不锁已发部分价格——因行级无已发价快照、开票/收款为项目级汇总，部分发货降价的严谨管控需另立拆行/快照方案，本版不做）。
+- **IDE 直接跑主类启动失败（2026-11-24）**：IDE / `mvn spring-boot:run` 不经 `bin/start.sh`、不会 `load_env`，导致 `application-dev.properties` 的 `${DB_URL}` / `${DB_USERNAME}` / `${DB_PASSWORD}` 占位符残留，报 `Driver claims to not accept jdbcUrl, ${DB_URL}` 启动失败（日志 classpath 为 `target/classes` 可辨，非 jar）。修复：`application-dev.properties` 加 `spring.config.import=optional:file:.env/dev.env[.properties]`，让 Spring 自己读 dev.env（`[.properties]` 后缀强制按 properties 解析 `.env` 扩展名；`optional:` 保证文件缺失不阻塞）；仅 dev profile 加，环境变量优先级高于配置文件故 start.sh 注入链行为不变。配套加固集成测试脚本：class 版本预检从抽样首个改为全量扫描取最高 major、清理时连带删 `maven-status` 元数据强制全量重编（根治 VSCode Java 扩展 JRE25 写 major=69 class 混入 target 导致 Maven JDK17 编译连锁失败）；`.vscode/settings.json` 锁定 JDK17。实测：零环境变量 + 新配置 20 秒 `Started` + `startup-health UP`。
+- **start.sh 本地启动静默退出（2026-11-24，方案A 配套缺陷）**：`bin/start.sh` 开头为 `set -euo pipefail`，方案A 改造把「本地回退选包」写成 `_cand="$(ls -t "$dir"/${APP_NAME}-*.jar 2>/dev/null | head -1)"`——本地无固定名 jar 时 glob 不匹配，`ls` 退出码 2 经 **pipefail** 触发 `set -e` 在回退分支**静默退出（EXIT=2）**，表现为打印「构建完成」后直接回提示符、服务不启动（生产因固定名 jar 恒存在走不到该分支，故未暴露；隔离实测当时只开 `set -u` 未开 pipefail，漏测）。修复：回退循环改纯 glob + `-nt` 取 mtime 最新（无管道、无退出码陷阱），并留注释禁止该处再用 `ls -t | head -1`。另：`mvn clean` 偶发 `Failed to delete firestar-biz\target` 为 VSCode Java 语言服务器瞬时占用，重试即过。实测：`sh bin/start.sh 2039` 全链路通过——构建、选包、凭据载入、25s 就绪、完整健康 UP（db/es/disk 全绿）。
