@@ -365,12 +365,15 @@ public class KbDocService {
                 if (sid == id) {
                     sortNo = no;
                 } else {
-                    // 只带非空字段的 patch：updateById 不会误改 title / content_md / path
+                    // 兄弟节点只重排序号，不刷 updatedAt/updatedBy：
+                    // 它们的内容、标题、ACL、path 一个字没变，纯显示顺序调整。
+                    // 若刷了 updatedAt，会让 status=PUBLISHED 的兄弟命中
+                    // KbTreeRules.hasUnpublishedEdits（updatedAt > publishedAt），
+                    // 被前端误标成「有未发布修改」——这是排序牵连无辜文档的副作用。
+                    // 只带非空字段的 patch：updateById 不会误改 title / content_md / path / status。
                     KbDoc patch = new KbDoc();
                     patch.setId(sid);
                     patch.setSortNo(no);
-                    patch.setUpdatedBy(operator);
-                    patch.setUpdatedAt(now);
                     docMapper.updateById(patch);
                 }
             }
