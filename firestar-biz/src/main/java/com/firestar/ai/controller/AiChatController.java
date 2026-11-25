@@ -20,6 +20,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.MediaType;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -98,7 +101,14 @@ public class AiChatController {
 
         SseEmitter emitter = new SseEmitter(300_000L);
 
-        CompletableFuture.runAsync(() -> {
+        // 方案 B：SSE 流在异步线程执行，必须把主线程已认证的 SecurityContext 透传下去。
+        // Spring Security 默认 MODE_THREADLOCAL 不跨线程传播——此前 authorities 在下方
+        // runAsync 内部现读 SecurityContextHolder 时为空，导致非管理员的工具被 allVisible
+        // 裁掉、ToolExecutor.hasPerm 拒绝（主管经 AI 查不到组织架构的根因）。
+        // DelegatingSecurityContextRunnable 在【执行时】把捕获的上下文 set 到异步线程，
+        // 任务结束后恢复，一处覆盖所有下游权限读取点（authorities / hasPerm / 行级隔离）。
+        SecurityContext callerContext = SecurityContextHolder.getContext();
+        CompletableFuture.runAsync(DelegatingSecurityContextRunnable.create(() -> {
             long start = System.currentTimeMillis();
             // 每次聊天请求一个 requestId：随 meta 帧下发、随 assistant 消息落库，供前端复制与排障
             String requestId = UUID.randomUUID().toString();
@@ -277,7 +287,7 @@ public class AiChatController {
                         reasoningSb.length() > 0 ? reasoningSb.toString() : null,
                         provider, start, requestId);
             }
-        });
+        }, callerContext));
         return emitter;
     }
 
