@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.firestar.ai.config.AiProperties;
 import com.firestar.ai.egress.EgressMasker;
 import com.firestar.ai.kb.KbEgressPolicy;
 import com.firestar.ai.kb.KbRetriever;
@@ -73,7 +74,10 @@ class ToolExecutorSearchTest {
     @Mock private WriteOffService writeOffService;
     @Mock private InvoiceService invoiceService;
     @Mock private StatsService statsService;
-    @Mock private EgressMasker egressMasker;
+    // 用真实 EgressMasker（空规则）：出域投影真实执行，脱敏值由 EgressMaskerTest 单独覆盖。
+    // 原实现把 mask 打桩为原样透传，导致 28 工具测试从未验证出域内容（红方 P1-2）。
+    private final ObjectMapper maskerMapper = new ObjectMapper();
+    private final EgressMasker egressMasker = new EgressMasker(maskerMapper, new AiProperties());
     @Mock private KbRetriever kbRetriever;
     @Mock private KbEgressPolicy kbEgressPolicy;
     @Mock private OrgService orgService;
@@ -96,7 +100,6 @@ class ToolExecutorSearchTest {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("staff", null,
                         List.of(new SimpleGrantedAuthority("ROLE_STAFF"))));
-        lenient().when(egressMasker.mask(anyString())).thenAnswer(inv -> inv.getArgument(0));
         executor = new ToolExecutor(projectService, shipmentService, returnService,
                 receivableService, customerService, writeOffService, invoiceService,
                 statsService, registry, egressMasker, objectMapper, kbRetriever, kbEgressPolicy,
@@ -272,7 +275,12 @@ class ToolExecutorSearchTest {
         assertTrue(run("query_file_download_logs", "{}").contentJson().contains("无权限"));
     }
 
-    /** query_orgs：单字段 text 契约——组织树拍成缩进文本，扣子 schema 只需一个 string 字段 */
+    /**
+     * query_orgs：出域收口后改为结构化对象数组（原 text blob 绕过字段级脱敏）。
+     * 负责人姓名作为 leaderName 显式列白名单出域——它是业务查询目标，不属脱敏对象；
+     * 扣子端 wrapToolOutputForCoze 仍会把结构化 JSON 自动包成 {"text":"..."}，schema 不变。
+     * 本用例同时守住红方完成标准第 5 条：组织查询功能不得因投影退化。
+     */
     @Test
     void query_orgs_returnsSingleTextField() throws Exception {
         OrgVO child = new OrgVO();
@@ -292,14 +300,15 @@ class ToolExecutorSearchTest {
 
         ToolResult result = runAsAdmin("query_orgs", "{}");
         assertFalse(result.isError(), "管理员执行 query_orgs 不该报错");
-        JsonNode node = objectMapper.readTree(result.contentJson());
-        assertTrue(node.has("text"), "必须是单字段 text 契约");
-        assertEquals(1, node.size(), "只允许 text 一个字段，杜绝嵌套结构漂移");
-        String text = node.get("text").asText();
-        assertTrue(text.contains("总部"), "文本须含部门名");
-        assertTrue(text.contains("研发部"), "文本须含子部门名");
-        assertTrue(text.contains("杨虎宁") && text.contains("李四"), "文本须含负责人姓名");
-        assertTrue(text.contains("1.1"), "文本须体现层级编号");
+        JsonNode arr = objectMapper.readTree(result.contentJson());
+        assertTrue(arr.isArray(), "结构化出域应为对象数组，不再是 text blob");
+        JsonNode first = arr.get(0);
+        assertEquals("总部", first.get("orgName").asText(), "部门名不退化");
+        assertEquals("杨虎宁", first.get("leaderName").asText(), "负责人姓名作为白名单字段出域");
+        assertFalse(first.has("leaderId"), "内部字段 leaderId 不在白名单，须被投影裁掉");
+        JsonNode childNode = first.get("children").get(0);
+        assertEquals("研发部", childNode.get("orgName").asText(), "子部门不退化");
+        assertEquals("李四", childNode.get("leaderName").asText(), "子部门负责人不退化");
     }
 
     private JsonNode readArray(String json) {

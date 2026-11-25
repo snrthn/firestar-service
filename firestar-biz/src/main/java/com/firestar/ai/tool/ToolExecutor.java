@@ -257,10 +257,11 @@ public class ToolExecutor implements com.firestar.ai.spi.ToolExecutionPort {
                     yield json(toKnowledgeResult(allowed));
                 }
                 // ===== 组织 / 人员 / 日志 / 流程 / 文件（路线 2 新增；权限已在 execute 开头按 requiredPerm 统一校验）=====
-                // 单字段 text 契约：组织树拍成缩进文本，扣子端插件输出参数只需配一个 string 字段；
-                // OrgVO 内部字段增减/改名不再波及扣子 schema（避免双份手工 schema 漂移）。
-                // 返回对象而非裸文本：submit_tool_outputs.output 必须是 JSON 对象，扣子才能按 schema 提字段。
-                case "query_orgs" -> json(Map.of("text", formatOrgTree(orgService.listTree())));
+                // 出域收口（2026-11-25）：组织树由「缩进文本 blob」改为结构化对象数组——
+                // 负责人姓名改为 leaderName 显式字段，纳入 outputFields 白名单管控（原 text blob 绕过所有字段规则）。
+                // 扣子端 wrapToolOutputForCoze 会把结构化 JSON 自动包成 {"text":"..."}，schema 无需重同步；
+                // 负责人姓名是业务查询目标（用户就是要查"财务部负责人是谁"），不属脱敏对象，照常出域。
+                case "query_orgs" -> json(orgService.listTree());
                 case "query_users" -> {
                     int pn = intArg(args, "pageNum", 1);
                     int ps = Math.min(intArg(args, "pageSize", 20), 100);
@@ -301,7 +302,9 @@ public class ToolExecutor implements com.firestar.ai.spi.ToolExecutionPort {
                 default -> "{\"error\":\"未实现的工具\"}";
             };
 
-            String masked = egressMasker.mask(raw);
+            // 出域收口：按当次工具声明的 outputFields 做 fail-closed 投影 + 字段级脱敏。
+            // 白名单为空（未声明工具）时 EgressMasker 退化旧行为并 WARN，不阻断业务。
+            String masked = egressMasker.mask(raw, spec.outputFields());
             return new ToolResult(call.id(), call.name(), masked, false);
         } catch (Exception e) {
             return new ToolResult(call.id(), call.name(),
@@ -334,10 +337,13 @@ public class ToolExecutor implements com.firestar.ai.spi.ToolExecutionPort {
     }
 
     /**
-     * 组织架构树 → 人类可读的缩进文本，作为 query_orgs 的 text 字段值。
-     * 目的：把「扣子输出参数 schema」收敛到单一 string 字段，OrgVO 字段演变不再需要同步改扣子。
-     * 保留信息：层级（缩进 + 编号）、部门名、部门 ID、负责人姓名、停用标记。
+     * 组织架构树 → 人类可读的缩进文本（旧 text 契约，2026-11-25 出域收口后已停用）。
+     *
+     * <p>保留为回退路径：若结构化输出导致模型组织查询质量回归，可临时切回
+     * {@code Map.of("text", formatOrgTree(...))}；但那样负责人姓名会绕过字段白名单，
+     * 需在 EgressMasker 加文本通道词表脱敏后方可启用。</p>
      */
+    @Deprecated
     private String formatOrgTree(List<OrgVO> roots) {
         if (roots == null || roots.isEmpty()) {
             return "（当前无组织架构数据）";

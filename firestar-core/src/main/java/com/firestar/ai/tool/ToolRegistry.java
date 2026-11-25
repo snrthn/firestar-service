@@ -28,6 +28,53 @@ public class ToolRegistry {
 
     private final Map<String, ToolSpec> specs = new ConcurrentHashMap<>();
 
+    /**
+     * 出域白名单（2026-11-25 收口）：每个工具允许发往模型的字段，集中声明便于审计。
+     *
+     * <p>敏感工具（用户/日志/文件下载/流程）精确收窄到业务必需列——
+     * 截图的「姓名+账号+角色+职级+最近登录」就是 query_users 整行透传泄漏的；
+     * 业务单据/看板工具保留完整字段（其敏感值由 EgressMasker 字段规则改写）。</p>
+     *
+     * <p>空集 = 该工具尚未声明（register 会 WARN），EgressMasker 退化旧行为。
+     * EgressContractGuardTest 校验 28 工具全部非空。</p>
+     */
+    private static final Map<String, Set<String>> OUTPUT_FIELDS = Map.ofEntries(
+            // ===== 高危：身份/权限画像类，精确收窄 =====
+            Map.entry("query_users", Set.of("username", "nickname", "deptName", "postName", "status")),
+            Map.entry("query_orgs", Set.of("id", "orgName", "leaderName", "parentId", "sortNo", "status", "children")),
+            Map.entry("query_login_logs", Set.of("username", "loginStatus", "ipAddress", "loginAt")),
+            Map.entry("query_operation_logs", Set.of("operatorName", "operationType", "targetType", "operatedAt", "ipAddress", "remark")),
+            Map.entry("query_file_download_logs", Set.of("fileName", "downloaderName", "downloadedAt", "downloadIp", "bizType")),
+            Map.entry("query_process_defs", Set.of("processCode", "processName", "defVersion", "status", "nodeList", "remark")),
+            // ===== 文件/知识库（已手工挑字段）=====
+            Map.entry("search_files", Set.of("fileName", "alias", "fileType", "bizType", "bizId", "fileSize", "uploaderName", "createdAt")),
+            Map.entry("search_knowledge", Set.of("sourceType", "title", "headingPath", "anchor", "content", "sourceRef", "score", "fileId")),
+            // ===== 客户瘦 VO（税号/银行账号由规则改写，字段本身保留）=====
+            Map.entry("search_customers", Set.of("id", "customerNo", "customerName", "contactPhone")),
+            // ===== 业务单据：字段多为业务必需，敏感值靠规则改写 =====
+            Map.entry("query_project_detail", Set.of("id", "projectNo", "projectName", "customerName", "customerTaxNo", "customerBankAccount", "customerBuyerPhone", "salesManagerName", "contractStatus", "contractAmount", "shippedAmount", "receivedAmount", "collectedAmount", "invoicedAmount", "receivableAmount", "returnedAmount", "contractDesc", "contractSignedAt", "contractSignedByName", "approvalStatusName", "currentNodeName", "items", "createdAt")),
+            Map.entry("query_shipment_detail", Set.of("id", "projectId", "projectNo", "projectName", "customerName", "batchNo", "shipmentDate", "shipmentAmount", "receivedAmount", "shipmentStatusName", "trackingNo", "carrierName", "approvalStatusName", "currentNodeName", "applicantName", "lines", "createdAt")),
+            Map.entry("query_return_detail", Set.of("id", "returnNo", "projectNo", "projectName", "shipmentBatchNo", "returnAmount", "returnReason", "approvalStatusName", "executeStatusName", "currentNodeName", "applicantName", "appliedAt", "lines", "timeline", "canCancel", "createdAt")),
+            Map.entry("query_receivable_detail", Set.of("id", "receivableNo", "projectNo", "projectName", "docDirectionName", "receivableAmount", "writtenOffAmount", "unwrittenOffAmount", "invoicedAmount", "uninvoicedAmount", "receivedAmount", "unreceivedAmount", "receivableDate", "statusName", "sourceTypeName")),
+            Map.entry("search_projects", Set.of("id", "projectNo", "projectName", "customerName", "contractStatus", "contractAmount", "approvalStatusName")),
+            Map.entry("search_shipments", Set.of("id", "projectNo", "projectName", "batchNo", "shipmentStatusName", "shipmentAmount", "createdAt")),
+            Map.entry("search_receivables", Set.of("id", "receivableNo", "projectNo", "projectName", "receivableAmount", "writtenOffAmount", "unwrittenOffAmount", "receivableDate", "statusName")),
+            Map.entry("search_returns", Set.of("id", "returnNo", "projectNo", "projectName", "returnAmount", "approvalStatusName", "executeStatusName", "appliedAt")),
+            Map.entry("search_writeoffs", Set.of("id", "ledgerType", "ledgerNo", "projectNo", "receivableNo", "amount", "status", "method", "ledgerDate", "createdByName")),
+            Map.entry("search_invoices", Set.of("id", "invoiceNo", "projectName", "receivableNo", "invoiceAmount", "taxAmount", "invoiceTypeName", "invoiceDate", "approvalStatusName", "buyerName", "buyerTaxNo", "buyerBankAccount", "buyerPhone", "createdAt")),
+            // ===== 看板：聚合数值，无个人 PII =====
+            Map.entry("stats_overview", Set.of("contractAmount", "shipmentAmount", "receivableOccurred", "invoiceAmount", "taxAmount", "receiptAmount", "writeOffAmount", "diffPool", "arBalance", "uninvoicedBalance", "overdueAmount", "projectCount", "customerCount", "goodsCount")),
+            Map.entry("stats_ar_summary", Set.of("arBalance", "overdueAmount", "overdueRate", "receiptPeriod", "receivablePeriod", "collectionRate", "writeOffPeriod", "diffPool")),
+            Map.entry("stats_invoice_summary", Set.of("invoiceAmount", "taxAmount", "invoiceAmountNet", "uninvoicedBalance", "invoiceRate", "redInvoiceRate", "receiptAmount")),
+            Map.entry("stats_project_ranking", Set.of("rows", "total")),
+            Map.entry("stats_fulfillment", Set.of("returnRate", "returnAmountTotal", "shipmentAmountTotal", "inTransitOverdueCount", "redRate")),
+            Map.entry("stats_ageing", Set.of("method", "totalUnreceived", "segments", "dso", "turnover", "overdueAmount", "overdueRate", "overdueCount")),
+            Map.entry("stats_platform", Set.of("userCount", "todayLoginCount", "historyVisitCount")),
+            // ===== 其他公开只读工具 =====
+            Map.entry("my_pending_tasks", Set.of("taskId", "taskName", "bizKey", "bizTitle", "createTime", "handlerNames")),
+            Map.entry("draft_shipment_create", Set.of("projectId", "projectNo", "projectName", "customerName", "contractAmount", "lines", "totalAmount", "errors", "warnings"))
+    );
+
     public ToolRegistry() {
         // ===== 业务单据查询（权限码与 Web Controller 类级 @RequirePerm 同口径）=====
         register("query_project_detail",
@@ -266,7 +313,19 @@ public class ToolRegistry {
     }
 
     private void register(String name, String desc, String schema, String requiredPerm) {
-        specs.put(name, new ToolSpec(name, desc, schema, requiredPerm));
+        Set<String> fields = OUTPUT_FIELDS.get(name);
+        if (fields == null || fields.isEmpty()) {
+            // 新工具忘记声明出域列就 FAIL-LOUD：启动时可见，EgressContractGuardTest 也会拦
+            System.err.println("[AI-EGRESS-WARN] 工具 " + name + " 未声明 outputFields，出域将不投影（fail-open 灰度遗留）");
+            fields = Set.of();
+        }
+        specs.put(name, new ToolSpec(name, desc, schema, requiredPerm, fields));
+    }
+
+    /** 出域白名单（只读视图），供 EgressContractGuardTest 校验完整性 */
+    public Set<String> outputFieldsOf(String toolName) {
+        ToolSpec spec = specs.get(toolName);
+        return spec == null ? Set.of() : spec.outputFields();
     }
 
     public boolean isRegistered(String name) {

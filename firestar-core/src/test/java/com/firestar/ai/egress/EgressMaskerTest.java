@@ -8,8 +8,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -96,5 +98,50 @@ class EgressMaskerTest {
     void shortValuesBecomeFixedMask() throws Exception {
         JsonNode out = objectMapper.readTree(masker.mask("{\"phone\":\"123\"}"));
         assertEquals("****", out.get("phone").asText(), "短于保留位数时整体打码");
+    }
+
+    // ===== 2026-11-25 出域收口：三个结构性洞的回归测试 =====
+
+    /** P0-1：投影模式下未声明字段必须丢弃（fail-closed），不再原样出域 */
+    @Test
+    void unknownFieldDroppedUnderWhitelist() throws Exception {
+        String in = "{\"username\":\"zhangsan\",\"nickname\":\"张三\",\"roleNames\":[\"财务经理\"],\"phone\":\"13800138000\"}";
+        JsonNode out = objectMapper.readTree(masker.mask(in, Set.of("username", "nickname")));
+        assertTrue(out.has("username"));
+        assertEquals("张三", out.get("nickname").asText(), "白名单内的非脱敏字段保留");
+        assertFalse(out.has("roleNames"), "P0-1：未声明字段必须被投影丢弃");
+        assertFalse(out.has("phone"), "P0-1：未声明的敏感字段必须被投影丢弃");
+    }
+
+    /** P0-2：数组字段的规则必须作用到元素（配了 roleNames 规则就要生效，不再静默失效） */
+    @Test
+    void arrayFieldElementsMasked() throws Exception {
+        AiProperties props = new AiProperties();
+        props.setEgressMode("strict");
+        props.setEgressRules(List.of(rule("roleNames", "REDACT")));
+        EgressMasker arrayMasker = new EgressMasker(objectMapper, props);
+
+        String in = "{\"roleNames\":[\"财务经理\",\"主管\"],\"nested\":{\"roleNames\":[\"会计\"]}}";
+        JsonNode out = objectMapper.readTree(arrayMasker.mask(in));
+        assertEquals("***", out.get("roleNames").get(0).asText(), "P0-2：数组文本元素须按父字段规则脱敏");
+        assertEquals("***", out.get("roleNames").get(1).asText());
+        assertEquals("***", out.get("nested").get("roleNames").get(0).asText(), "P0-2：嵌套对象内数组同样生效");
+    }
+
+    /** P0-3：无白名单声明的 text blob 不再静默放行——投影后 text 字段若未声明会被丢弃 */
+    @Test
+    void textBlobWithoutWhitelistRejected() throws Exception {
+        String in = "{\"text\":\"1. 财务部（ID:104，负责人:马占山）\\n\"}";
+        JsonNode out = objectMapper.readTree(masker.mask(in, Set.of("orgName")));
+        assertFalse(out.has("text"), "P0-3：未声明的 text blob 必须在投影时丢弃，不得绕过出域");
+        assertEquals(0, out.size(), "投影后应为空对象");
+    }
+
+    /** P0-3 补充：显式声明 text 字段时才允许出域（query_orgs 改结构化后不再依赖此通道） */
+    @Test
+    void textBlobAllowedWhenDeclared() throws Exception {
+        String in = "{\"text\":\"普通说明文本\"}";
+        JsonNode out = objectMapper.readTree(masker.mask(in, Set.of("text")));
+        assertEquals("普通说明文本", out.get("text").asText());
     }
 }
